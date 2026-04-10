@@ -1,0 +1,153 @@
+import { useEffect } from "react"
+import { useForm } from "react-hook-form"
+import { z } from "zod"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { api } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet"
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form"
+
+interface Announcement {
+  id: number
+  title: string
+  content: string
+  createdAt: string
+  updatedAt: string
+  creatorUsername: string
+}
+
+const schema = z.object({
+  title: z.string().min(1, "标题不能为空").max(255),
+  content: z.string().optional(),
+})
+
+type FormValues = z.infer<typeof schema>
+
+interface AnnouncementSheetProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  announcement: Announcement | null
+}
+
+export function AnnouncementSheet({ open, onOpenChange, announcement }: AnnouncementSheetProps) {
+  const queryClient = useQueryClient()
+  const isEditing = announcement !== null
+
+  const form = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { title: "", content: "" },
+  })
+
+  useEffect(() => {
+    if (open) {
+      if (announcement) {
+        form.reset({ title: announcement.title, content: announcement.content || "" })
+      } else {
+        form.reset({ title: "", content: "" })
+      }
+    }
+  }, [open, announcement, form])
+
+  const createMutation = useMutation({
+    mutationFn: (values: FormValues) => api.post("/api/v1/announcements", values),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["announcements"] })
+      queryClient.invalidateQueries({ queryKey: ["notifications-unread-count"] })
+      onOpenChange(false)
+    },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: (values: FormValues) =>
+      api.put(`/api/v1/announcements/${announcement!.id}`, values),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["announcements"] })
+      onOpenChange(false)
+    },
+  })
+
+  function onSubmit(values: FormValues) {
+    if (isEditing) {
+      updateMutation.mutate(values)
+    } else {
+      createMutation.mutate(values)
+    }
+  }
+
+  const isPending = createMutation.isPending || updateMutation.isPending
+  const error = createMutation.error || updateMutation.error
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="sm:max-w-md">
+        <SheetHeader>
+          <SheetTitle>{isEditing ? "编辑公告" : "新建公告"}</SheetTitle>
+          <SheetDescription className="sr-only">
+            {isEditing ? "修改公告内容" : "填写公告信息以发布新公告"}
+          </SheetDescription>
+        </SheetHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-4 px-4">
+            <FormField
+              control={form.control}
+              name="title"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>标题</FormLabel>
+                  <FormControl>
+                    <Input placeholder="公告标题" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="content"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>内容</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      placeholder="公告内容（可选）"
+                      rows={6}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {error && (
+              <p className="text-sm text-destructive">{error.message}</p>
+            )}
+
+            <SheetFooter>
+              <Button type="submit" size="sm" disabled={isPending}>
+                {isPending ? "保存中..." : isEditing ? "保存" : "发布"}
+              </Button>
+            </SheetFooter>
+          </form>
+        </Form>
+      </SheetContent>
+    </Sheet>
+  )
+}

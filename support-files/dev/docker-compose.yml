@@ -1,0 +1,14 @@
+services:
+  victoria-trace:
+    image: docker.xuanyuan.run/victoriametrics/victoria-traces:v0.8.0
+    restart: always
+    volumes:
+      - victoria-trace:/victoria-trace-data
+    ports:
+      - "10428:10428"
+    command:
+      - "--storageDataPath=/victoria-trace-data"
+      - "--retentionPeriod=168h"
+
+volumes:
+  victoria-trace:

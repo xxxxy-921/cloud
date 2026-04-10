@@ -1,0 +1,57 @@
+# Capability: nav-modules
+
+## Purpose
+Defines modular navigation configuration organized as one file per App in the lib/nav/ directory, enabling clean separation and easy extensibility.
+
+## Requirements
+
+### Requirement: Navigation config split by App
+Navigation configuration SHALL be organized as one file per App in lib/nav/ directory.
+
+#### Scenario: Adding a new app
+- **WHEN** a developer creates a new app file in lib/nav/ and imports it in index.ts
+- **THEN** the new app SHALL appear in the Icon Rail and Nav Panel
+
+#### Scenario: Adding a nav item to existing app
+- **WHEN** a developer adds a NavItemDef to an app file
+- **THEN** the new item SHALL appear in that app's Nav Panel
+
+#### Scenario: Announcement nav item added to system management
+- **WHEN** the system management app navigation is loaded
+- **THEN** it SHALL include a "公告管理" item pointing to /announcements with the Megaphone icon
+
+#### Scenario: Message channel nav item added to system management
+- **WHEN** the system management app navigation is loaded
+- **THEN** it SHALL include a "消息通道" item pointing to /channels with the Mail icon, positioned after "公告管理"
+
+### Requirement: Central navigation export
+The lib/nav/index.ts SHALL export the assembled apps array, findActiveApp helper, and breadcrumbLabels.
+
+#### Scenario: All apps assembled
+- **WHEN** the application imports from lib/nav
+- **THEN** it SHALL receive the complete apps[] array with all registered apps
+
+#### Scenario: Breadcrumb labels aggregated
+- **WHEN** the header component renders breadcrumbs
+- **THEN** breadcrumbLabels SHALL include labels from all app modules
+
+### Requirement: Task center menu entry
+The seed data SHALL include a "任务中心" menu entry under "系统管理" directory with path `/tasks`, icon `Clock`, permission `system:task:list`, and sort order 5.
+
+#### Scenario: Menu seeded
+- **WHEN** the database is seeded
+- **THEN** a menu item "任务中心" SHALL exist under "系统管理" with type=menu, path=/tasks, permission=system:task:list
+
+### Requirement: Task center button permissions
+The seed data SHALL include button-level permissions under "任务中心": "暂停任务" (system:task:pause), "恢复任务" (system:task:resume), "触发任务" (system:task:trigger).
+
+#### Scenario: Button permissions seeded
+- **WHEN** the database is seeded
+- **THEN** three button menu items SHALL exist under "任务中心" with the specified permissions
+
+### Requirement: Admin Casbin policies for task APIs
+The admin role seed SHALL include Casbin policies for all task API endpoints: GET /api/v1/tasks, GET /api/v1/tasks/stats, GET /api/v1/tasks/:name, GET /api/v1/tasks/:name/executions, POST /api/v1/tasks/:name/pause, POST /api/v1/tasks/:name/resume, POST /api/v1/tasks/:name/trigger.
+
+#### Scenario: Admin policies seeded
+- **WHEN** the database is seeded
+- **THEN** the admin role SHALL have Casbin policies for all 7 task API endpoints

@@ -1,0 +1,129 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Pencil, KeyRound } from "lucide-react"
+import { useState } from "react"
+import { api } from "@/lib/api"
+import { usePermission } from "@/hooks/use-permission"
+import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import {
+  DataTableActionsCell,
+  DataTableActionsHead,
+  DataTableCard,
+  DataTableEmptyRow,
+  DataTableLoadingRow,
+} from "@/components/ui/data-table"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { ProviderSheet, type AuthProvider } from "./provider-sheet"
+
+export function Component() {
+  const queryClient = useQueryClient()
+  const canUpdate = usePermission("system:auth-provider:update")
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [editing, setEditing] = useState<AuthProvider | null>(null)
+
+  const { data: providers = [], isLoading } = useQuery({
+    queryKey: ["auth-providers"],
+    queryFn: () => api.get<AuthProvider[]>("/api/v1/admin/auth-providers"),
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: (key: string) =>
+      api.patch(`/api/v1/admin/auth-providers/${key}/toggle`),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["auth-providers"] }),
+  })
+
+  function handleEdit(provider: AuthProvider) {
+    setEditing(provider)
+    setSheetOpen(true)
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">认证源</h2>
+      </div>
+
+      <DataTableCard>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="min-w-[180px]">认证源</TableHead>
+              <TableHead className="min-w-[180px]">Client ID</TableHead>
+              <TableHead className="min-w-[180px]">Client Secret</TableHead>
+              <TableHead className="min-w-[220px]">回调地址</TableHead>
+              <TableHead className="w-[100px]">状态</TableHead>
+              <DataTableActionsHead className="min-w-[108px]">
+                操作
+              </DataTableActionsHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <DataTableLoadingRow colSpan={6} />
+            ) : providers.length === 0 ? (
+              <DataTableEmptyRow colSpan={6} icon={KeyRound} title="暂无认证源" />
+            ) : (
+              providers.map((p) => (
+                <TableRow key={p.providerKey}>
+                  <TableCell className="font-medium">
+                    {p.displayName}
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {p.providerKey}
+                    </span>
+                  </TableCell>
+                  <TableCell className="font-mono text-sm text-muted-foreground">
+                    {p.clientId || "-"}
+                  </TableCell>
+                  <TableCell className="max-w-[220px] text-sm text-muted-foreground">
+                    <span className="block truncate" title={p.clientSecret || "-"}>
+                      {p.clientSecret || "-"}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">
+                    {p.callbackUrl || "-"}
+                  </TableCell>
+                  <TableCell>
+                    <Switch
+                      checked={p.enabled}
+                      onCheckedChange={() =>
+                        toggleMutation.mutate(p.providerKey)
+                      }
+                      disabled={!canUpdate || toggleMutation.isPending}
+                    />
+                  </TableCell>
+                  <DataTableActionsCell className="text-center">
+                    {canUpdate && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="px-2.5"
+                        onClick={() => handleEdit(p)}
+                      >
+                        <Pencil className="mr-1 h-3.5 w-3.5" />
+                        编辑
+                      </Button>
+                    )}
+                  </DataTableActionsCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </DataTableCard>
+
+      <ProviderSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        provider={editing}
+      />
+    </div>
+  )
+}

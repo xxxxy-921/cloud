@@ -1,0 +1,168 @@
+package license
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/samber/do/v2"
+	"gorm.io/gorm"
+)
+
+var (
+	ErrLicenseeNotFound      = errors.New("licensee not found")
+	ErrLicenseeNameExists    = errors.New("主体名称已存在")
+	ErrLicenseeCodeCollision = errors.New("failed to generate unique licensee code")
+	ErrLicenseeInvalidStatus = errors.New("invalid licensee status transition")
+)
+
+type LicenseeService struct {
+	repo *LicenseeRepo
+}
+
+func NewLicenseeService(i do.Injector) (*LicenseeService, error) {
+	return &LicenseeService{
+		repo: do.MustInvoke[*LicenseeRepo](i),
+	}, nil
+}
+
+type CreateLicenseeParams struct {
+	Name         string
+	ContactName  string
+	ContactPhone string
+	ContactEmail string
+	BusinessInfo []byte
+	Notes        string
+}
+
+func (s *LicenseeService) CreateLicensee(params CreateLicenseeParams) (*Licensee, error) {
+	exists, err := s.repo.ExistsByName(params.Name)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, ErrLicenseeNameExists
+	}
+
+	// Generate unique code with retry
+	var code string
+	for i := 0; i < 3; i++ {
+		c, err := generateLicenseeCode()
+		if err != nil {
+			return nil, fmt.Errorf("generate licensee code: %w", err)
+		}
+		dup, err := s.repo.ExistsByCode(c)
+		if err != nil {
+			return nil, err
+		}
+		if !dup {
+			code = c
+			break
+		}
+	}
+	if code == "" {
+		return nil, ErrLicenseeCodeCollision
+	}
+
+	licensee := &Licensee{
+		Name:         params.Name,
+		Code:         code,
+		ContactName:  params.ContactName,
+		ContactPhone: params.ContactPhone,
+		ContactEmail: params.ContactEmail,
+		BusinessInfo: JSONText(params.BusinessInfo),
+		Notes:        params.Notes,
+		Status:       LicenseeStatusActive,
+	}
+	if err := s.repo.Create(licensee); err != nil {
+		return nil, err
+	}
+	return licensee, nil
+}
+
+func (s *LicenseeService) GetLicensee(id uint) (*Licensee, error) {
+	l, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLicenseeNotFound
+		}
+		return nil, err
+	}
+	return l, nil
+}
+
+func (s *LicenseeService) ListLicensees(params LicenseeListParams) ([]Licensee, int64, error) {
+	return s.repo.List(params)
+}
+
+type UpdateLicenseeParams struct {
+	Name         *string
+	ContactName  *string
+	ContactPhone *string
+	ContactEmail *string
+	BusinessInfo []byte
+	Notes        *string
+}
+
+func (s *LicenseeService) UpdateLicensee(id uint, params UpdateLicenseeParams) (*Licensee, error) {
+	l, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrLicenseeNotFound
+		}
+		return nil, err
+	}
+
+	if params.Name != nil && *params.Name != l.Name {
+		exists, err := s.repo.ExistsByName(*params.Name, id)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, ErrLicenseeNameExists
+		}
+		l.Name = *params.Name
+	}
+	if params.ContactName != nil {
+		l.ContactName = *params.ContactName
+	}
+	if params.ContactPhone != nil {
+		l.ContactPhone = *params.ContactPhone
+	}
+	if params.ContactEmail != nil {
+		l.ContactEmail = *params.ContactEmail
+	}
+	if params.BusinessInfo != nil {
+		l.BusinessInfo = JSONText(params.BusinessInfo)
+	}
+	if params.Notes != nil {
+		l.Notes = *params.Notes
+	}
+
+	if err := s.repo.Update(l); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+func (s *LicenseeService) UpdateLicenseeStatus(id uint, newStatus string) error {
+	l, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrLicenseeNotFound
+		}
+		return err
+	}
+
+	if l.Status == newStatus {
+		return fmt.Errorf("%w: status is already %s", ErrLicenseeInvalidStatus, newStatus)
+	}
+
+	// Validate transition: active <-> archived only
+	valid := (l.Status == LicenseeStatusActive && newStatus == LicenseeStatusArchived) ||
+		(l.Status == LicenseeStatusArchived && newStatus == LicenseeStatusActive)
+	if !valid {
+		return fmt.Errorf("%w: cannot transition from %s to %s", ErrLicenseeInvalidStatus, l.Status, newStatus)
+	}
+
+	return s.repo.UpdateStatus(id, newStatus)
+}

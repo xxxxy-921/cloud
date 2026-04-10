@@ -1,0 +1,32 @@
+# Binary
+metis
+dist/
+
+# Database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+./support-files/refer/*
+# Web build output
+web/dist/
+web/node_modules/
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+server
+!cmd/server
