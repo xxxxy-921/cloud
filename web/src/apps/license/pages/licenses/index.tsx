@@ -139,7 +139,7 @@ export function Component() {
                 <SelectItem value="revoked">已吊销</SelectItem>
               </SelectContent>
             </Select>
-            <Button type="submit" variant="outline" size="sm">
+            <Button type="submit" variant="outline">
               搜索
             </Button>
           </form>

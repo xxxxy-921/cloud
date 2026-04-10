@@ -108,8 +108,6 @@ func seedPolicies(db *gorm.DB, enforcer *casbin.Enforcer, roleMap map[string]*mo
 
 	// User: basic permissions
 	var userPolicies [][]string
-	// Home page access
-	userPolicies = append(userPolicies, []string{"user", "home", "read"})
 	for _, p := range UserAPIPolicies {
 		userPolicies = append(userPolicies, []string{"user", p[0], p[1]})
 	}

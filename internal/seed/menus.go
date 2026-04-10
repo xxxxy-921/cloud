@@ -16,15 +16,8 @@ type MenuSeed struct {
 var BuiltinMenus = []MenuSeed{
 	{
 		Menu: model.Menu{
-			Name: "首页", Type: model.MenuTypeMenu,
-			Path: "/", Icon: "Home", Permission: "home", Sort: 0,
-		},
-		Children: nil,
-	},
-	{
-		Menu: model.Menu{
 			Name: "系统管理", Type: model.MenuTypeDirectory,
-			Icon: "Settings", Permission: "system", Sort: 100,
+			Icon: "Settings", Permission: "system", Sort: 9999,
 		},
 		Children: []MenuSeed{
 			{

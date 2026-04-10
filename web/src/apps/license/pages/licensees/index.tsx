@@ -142,7 +142,7 @@ export function Component() {
                 <SelectItem value="archived">已归档</SelectItem>
               </SelectContent>
             </Select>
-            <Button type="submit" variant="outline" size="sm">
+            <Button type="submit" variant="outline">
               搜索
             </Button>
           </form>

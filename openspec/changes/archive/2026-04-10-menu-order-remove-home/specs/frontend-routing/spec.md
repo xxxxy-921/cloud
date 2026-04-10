@@ -1,20 +1,4 @@
-# Capability: frontend-routing
-
-## Purpose
-Defines client-side routing using React Router, including route definitions, layout wrapping, and breadcrumb generation from route segments.
-
-## Requirements
-
-### Requirement: React Router SPA routing
-The application SHALL use React Router 7 with createBrowserRouter for client-side routing.
-
-#### Scenario: Dashboard layout wrapping
-- **WHEN** the user navigates to any protected route (/, /users, /config)
-- **THEN** the DashboardLayout (TopNav + Sidebar + Header + Content) SHALL wrap the page content
-
-#### Scenario: Login page without layout
-- **WHEN** the user navigates to /login
-- **THEN** the page SHALL render full-screen without the DashboardLayout
+## MODIFIED Requirements
 
 ### Requirement: Route definitions
 The application SHALL define kernel routes for config, users, roles, menus, sessions, tasks, announcements, channels, auth-providers, audit-logs, settings, login, oauth callback, and a 404 fallback. The root path `/` SHALL render a DefaultRedirect component that redirects to the first available menu path. Additionally, the router SHALL merge routes from all registered App modules via `getAppRoutes()`.
@@ -67,13 +51,15 @@ The application SHALL define kernel routes for config, users, roles, menus, sess
 - **WHEN** App modules have registered routes via `registerApp()`
 - **THEN** those routes SHALL appear as children of the DashboardLayout route, alongside kernel routes
 
-#### Scenario: App module route with PermissionGuard
-- **WHEN** an App route requires permission checking
-- **THEN** the App's module.ts SHALL wrap its route components with PermissionGuard, same as kernel routes
-
 ### Requirement: Breadcrumb from route segments
 The header breadcrumb SHALL be generated from the current route pathname segments. The breadcrumb SHALL NOT include a "首页" root entry.
 
 #### Scenario: Nested breadcrumb
 - **WHEN** the user is on /config
 - **THEN** the breadcrumb SHALL show "系统配置" (without "首页" prefix)
+
+## REMOVED Requirements
+
+### Requirement: Home route
+**Reason**: 首页仅显示欢迎文案无实际功能，已被根路径重定向替代
+**Migration**: 根路径 `/` 自动重定向到第一个可用菜单

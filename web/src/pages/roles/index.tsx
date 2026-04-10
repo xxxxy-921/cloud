@@ -94,7 +94,7 @@ export function Component() {
                 className="pl-8"
               />
             </div>
-            <Button type="submit" variant="outline" size="sm">
+            <Button type="submit" variant="outline">
               搜索
             </Button>
           </form>

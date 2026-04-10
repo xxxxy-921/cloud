@@ -95,7 +95,7 @@ export function AuthTab() {
             onChange={(e) => setKeyword(e.target.value)}
             className="h-8 w-48"
           />
-          <Button type="submit" variant="outline" size="sm">
+          <Button type="submit" variant="outline">
             <Search className="mr-1 h-3.5 w-3.5" />
             搜索
           </Button>

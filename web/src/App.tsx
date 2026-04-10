@@ -3,11 +3,11 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router"
 import { DashboardLayout } from "@/components/layout/dashboard-layout"
 import { PermissionGuard } from "@/components/permission-guard"
 import { useAuthStore } from "@/stores/auth"
+import { useMenuStore } from "@/stores/menu"
 import { TwoFactorSetupDialog } from "@/components/two-factor-setup-dialog"
 import { getAppRoutes } from "@/apps/registry"
 // Pluggable app module imports — must be after registry is defined
 import "@/apps/license/module"
-import HomePage from "@/pages/home"
 import LoginPage from "@/pages/login"
 import NotFoundPage from "@/pages/not-found"
 
@@ -59,6 +59,19 @@ function AuthGuard() {
   return <DashboardLayout />
 }
 
+function DefaultRedirect() {
+  const menuTree = useMenuStore((s) => s.menuTree)
+  for (const item of menuTree) {
+    if (item.type === "directory") {
+      const firstChild = item.children?.find((c) => c.type === "menu" && !c.isHidden)
+      if (firstChild?.path) return <Navigate to={firstChild.path} replace />
+    } else if (item.type === "menu" && !item.isHidden && item.path) {
+      return <Navigate to={item.path} replace />
+    }
+  }
+  return <Navigate to="/users" replace />
+}
+
 const router = createBrowserRouter([
   {
     path: "/login",
@@ -83,7 +96,7 @@ const router = createBrowserRouter([
   {
     element: <AuthGuard />,
     children: [
-      { index: true, element: <HomePage /> },
+      { index: true, element: <DefaultRedirect /> },
       {
         path: "settings",
         lazy: () => import("@/pages/settings"),

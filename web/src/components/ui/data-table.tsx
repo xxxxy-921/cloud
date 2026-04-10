@@ -13,7 +13,7 @@ function DataTableCard({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-card shadow-sm",
+        "overflow-hidden rounded-xl border bg-card",
         className
       )}
       {...props}
@@ -145,7 +145,7 @@ function DataTablePagination({
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 rounded-xl border border-dashed bg-muted/10 px-4 py-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-3 pt-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between",
         className
       )}
     >

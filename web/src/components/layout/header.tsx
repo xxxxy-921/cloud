@@ -25,18 +25,15 @@ export function Header() {
   const pathLabels = useMemo(() => buildPathLabels(menuTree), [menuTree])
 
   const segments = pathname.split("/").filter(Boolean)
-  const crumbs = [
-    { label: "首页", path: "/" },
-    ...segments.map((seg, i) => {
-      const fullPath = "/" + segments.slice(0, i + 1).join("/")
-      return {
-        label: pathLabels[fullPath] ?? seg,
-        path: fullPath,
-      }
-    }),
-  ]
+  const crumbs = segments.map((seg, i) => {
+    const fullPath = "/" + segments.slice(0, i + 1).join("/")
+    return {
+      label: pathLabels[fullPath] ?? seg,
+      path: fullPath,
+    }
+  })
 
-  if (crumbs.length <= 1) return null
+  if (crumbs.length === 0) return null
 
   return (
     <div className="flex h-10 items-center gap-2 px-6 text-sm text-muted-foreground">

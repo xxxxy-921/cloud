@@ -1,0 +1,6 @@
+ ▐▛███▜▌   Claude Code v2.1.83
+▝▜█████▛▘  claude-sonnet-4.6 · API Usage Billing
+  ▘▘ ▝▝    ~/Documents/codespaces/metis
+
+❯ /clear                                                                        
+  ⎿  (no content)
