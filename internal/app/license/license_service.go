@@ -13,21 +13,21 @@ import (
 )
 
 var (
-	ErrLicenseNotFound          = errors.New("license not found")
-	ErrLicenseAlreadyRevoked    = errors.New("许可已吊销")
-	ErrProductNotPublished      = errors.New("只能对已发布商品签发许可")
-	ErrLicenseeNotActive        = errors.New("授权主体必须为活跃状态")
-	ErrProductKeyNotFound       = errors.New("商品密钥不存在")
-	ErrRevokedLicenseNoExport   = errors.New("已吊销的许可不能导出")
+	ErrLicenseNotFound        = errors.New("license not found")
+	ErrLicenseAlreadyRevoked  = errors.New("许可已吊销")
+	ErrProductNotPublished    = errors.New("只能对已发布商品签发许可")
+	ErrLicenseeNotActive      = errors.New("授权主体必须为活跃状态")
+	ErrProductKeyNotFound     = errors.New("商品密钥不存在")
+	ErrRevokedLicenseNoExport = errors.New("已吊销的许可不能导出")
 )
 
 type LicenseService struct {
-	licenseRepo *LicenseRepo
-	productRepo *ProductRepo
+	licenseRepo  *LicenseRepo
+	productRepo  *ProductRepo
 	licenseeRepo *LicenseeRepo
-	keyRepo     *ProductKeyRepo
-	db          *database.DB
-	jwtSecret   []byte
+	keyRepo      *ProductKeyRepo
+	db           *database.DB
+	jwtSecret    []byte
 }
 
 func NewLicenseService(i do.Injector) (*LicenseService, error) {
@@ -108,14 +108,16 @@ func (s *LicenseService) IssueLicense(params IssueLicenseParams) (*License, erro
 	}
 
 	payload := map[string]any{
-		"v":   1,
-		"pid": product.Code,
-		"reg": params.RegistrationCode,
-		"con": constraintMap,
-		"iat": now.Unix(),
-		"nbf": params.ValidFrom.Unix(),
-		"exp": nil,
-		"kv":  key.Version,
+		"v":    1,
+		"pid":  product.Code,
+		"lic":  licensee.Code,
+		"licn": licensee.Name,
+		"reg":  params.RegistrationCode,
+		"con":  constraintMap,
+		"iat":  now.Unix(),
+		"nbf":  params.ValidFrom.Unix(),
+		"exp":  nil,
+		"kv":   key.Version,
 	}
 	if params.ValidUntil != nil {
 		payload["exp"] = params.ValidUntil.Unix()
@@ -197,63 +199,52 @@ func (s *LicenseService) ListLicenses(params LicenseListParams) ([]LicenseListIt
 }
 
 type LicFile struct {
-	Version        int         `json:"version"`
-	ActivationCode string      `json:"activationCode"`
-	PublicKey      string      `json:"publicKey"`
-	Meta           LicFileMeta `json:"meta"`
+	ActivationCode string `json:"activationCode"`
+	PublicKey      string `json:"publicKey"`
 }
 
-type LicFileMeta struct {
-	ProductCode  string  `json:"productCode"`
-	ProductName  string  `json:"productName"`
-	LicenseeName string  `json:"licenseeName"`
-	ValidFrom    string  `json:"validFrom"`
-	ValidUntil   *string `json:"validUntil"`
-	IssuedAt     string  `json:"issuedAt"`
-}
-
-func (s *LicenseService) ExportLicFile(id uint) (*LicFile, string, error) {
+func (s *LicenseService) ExportLicFile(id uint) (string, string, error) {
 	detail, err := s.licenseRepo.FindByID(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, "", ErrLicenseNotFound
+			return "", "", ErrLicenseNotFound
 		}
-		return nil, "", err
+		return "", "", err
 	}
 	if detail.Status == LicenseStatusRevoked {
-		return nil, "", ErrRevokedLicenseNoExport
+		return "", "", ErrRevokedLicenseNoExport
 	}
 
 	// Get the key version used for signing
 	if detail.ProductID == nil {
-		return nil, "", errors.New("license has no associated product")
+		return "", "", errors.New("license has no associated product")
 	}
 	key, err := s.keyRepo.FindByProductIDAndVersion(*detail.ProductID, detail.KeyVersion)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, "", ErrProductKeyNotFound
+			return "", "", ErrProductKeyNotFound
 		}
-		return nil, "", err
-	}
-
-	var validUntil *string
-	if detail.ValidUntil != nil {
-		s := detail.ValidUntil.Format(time.RFC3339)
-		validUntil = &s
+		return "", "", err
 	}
 
 	licFile := &LicFile{
-		Version:        1,
 		ActivationCode: detail.ActivationCode,
-		PublicKey:       key.PublicKey,
-		Meta: LicFileMeta{
-			ProductCode:  detail.ProductCode,
-			ProductName:  detail.ProductName,
-			LicenseeName: detail.LicenseeName,
-			ValidFrom:    detail.ValidFrom.Format(time.RFC3339),
-			ValidUntil:   validUntil,
-			IssuedAt:     detail.CreatedAt.Format(time.RFC3339),
-		},
+		PublicKey:      key.PublicKey,
+	}
+
+	plainJSON, err := json.Marshal(licFile)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal license file: %w", err)
+	}
+
+	productIdentity := detail.ProductName
+	if productIdentity == "" {
+		productIdentity = detail.ProductCode
+	}
+
+	encryptedContent, err := EncryptLicenseFile(plainJSON, detail.RegistrationCode, productIdentity)
+	if err != nil {
+		return "", "", err
 	}
 
 	filename := fmt.Sprintf("%s_%s.lic", detail.ProductCode, detail.CreatedAt.Format("20060102"))
@@ -261,5 +252,5 @@ func (s *LicenseService) ExportLicFile(id uint) (*LicFile, string, error) {
 		filename = fmt.Sprintf("license_%s.lic", detail.CreatedAt.Format("20060102"))
 	}
 
-	return licFile, filename, nil
+	return encryptedContent, filename, nil
 }

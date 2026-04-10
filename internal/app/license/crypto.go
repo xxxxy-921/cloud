@@ -13,11 +13,52 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 )
 
 var (
 	ErrNoEncryptionKey = errors.New("neither LICENSE_KEY_SECRET nor JWT_SECRET is set, cannot encrypt private key")
 )
+
+func normalizeLicenseFileToken(productName string) string {
+	trimmed := strings.TrimSpace(productName)
+	if trimmed == "" {
+		return "LICENSE1"
+	}
+
+	var builder strings.Builder
+	for _, r := range strings.ToUpper(trimmed) {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		}
+		if builder.Len() >= 24 {
+			break
+		}
+	}
+
+	token := builder.String()
+	if token != "" {
+		return token + "1"
+	}
+
+	hash := sha256.Sum256([]byte(trimmed))
+	return fmt.Sprintf("LIC%X1", hash[:4])
+}
+
+func buildLicenseFilePrefix(productName string) string {
+	return normalizeLicenseFileToken(productName) + "."
+}
+
+func decodeLicenseFilePayload(encoded string) ([]byte, error) {
+	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode license file: %w", err)
+	}
+	return data, nil
+}
 
 // GenerateKeyPair generates a new Ed25519 key pair and returns
 // (publicKeyBase64, encryptedPrivateKeyBase64, error).
@@ -96,6 +137,49 @@ func decryptAESGCM(ciphertext, key []byte) ([]byte, error) {
 	}
 	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	return aead.Open(nil, nonce, ct, nil)
+}
+
+// DeriveLicenseFileKey derives a 32-byte AES key from the license file token and customer's registration code.
+func DeriveLicenseFileKey(registrationCode string, fileToken string) []byte {
+	h := sha256.Sum256([]byte(fileToken + ":" + registrationCode))
+	return h[:]
+}
+
+// EncryptLicenseFile encrypts the full .lic JSON payload into a single base64url string.
+func EncryptLicenseFile(plaintext []byte, registrationCode string, productName string) (string, error) {
+	prefix := buildLicenseFilePrefix(productName)
+	fileToken := strings.TrimSuffix(prefix, ".")
+	key := DeriveLicenseFileKey(registrationCode, fileToken)
+	encrypted, err := encryptAESGCM(plaintext, key)
+	if err != nil {
+		return "", fmt.Errorf("encrypt license file: %w", err)
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(encrypted), nil
+}
+
+// DecryptLicenseFile decrypts a base64url-encoded .lic string using the registration code.
+func DecryptLicenseFile(ciphertextBase64URL string, registrationCode string) ([]byte, error) {
+	original := strings.TrimSpace(ciphertextBase64URL)
+	if original == "" {
+		return nil, errors.New("license file is empty")
+	}
+
+	dot := strings.IndexRune(original, '.')
+	if dot <= 0 {
+		return nil, errors.New("invalid license file format")
+	}
+
+	fileToken := original[:dot]
+	encoded := original[dot+1:]
+	data, err := decodeLicenseFilePayload(encoded)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := decryptAESGCM(data, DeriveLicenseFileKey(registrationCode, fileToken))
+	if err != nil {
+		return nil, fmt.Errorf("decrypt license file: %w", err)
+	}
+	return plaintext, nil
 }
 
 // Canonicalize produces a deterministic JSON string by recursively sorting object keys.

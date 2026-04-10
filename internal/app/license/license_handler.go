@@ -223,12 +223,6 @@ func (h *LicenseHandler) Export(c *gin.Context) {
 		return
 	}
 
-	data, err := json.MarshalIndent(licFile, "", "  ")
-	if err != nil {
-		handler.Fail(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	c.Data(http.StatusOK, "application/json", data)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(licFile))
 }

@@ -101,8 +101,20 @@ export function Component() {
     setPage(1)
   }
 
-  function handleExport(item: LicenseItem) {
-    window.open(`/api/v1/license/licenses/${item.id}/export`, "_blank")
+  async function handleExport(item: LicenseItem) {
+    try {
+      const blob = await api.download(`/api/v1/license/licenses/${item.id}/export`)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `${item.productName || "license"}_${item.id}.lic`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "导出失败")
+    }
   }
 
   return (
