@@ -67,11 +67,11 @@ func (s *ProcessDefService) Update(id uint, updates map[string]any) (*ProcessDef
 
 	// Push config.update to all nodes running this process
 	nodeProcesses, _ := s.nodeProcessRepo.ListByProcessDefID(id)
+	payload, _ := json.Marshal(map[string]any{
+		"process_def_id": id,
+		"process_name":   pd.Name,
+	})
 	for _, np := range nodeProcesses {
-		payload, _ := json.Marshal(map[string]any{
-			"process_def_id": id,
-			"process_name":   pd.Name,
-		})
 		cmd := &NodeCommand{
 			NodeID:  np.NodeID,
 			Type:    CommandTypeConfigUpdate,
@@ -100,8 +100,8 @@ func (s *ProcessDefService) Delete(id uint) error {
 
 	// Enqueue stop commands for all nodes running this process
 	nodeProcesses, _ := s.nodeProcessRepo.ListByProcessDefID(id)
+	payload, _ := json.Marshal(map[string]any{"process_def_id": id})
 	for _, np := range nodeProcesses {
-		payload, _ := json.Marshal(map[string]any{"process_def_id": id})
 		cmd := &NodeCommand{
 			NodeID:  np.NodeID,
 			Type:    CommandTypeProcessStop,

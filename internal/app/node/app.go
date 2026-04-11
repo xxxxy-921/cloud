@@ -74,6 +74,7 @@ func (a *NodeApp) Routes(api *gin.RouterGroup) {
 		processDefs.GET("/:id", processDefH.Get)
 		processDefs.PUT("/:id", processDefH.Update)
 		processDefs.DELETE("/:id", processDefH.Delete)
+		processDefs.GET("/:id/nodes", processDefH.ListNodes)
 	}
 
 	nodeProcesses := api.Group("/nodes/:id/processes")
@@ -84,6 +85,7 @@ func (a *NodeApp) Routes(api *gin.RouterGroup) {
 		nodeProcesses.POST("/:processId/start", nodeProcessH.Start)
 		nodeProcesses.POST("/:processId/stop", nodeProcessH.Stop)
 		nodeProcesses.POST("/:processId/restart", nodeProcessH.Restart)
+		nodeProcesses.POST("/:processId/reload", nodeProcessH.Reload)
 		nodeProcesses.GET("/:processId/logs", nodeProcessH.Logs)
 	}
 

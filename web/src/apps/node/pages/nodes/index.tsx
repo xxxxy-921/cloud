@@ -56,12 +56,7 @@ import {
 } from "@/components/ui/dialog"
 import { formatDateTime } from "@/lib/utils"
 import { NodeSheet, type NodeItem } from "../../components/node-sheet"
-
-const STATUS_VARIANTS: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
-  pending: "secondary",
-  online: "default",
-  offline: "destructive",
-}
+import { NODE_STATUS_VARIANTS } from "../../constants"
 
 export function Component() {
   const { t } = useTranslation(["node", "common"])
@@ -191,7 +186,7 @@ export function Component() {
               />
             ) : (
               nodes.map((item) => {
-                const variant = STATUS_VARIANTS[item.status] ?? ("secondary" as const)
+                const variant = NODE_STATUS_VARIANTS[item.status] ?? ("secondary" as const)
                 return (
                   <TableRow key={item.id} className="cursor-pointer" onClick={() => navigate(`/node/nodes/${item.id}`)}>
                     <TableCell className="font-medium">{item.name}</TableCell>

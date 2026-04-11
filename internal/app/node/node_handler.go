@@ -212,3 +212,12 @@ func parseID(c *gin.Context) (uint, error) {
 	}
 	return uint(id), nil
 }
+
+func parseProcessDefID(c *gin.Context) (uint, error) {
+	idStr := c.Param("processId")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return uint(id), nil
+}

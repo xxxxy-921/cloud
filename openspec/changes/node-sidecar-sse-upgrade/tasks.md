@@ -90,31 +90,31 @@
 
 ## 13. 日志存储与查询（Server 端）
 
-- [ ] 13.1 在 `model.go` 新增 `NodeProcessLog` 模型（NodeID、ProcessDefID、Stream、Content、Timestamp），加入 `app.go` 的 `Models()` 返回值
-- [ ] 13.2 创建 `internal/app/node/node_process_log_repository.go`：Create（批量插入）、List（分页查询，支持按 nodeID + processDefID + stream 过滤）、DeleteBefore（按时间删除）
-- [ ] 13.3 创建 `internal/app/node/node_process_log_service.go`：封装日志写入和查询逻辑
-- [ ] 13.4 在 `sidecar_handler.go` 新增 `UploadLogs()` handler：`POST /api/v1/nodes/sidecar/logs`，Node Token 认证
-- [ ] 13.5 新增管理端 API：`GET /api/v1/nodes/:id/processes/:defId/logs`，支持分页和 stream 过滤
-- [ ] 13.6 在 `app.go` 的 `Tasks()` 中注册日志清理定时任务（默认保留 7 天）
-- [ ] 13.7 在 `app.go` 的 `Providers()` 和 `Routes()` 中注册新的 repo、service、handler
-- [ ] 13.8 验证编译通过 `go build -tags dev ./cmd/server/`
+- [x] 13.1 在 `model.go` 新增 `NodeProcessLog` 模型（NodeID、ProcessDefID、Stream、Content、Timestamp），加入 `app.go` 的 `Models()` 返回值
+- [x] 13.2 创建 `internal/app/node/node_process_log_repository.go`：Create（批量插入）、List（分页查询，支持按 nodeID + processDefID + stream 过滤）、DeleteBefore（按时间删除）
+- [x] 13.3 创建 `internal/app/node/node_process_log_service.go`：封装日志写入和查询逻辑
+- [x] 13.4 在 `sidecar_handler.go` 新增 `UploadLogs()` handler：`POST /api/v1/nodes/sidecar/logs`，Node Token 认证
+- [x] 13.5 新增管理端 API：`GET /api/v1/nodes/:id/processes/:defId/logs`，支持分页和 stream 过滤
+- [x] 13.6 在 `app.go` 的 `Tasks()` 中注册日志清理定时任务（默认保留 7 天）
+- [x] 13.7 在 `app.go` 的 `Providers()` 和 `Routes()` 中注册新的 repo、service、handler
+- [x] 13.8 验证编译通过 `go build -tags dev ./cmd/server/`
 
 ## 14. 前端：Probe 配置表单
 
-- [ ] 14.1 修改 `process-def-sheet.tsx`：probeType 选择后动态展开对应配置字段（HTTP: url/expectedStatus/timeout/interval，TCP: address/timeout/interval，exec: command/timeout/interval）
-- [ ] 14.2 将展开的配置字段序列化为 `probeConfig` JSON 提交
-- [ ] 14.3 编辑时从 `probeConfig` 反序列化填充表单
-- [ ] 14.4 更新 i18n 翻译文件
+- [x] 14.1 修改 `process-def-sheet.tsx`：probeType 选择后动态展开对应配置字段（HTTP: url/expectedStatus/timeout/interval，TCP: address/timeout/interval，exec: command/timeout/interval）
+- [x] 14.2 将展开的配置字段序列化为 `probeConfig` JSON 提交
+- [x] 14.3 编辑时从 `probeConfig` 反序列化填充表单
+- [x] 14.4 更新 i18n 翻译文件
 
 ## 15. 前端：节点详情页增强
 
-- [ ] 15.1 进程列表操作列新增 Reload 按钮（调用 `POST /api/v1/nodes/:id/processes/:defId/reload`，对应后端下发 config.update 命令）
-- [ ] 15.2 指令历史 Tab 添加分页（pageSize=20）和刷新按钮
-- [ ] 15.3 新增日志 Tab：展示进程日志（调用 `GET /api/v1/nodes/:id/processes/:defId/logs`），支持 stream 筛选和手动刷新
-- [ ] 15.4 更新 i18n 翻译文件
+- [x] 15.1 进程列表操作列新增 Reload 按钮（调用 `POST /api/v1/nodes/:id/processes/:defId/reload`，对应后端下发 config.update 命令）
+- [x] 15.2 指令历史 Tab 添加分页（pageSize=20）和刷新按钮
+- [x] 15.3 新增日志 Tab：展示进程日志（调用 `GET /api/v1/nodes/:id/processes/:defId/logs`），支持 stream 筛选和手动刷新
+- [x] 15.4 更新 i18n 翻译文件
 
 ## 16. 前端：进程定义关联节点视图
 
-- [ ] 16.1 新增后端 API：`GET /api/v1/process-defs/:id/nodes`，返回绑定了该进程定义的所有节点及其 NodeProcess 状态
-- [ ] 16.2 在 `process-defs/index.tsx` 中为每个进程定义添加"查看节点"操作，展示关联节点列表（可用 Sheet 或 Dialog）
-- [ ] 16.3 更新 i18n 翻译文件
+- [x] 16.1 新增后端 API：`GET /api/v1/process-defs/:id/nodes`，返回绑定了该进程定义的所有节点及其 NodeProcess 状态
+- [x] 16.2 在 `process-defs/index.tsx` 中为每个进程定义添加"查看节点"操作，展示关联节点列表（可用 Sheet 或 Dialog）
+- [x] 16.3 更新 i18n 翻译文件

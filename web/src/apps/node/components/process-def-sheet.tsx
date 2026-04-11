@@ -45,6 +45,7 @@ export interface ProcessDefItem {
   env: Record<string, string> | null
   configFiles: unknown[] | null
   probeType: string
+  probeConfig: { type?: string; endpoint?: string; command?: string; timeout?: number; interval?: number } | null
   restartPolicy: string
   maxRestarts: number
   createdAt: string
@@ -65,6 +66,10 @@ function useProcessDefSchema() {
     restartPolicy: z.string(),
     maxRestarts: z.coerce.number().int().min(0).max(100),
     probeType: z.string(),
+    probeEndpoint: z.string().optional(),
+    probeCommand: z.string().optional(),
+    probeTimeout: z.coerce.number().int().min(1).max(300).optional(),
+    probeInterval: z.coerce.number().int().min(5).max(3600).optional(),
   })
 }
 
@@ -97,12 +102,17 @@ export function ProcessDefSheet({ open, onOpenChange, processDef }: ProcessDefSh
       restartPolicy: "always",
       maxRestarts: 10,
       probeType: "none",
+      probeEndpoint: "",
+      probeCommand: "",
+      probeTimeout: 5,
+      probeInterval: 30,
     },
   })
 
   useEffect(() => {
     if (open) {
       if (processDef) {
+        const pc = processDef.probeConfig
         form.reset({
           name: processDef.name,
           displayName: processDef.displayName,
@@ -115,21 +125,13 @@ export function ProcessDefSheet({ open, onOpenChange, processDef }: ProcessDefSh
           restartPolicy: processDef.restartPolicy,
           maxRestarts: processDef.maxRestarts,
           probeType: processDef.probeType,
+          probeEndpoint: pc?.endpoint || "",
+          probeCommand: pc?.command || "",
+          probeTimeout: pc?.timeout || 5,
+          probeInterval: pc?.interval || 30,
         })
       } else {
-        form.reset({
-          name: "",
-          displayName: "",
-          description: "",
-          startCommand: "",
-          stopCommand: "",
-          reloadCommand: "",
-          env: "",
-          configFiles: "",
-          restartPolicy: "always",
-          maxRestarts: 10,
-          probeType: "none",
-        })
+        form.reset()
       }
     }
   }, [open, processDef, form])
@@ -148,6 +150,24 @@ export function ProcessDefSheet({ open, onOpenChange, processDef }: ProcessDefSh
     }
     if (values.env?.trim()) body.env = JSON.parse(values.env)
     if (values.configFiles?.trim()) body.configFiles = JSON.parse(values.configFiles)
+
+    if (values.probeType && values.probeType !== "none") {
+      const probeConfig: Record<string, unknown> = {
+        type: values.probeType,
+        timeout: values.probeTimeout || 5,
+        interval: values.probeInterval || 30,
+      }
+      if (values.probeType === "http" || values.probeType === "tcp") {
+        probeConfig.endpoint = values.probeEndpoint || ""
+      }
+      if (values.probeType === "exec") {
+        probeConfig.command = values.probeCommand || ""
+      }
+      body.probeConfig = probeConfig
+    } else {
+      body.probeConfig = {}
+    }
+
     return body
   }
 
@@ -182,6 +202,7 @@ export function ProcessDefSheet({ open, onOpenChange, processDef }: ProcessDefSh
   }
 
   const isPending = createMutation.isPending || updateMutation.isPending
+  const probeType = form.watch("probeType")
 
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) setShowAdvanced(false)
@@ -301,6 +322,77 @@ export function ProcessDefSheet({ open, onOpenChange, processDef }: ProcessDefSh
                 )}
               />
             </div>
+
+            {probeType !== "none" && (
+              <div className="rounded-md border p-3 space-y-3">
+                <p className="text-sm font-medium">{t("node:processDefs.probeConfig")}</p>
+                {(probeType === "http" || probeType === "tcp") && (
+                  <FormField
+                    control={form.control}
+                    name="probeEndpoint"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("node:processDefs.probeEndpoint")}</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder={
+                              probeType === "http"
+                                ? t("node:processDefs.probeEndpointHttpPlaceholder")
+                                : t("node:processDefs.probeEndpointTcpPlaceholder")
+                            }
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+                {probeType === "exec" && (
+                  <FormField
+                    control={form.control}
+                    name="probeCommand"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("node:processDefs.probeCommand")}</FormLabel>
+                        <FormControl>
+                          <Input placeholder={t("node:processDefs.probeCommandPlaceholder")} {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+                <div className="flex items-center gap-2">
+                  <FormField
+                    control={form.control}
+                    name="probeTimeout"
+                    render={({ field }) => (
+                      <FormItem className="flex-1">
+                        <FormLabel>{t("node:processDefs.probeTimeout")}</FormLabel>
+                        <FormControl>
+                          <Input type="number" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="probeInterval"
+                    render={({ field }) => (
+                      <FormItem className="flex-1">
+                        <FormLabel>{t("node:processDefs.probeInterval")}</FormLabel>
+                        <FormControl>
+                          <Input type="number" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
+            )}
 
             <button
               type="button"

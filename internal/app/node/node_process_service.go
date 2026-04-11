@@ -112,12 +112,21 @@ func (s *NodeProcessService) ListByNodeID(nodeID uint) ([]NodeProcessDetail, err
 	return s.nodeProcessRepo.ListByNodeID(nodeID)
 }
 
-func (s *NodeProcessService) Unbind(nodeID, processDefID uint) error {
+// lookupBinding finds the NodeProcess binding or returns ErrNodeProcessNotFound.
+func (s *NodeProcessService) lookupBinding(nodeID, processDefID uint) (*NodeProcess, error) {
 	np, err := s.nodeProcessRepo.FindByNodeAndProcessDef(nodeID, processDefID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrNodeProcessNotFound
+			return nil, ErrNodeProcessNotFound
 		}
+		return nil, err
+	}
+	return np, nil
+}
+
+func (s *NodeProcessService) Unbind(nodeID, processDefID uint) error {
+	np, err := s.lookupBinding(nodeID, processDefID)
+	if err != nil {
 		return err
 	}
 
@@ -145,11 +154,8 @@ func (s *NodeProcessService) Unbind(nodeID, processDefID uint) error {
 }
 
 func (s *NodeProcessService) Start(nodeID, processDefID uint) error {
-	np, err := s.nodeProcessRepo.FindByNodeAndProcessDef(nodeID, processDefID)
+	np, err := s.lookupBinding(nodeID, processDefID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrNodeProcessNotFound
-		}
 		return err
 	}
 
@@ -171,11 +177,8 @@ func (s *NodeProcessService) Start(nodeID, processDefID uint) error {
 }
 
 func (s *NodeProcessService) Stop(nodeID, processDefID uint) error {
-	np, err := s.nodeProcessRepo.FindByNodeAndProcessDef(nodeID, processDefID)
+	np, err := s.lookupBinding(nodeID, processDefID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrNodeProcessNotFound
-		}
 		return err
 	}
 
@@ -199,11 +202,8 @@ func (s *NodeProcessService) Stop(nodeID, processDefID uint) error {
 }
 
 func (s *NodeProcessService) Restart(nodeID, processDefID uint) error {
-	np, err := s.nodeProcessRepo.FindByNodeAndProcessDef(nodeID, processDefID)
+	np, err := s.lookupBinding(nodeID, processDefID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrNodeProcessNotFound
-		}
 		return err
 	}
 
@@ -224,4 +224,35 @@ func (s *NodeProcessService) Restart(nodeID, processDefID uint) error {
 		Status:  CommandStatusPending,
 	}
 	return s.createAndPushCommand(cmd)
+}
+
+func (s *NodeProcessService) Reload(nodeID, processDefID uint) error {
+	_, err := s.lookupBinding(nodeID, processDefID)
+	if err != nil {
+		return err
+	}
+
+	pd, err := s.processDefRepo.FindByID(processDefID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrProcessDefNotFound
+		}
+		return err
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"process_def_id": processDefID,
+		"process_name":   pd.Name,
+	})
+	cmd := &NodeCommand{
+		NodeID:  nodeID,
+		Type:    CommandTypeConfigUpdate,
+		Payload: JSONMap(payload),
+		Status:  CommandStatusPending,
+	}
+	return s.createAndPushCommand(cmd)
+}
+
+func (s *NodeProcessService) ListNodesByProcessDefID(processDefID uint) ([]ProcessDefNodeDetail, error) {
+	return s.nodeProcessRepo.ListNodesByProcessDefID(processDefID)
 }

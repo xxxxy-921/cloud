@@ -44,12 +44,14 @@ type UpdateProcessDefRequest struct {
 }
 
 type ProcessDefHandler struct {
-	processDefSvc *ProcessDefService
+	processDefSvc  *ProcessDefService
+	nodeProcessSvc *NodeProcessService
 }
 
 func NewProcessDefHandler(i do.Injector) (*ProcessDefHandler, error) {
 	return &ProcessDefHandler{
-		processDefSvc: do.MustInvoke[*ProcessDefService](i),
+		processDefSvc:  do.MustInvoke[*ProcessDefService](i),
+		nodeProcessSvc: do.MustInvoke[*NodeProcessService](i),
 	}, nil
 }
 
@@ -242,4 +244,20 @@ func (h *ProcessDefHandler) Delete(c *gin.Context) {
 
 	c.Set("audit_summary", "deleted process definition")
 	handler.OK(c, nil)
+}
+
+func (h *ProcessDefHandler) ListNodes(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	items, err := h.nodeProcessSvc.ListNodesByProcessDefID(id)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	handler.OK(c, items)
 }

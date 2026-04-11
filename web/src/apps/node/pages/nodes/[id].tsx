@@ -14,6 +14,7 @@ import {
   Loader2,
   Copy,
   Check,
+  RefreshCcw,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { usePermission } from "@/hooks/use-permission"
@@ -30,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { DataTablePagination } from "@/components/ui/data-table"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,19 +67,7 @@ import {
 } from "@/components/ui/select"
 import { formatDateTime } from "@/lib/utils"
 import { NodeSheet, type NodeItem } from "../../components/node-sheet"
-
-const STATUS_VARIANTS: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
-  pending: "secondary",
-  online: "default",
-  offline: "destructive",
-}
-
-const PROCESS_STATUS_VARIANTS: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
-  running: "default",
-  stopped: "secondary",
-  error: "destructive",
-  pending_config: "outline",
-}
+import { NODE_STATUS_VARIANTS, PROCESS_STATUS_VARIANTS } from "../../constants"
 
 interface NodeDetail {
   id: number
@@ -140,9 +130,12 @@ export function Component() {
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [newToken, setNewToken] = useState("")
   const [copied, setCopied] = useState(false)
+  const [cmdPage, setCmdPage] = useState(1)
+  const [logProcessId, setLogProcessId] = useState("")
+  const [logStream, setLogStream] = useState("all")
+  const [logPage, setLogPage] = useState(1)
 
   const canUpdate = usePermission("node:update")
-  const canManageProcess = usePermission("node:update")
 
   const { data: node, isLoading } = useQuery({
     queryKey: ["node", id],
@@ -157,8 +150,8 @@ export function Component() {
   })
 
   const { data: commandsData } = useQuery({
-    queryKey: ["node-commands", id],
-    queryFn: () => api.get<{ items: CommandItem[] }>(`/api/v1/nodes/${id}/commands`),
+    queryKey: ["node-commands", id, cmdPage],
+    queryFn: () => api.get<{ items: CommandItem[]; total: number }>(`/api/v1/nodes/${id}/commands?page=${cmdPage}&pageSize=20`),
     enabled: !!id,
   })
 
@@ -232,12 +225,33 @@ export function Component() {
     onError: (err) => toast.error(err.message),
   })
 
+  const reloadMutation = useMutation({
+    mutationFn: (processDefId: number) =>
+      api.post(`/api/v1/nodes/${id}/processes/${processDefId}/reload`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["node-commands", id] })
+      toast.success(t("node:processDefs.reloadSuccess"))
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const { data: logsData } = useQuery({
+    queryKey: ["node-process-logs", id, logProcessId, logStream, logPage],
+    queryFn: () => {
+      let url = `/api/v1/nodes/${id}/processes/${logProcessId}/logs?page=${logPage}&pageSize=50`
+      if (logStream !== "all") url += `&stream=${logStream}`
+      return api.get<{ items: Array<{ id: number; stream: string; content: string; processName: string; timestamp: string }>; total: number }>(url)
+    },
+    enabled: !!id && !!logProcessId,
+  })
+
   const processes = processesData ?? []
   const commands = commandsData?.items ?? []
+  const commandsTotal = commandsData?.total ?? 0
   const processDefs = processDefsData?.items ?? []
   const requestedTab = searchParams.get("tab")
   const activeTab =
-    requestedTab === "info" || requestedTab === "processes" || requestedTab === "commands"
+    requestedTab === "info" || requestedTab === "processes" || requestedTab === "commands" || requestedTab === "logs"
       ? requestedTab
       : "info"
 
@@ -249,7 +263,7 @@ export function Component() {
     )
   }
 
-  const variant = STATUS_VARIANTS[node.status] ?? ("secondary" as const)
+  const variant = NODE_STATUS_VARIANTS[node.status] ?? ("secondary" as const)
   const sysInfo = node.systemInfo as Record<string, unknown> | null
 
   function handleTabChange(value: string) {
@@ -278,6 +292,10 @@ export function Component() {
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,
   }
+
+  const selectedPd = selectedProcessDef
+    ? processDefs.find((d) => String(d.id) === selectedProcessDef) ?? null
+    : null
 
   return (
     <div className="space-y-6">
@@ -340,6 +358,9 @@ export function Component() {
           </TabsTrigger>
           <TabsTrigger value="commands" className="h-8 flex-none px-3 text-xs sm:text-sm">
             {t("node:nodes.commands")}
+          </TabsTrigger>
+          <TabsTrigger value="logs" className="h-8 flex-none px-3 text-xs sm:text-sm">
+            {t("node:processDefs.logs")}
           </TabsTrigger>
         </TabsList>
 
@@ -425,7 +446,7 @@ export function Component() {
         </TabsContent>
 
         <TabsContent value="processes" className="space-y-4">
-          {canManageProcess && (
+          {canUpdate && (
             <div className="flex justify-end">
               <Button size="sm" onClick={() => setBindDialogOpen(true)}>
                 <Plus className="mr-1.5 h-4 w-4" />
@@ -437,7 +458,7 @@ export function Component() {
           {processes.length === 0 ? (
             <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
               <p>{t("node:nodes.noProcesses")}</p>
-              {canManageProcess && <p className="mt-1">{t("node:nodes.noProcessesHint")}</p>}
+              {canUpdate && <p className="mt-1">{t("node:nodes.noProcessesHint")}</p>}
             </div>
           ) : (
             <div className="overflow-hidden rounded-xl border bg-card">
@@ -448,7 +469,7 @@ export function Component() {
                     <TableHead className="w-[100px]">{t("common:status")}</TableHead>
                     <TableHead className="w-[80px]">{t("node:nodes.pid")}</TableHead>
                     <TableHead className="w-[120px]">{t("node:nodes.configVersion")}</TableHead>
-                    {canManageProcess && <TableHead className="w-[220px]">{t("common:actions")}</TableHead>}
+                    {canUpdate && <TableHead className="w-[280px]">{t("common:actions")}</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -469,7 +490,7 @@ export function Component() {
                         <TableCell className="text-xs text-muted-foreground font-mono">
                           {proc.configVersion ? proc.configVersion.substring(0, 12) : "-"}
                         </TableCell>
-                        {canManageProcess && (
+                        {canUpdate && (
                           <TableCell>
                             <div className="flex items-center gap-1">
                               {proc.status === "running" ? (
@@ -504,6 +525,16 @@ export function Component() {
                               >
                                 <RotateCw className="mr-1 h-3.5 w-3.5" />
                                 {t("node:nodes.restart")}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="px-2"
+                                onClick={() => reloadMutation.mutate(proc.processDefId)}
+                                disabled={reloadMutation.isPending}
+                              >
+                                <RefreshCcw className="mr-1 h-3.5 w-3.5" />
+                                {t("node:processDefs.reload")}
                               </Button>
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
@@ -540,42 +571,143 @@ export function Component() {
         </TabsContent>
 
         <TabsContent value="commands" className="space-y-4">
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["node-commands", id] })}
+            >
+              <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+              {t("node:processDefs.refresh")}
+            </Button>
+          </div>
           {commands.length === 0 ? (
             <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
               {t("node:nodes.noCommands")}
             </div>
           ) : (
-            <div className="overflow-hidden rounded-xl border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("node:nodes.commandType")}</TableHead>
-                    <TableHead className="w-[100px]">{t("node:nodes.commandStatus")}</TableHead>
-                    <TableHead>{t("node:nodes.commandResult")}</TableHead>
-                    <TableHead className="w-[150px]">{t("node:nodes.commandTime")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {commands.map((cmd) => {
-                    const cmdVariant = cmd.status === "acked" ? "default" : cmd.status === "failed" ? "destructive" : "secondary"
-                    return (
-                      <TableRow key={cmd.id}>
-                        <TableCell className="font-mono text-sm">{cmd.type}</TableCell>
-                        <TableCell>
-                          <Badge variant={cmdVariant}>{t(`node:status.${cmd.status}`, cmd.status)}</Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground max-w-[300px] truncate">
-                          {cmd.result || "-"}
-                        </TableCell>
+            <>
+              <div className="overflow-hidden rounded-xl border bg-card">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t("node:nodes.commandType")}</TableHead>
+                      <TableHead className="w-[100px]">{t("node:nodes.commandStatus")}</TableHead>
+                      <TableHead>{t("node:nodes.commandResult")}</TableHead>
+                      <TableHead className="w-[150px]">{t("node:nodes.commandTime")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {commands.map((cmd) => {
+                      const cmdVariant = cmd.status === "acked" ? "default" : cmd.status === "failed" ? "destructive" : "secondary"
+                      return (
+                        <TableRow key={cmd.id}>
+                          <TableCell className="font-mono text-sm">{cmd.type}</TableCell>
+                          <TableCell>
+                            <Badge variant={cmdVariant}>{t(`node:status.${cmd.status}`, cmd.status)}</Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground max-w-[300px] truncate">
+                            {cmd.result || "-"}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                            {formatDateTime(cmd.createdAt)}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              <DataTablePagination
+                total={commandsTotal}
+                page={cmdPage}
+                totalPages={Math.ceil(commandsTotal / 20)}
+                onPageChange={setCmdPage}
+              />
+            </>
+          )}
+        </TabsContent>
+
+        <TabsContent value="logs" className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={logProcessId} onValueChange={(v) => { setLogProcessId(v); setLogPage(1) }}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder={t("node:nodes.selectProcess")} />
+              </SelectTrigger>
+              <SelectContent>
+                {processes.map((p) => (
+                  <SelectItem key={p.processDefId} value={String(p.processDefId)}>
+                    {p.displayName || p.processName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={logStream} onValueChange={(v) => { setLogStream(v); setLogPage(1) }}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue placeholder={t("node:processDefs.allStreams")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("node:processDefs.allStreams")}</SelectItem>
+                <SelectItem value="stdout">{t("node:processDefs.stdout")}</SelectItem>
+                <SelectItem value="stderr">{t("node:processDefs.stderr")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["node-process-logs", id, logProcessId, logStream, logPage] })}
+              disabled={!logProcessId}
+            >
+              <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+              {t("node:processDefs.refresh")}
+            </Button>
+          </div>
+
+          {!logProcessId ? (
+            <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
+              {t("node:nodes.selectProcess")}
+            </div>
+          ) : !logsData?.items?.length ? (
+            <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
+              {t("node:processDefs.noLogs")}
+            </div>
+          ) : (
+            <>
+              <div className="overflow-hidden rounded-xl border bg-card">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[160px]">{t("node:nodes.commandTime")}</TableHead>
+                      <TableHead className="w-[80px]">{t("node:processDefs.stream")}</TableHead>
+                      <TableHead>{t("node:processDefs.logs")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {logsData.items.map((log) => (
+                      <TableRow key={log.id}>
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                          {formatDateTime(cmd.createdAt)}
+                          {formatDateTime(log.timestamp)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={log.stream === "stderr" ? "destructive" : "secondary"}>
+                            {log.stream}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs whitespace-pre-wrap break-all">
+                          {log.content}
                         </TableCell>
                       </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <DataTablePagination
+                total={logsData.total ?? 0}
+                page={logPage}
+                totalPages={Math.ceil((logsData.total ?? 0) / 50)}
+                onPageChange={setLogPage}
+              />
+            </>
           )}
         </TabsContent>
       </Tabs>
@@ -609,30 +741,26 @@ export function Component() {
               </Select>
             </div>
 
-            {selectedProcessDef && (() => {
-              const pd = processDefs.find((d) => String(d.id) === selectedProcessDef)
-              if (!pd) return null
-              return (
-                <div className="rounded-lg border bg-muted/30 p-3 space-y-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">{t("node:processDefs.startCommand")}:</span>
-                    <p className="font-mono text-xs mt-0.5 break-all">{pd.startCommand}</p>
-                  </div>
-                  {pd.stopCommand && (
-                    <div>
-                      <span className="text-muted-foreground">{t("node:processDefs.stopCommand")}:</span>
-                      <p className="font-mono text-xs mt-0.5 break-all">{pd.stopCommand}</p>
-                    </div>
-                  )}
-                  {pd.reloadCommand && (
-                    <div>
-                      <span className="text-muted-foreground">{t("node:processDefs.reloadCommand")}:</span>
-                      <p className="font-mono text-xs mt-0.5 break-all">{pd.reloadCommand}</p>
-                    </div>
-                  )}
+            {selectedPd && (
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-2 text-sm">
+                <div>
+                  <span className="text-muted-foreground">{t("node:processDefs.startCommand")}:</span>
+                  <p className="font-mono text-xs mt-0.5 break-all">{selectedPd.startCommand}</p>
                 </div>
-              )
-            })()}
+                {selectedPd.stopCommand && (
+                  <div>
+                    <span className="text-muted-foreground">{t("node:processDefs.stopCommand")}:</span>
+                    <p className="font-mono text-xs mt-0.5 break-all">{selectedPd.stopCommand}</p>
+                  </div>
+                )}
+                {selectedPd.reloadCommand && (
+                  <div>
+                    <span className="text-muted-foreground">{t("node:processDefs.reloadCommand")}:</span>
+                    <p className="font-mono text-xs mt-0.5 break-all">{selectedPd.reloadCommand}</p>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">{t("node:nodes.overrideVars")}</label>

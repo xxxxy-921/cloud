@@ -69,7 +69,8 @@
     "commandType": "Type",
     "commandStatus": "Status",
     "commandResult": "Result",
-    "commandTime": "Time"
+    "commandTime": "Time",
+    "selectProcess": "Select Process"
   },
   "processDefs": {
     "title": "Process Definitions",
@@ -108,7 +109,29 @@
     "none": "None",
     "http": "HTTP",
     "tcp": "TCP",
-    "exec": "Command"
+    "exec": "Command",
+    "probeEndpoint": "Probe Endpoint",
+    "probeEndpointHttpPlaceholder": "e.g. http://localhost:8080/health",
+    "probeEndpointTcpPlaceholder": "e.g. localhost:6379",
+    "probeCommand": "Probe Command",
+    "probeCommandPlaceholder": "e.g. curl -sf http://localhost/health",
+    "probeTimeout": "Timeout (s)",
+    "probeInterval": "Interval (s)",
+    "probeConfig": "Probe Config",
+    "logs": "Logs",
+    "noLogs": "No logs",
+    "stream": "Stream",
+    "stdout": "stdout",
+    "stderr": "stderr",
+    "allStreams": "All",
+    "reload": "Reload",
+    "reloadSuccess": "Reload command sent",
+    "refresh": "Refresh",
+    "viewNodes": "View Nodes",
+    "noNodes": "No associated nodes",
+    "nodeStatus": "Node Status",
+    "processStatusCol": "Process Status",
+    "boundAt": "Bound At"
   },
   "status": {
     "pending": "Pending",

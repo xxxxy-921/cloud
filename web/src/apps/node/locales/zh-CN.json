@@ -69,7 +69,8 @@
     "commandType": "指令类型",
     "commandStatus": "状态",
     "commandResult": "结果",
-    "commandTime": "时间"
+    "commandTime": "时间",
+    "selectProcess": "选择进程"
   },
   "processDefs": {
     "title": "进程定义",
@@ -108,7 +109,29 @@
     "none": "无",
     "http": "HTTP",
     "tcp": "TCP",
-    "exec": "命令"
+    "exec": "命令",
+    "probeEndpoint": "探针地址",
+    "probeEndpointHttpPlaceholder": "例如：http://localhost:8080/health",
+    "probeEndpointTcpPlaceholder": "例如：localhost:6379",
+    "probeCommand": "探针命令",
+    "probeCommandPlaceholder": "例如：curl -sf http://localhost/health",
+    "probeTimeout": "超时（秒）",
+    "probeInterval": "间隔（秒）",
+    "probeConfig": "探针配置",
+    "logs": "日志",
+    "noLogs": "暂无日志",
+    "stream": "输出流",
+    "stdout": "标准输出",
+    "stderr": "标准错误",
+    "allStreams": "全部",
+    "reload": "热加载",
+    "reloadSuccess": "热加载指令已下发",
+    "refresh": "刷新",
+    "viewNodes": "查看节点",
+    "noNodes": "暂无关联节点",
+    "nodeStatus": "节点状态",
+    "processStatusCol": "进程状态",
+    "boundAt": "绑定时间"
   },
   "status": {
     "pending": "待连接",
