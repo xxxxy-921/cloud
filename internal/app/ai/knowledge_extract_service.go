@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/samber/do/v2"
 
 	"metis/internal/scheduler"
@@ -213,8 +214,8 @@ func (s *KnowledgeExtractService) TaskDefs() []scheduler.TaskDef {
 		{
 			Name:        "ai-knowledge-crawl",
 			Type:        scheduler.TypeScheduled,
-			CronExpr:    "0 3 * * *", // daily at 3 AM
-			Description: "Re-crawl URL sources for knowledge bases with crawl enabled",
+			CronExpr:    "*/5 * * * *", // every 5 minutes, checks per-source schedules
+			Description: "Check and re-crawl URL sources with crawl enabled",
 			Timeout:     600 * time.Second,
 			MaxRetries:  1,
 			Handler:     s.HandleCrawl,
@@ -222,60 +223,81 @@ func (s *KnowledgeExtractService) TaskDefs() []scheduler.TaskDef {
 	}
 }
 
-// HandleCrawl is the scheduled handler that re-crawls URL sources for crawl-enabled KBs.
+// HandleCrawl checks all crawl-enabled URL sources and re-crawls those whose cron schedule is due.
 func (s *KnowledgeExtractService) HandleCrawl(ctx context.Context, _ json.RawMessage) error {
-	kbs, err := s.kbRepo.ListCrawlEnabled()
+	sources, err := s.sourceRepo.FindCrawlEnabledSources()
 	if err != nil {
-		return fmt.Errorf("list crawl-enabled KBs: %w", err)
+		return fmt.Errorf("find crawl-enabled sources: %w", err)
 	}
 
-	for _, kb := range kbs {
-		urlSources, err := s.sourceRepo.FindURLSourcesByKbID(kb.ID)
-		if err != nil {
-			slog.Error("crawl: failed to find URL sources", "kb_id", kb.ID, "error", err)
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	now := time.Now()
+	affectedKBs := make(map[uint]bool)
+
+	for _, src := range sources {
+		if src.CrawlSchedule == "" {
 			continue
 		}
 
-		for _, src := range urlSources {
-			oldHash := src.ContentHash
+		sched, err := parser.Parse(src.CrawlSchedule)
+		if err != nil {
+			slog.Error("crawl: invalid cron schedule", "source_id", src.ID, "schedule", src.CrawlSchedule, "error", err)
+			continue
+		}
 
-			content, extractErr := s.extractURL(ctx, &src)
-			if extractErr != nil {
-				slog.Error("crawl: extract failed", "source_id", src.ID, "error", extractErr)
-				continue
-			}
+		// Determine if this source is due for crawl
+		lastCrawl := src.CreatedAt
+		if src.LastCrawledAt != nil {
+			lastCrawl = *src.LastCrawledAt
+		}
+		if sched.Next(lastCrawl).After(now) {
+			continue // not due yet
+		}
 
-			newHash := hashContent(content)
-			if newHash == oldHash {
-				continue // no change
-			}
+		slog.Info("crawl: re-crawling source", "source_id", src.ID, "url", src.SourceURL)
 
+		oldHash := src.ContentHash
+		content, extractErr := s.extractURL(ctx, &src)
+		if extractErr != nil {
+			slog.Error("crawl: extract failed", "source_id", src.ID, "error", extractErr)
+			crawlNow := time.Now()
+			src.LastCrawledAt = &crawlNow
+			s.sourceRepo.Update(&src)
+			continue
+		}
+
+		crawlNow := time.Now()
+		src.LastCrawledAt = &crawlNow
+
+		newHash := hashContent(content)
+		if newHash != oldHash {
 			src.Content = content
 			src.ContentHash = newHash
 			src.ExtractStatus = ExtractStatusCompleted
 			src.ErrorMessage = ""
-			if err := s.sourceRepo.Update(&src); err != nil {
-				slog.Error("crawl: update source failed", "source_id", src.ID, "error", err)
-				continue
-			}
-
-			slog.Info("crawl: content changed", "source_id", src.ID, "kb_id", kb.ID)
+			slog.Info("crawl: content changed", "source_id", src.ID, "kb_id", src.KbID)
+			affectedKBs[src.KbID] = true
 		}
 
-		s.kbRepo.UpdateCounts(kb.ID)
+		if err := s.sourceRepo.Update(&src); err != nil {
+			slog.Error("crawl: update source failed", "source_id", src.ID, "error", err)
+		}
+	}
 
-		// Update last crawled time
-		now := time.Now()
-		kb.LastCrawledAt = &now
-		s.kbRepo.Update(&kb)
-
-		// Auto-compile if enabled
+	// Update counts and trigger auto-compile for affected KBs
+	for kbID := range affectedKBs {
+		s.kbRepo.UpdateCounts(kbID)
+		kb, err := s.kbRepo.FindByID(kbID)
+		if err != nil {
+			continue
+		}
 		if kb.AutoCompile {
 			s.engine.Enqueue("ai-knowledge-compile", json.RawMessage(
-				fmt.Sprintf(`{"kbId":%d}`, kb.ID),
+				fmt.Sprintf(`{"kbId":%d}`, kbID),
 			))
 		}
 	}
+
 	return nil
 }
 

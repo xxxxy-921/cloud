@@ -30,12 +30,14 @@ func NewKnowledgeSourceHandler(i do.Injector) (*KnowledgeSourceHandler, error) {
 }
 
 type createSourceReq struct {
-	Title      string `json:"title"`
-	SourceURL  string `json:"sourceUrl"`
-	CrawlDepth int    `json:"crawlDepth"`
-	URLPattern string `json:"urlPattern"`
-	Content    string `json:"content"`
-	Format     string `json:"format"`
+	Title         string `json:"title"`
+	SourceURL     string `json:"sourceUrl"`
+	CrawlDepth    int    `json:"crawlDepth"`
+	URLPattern    string `json:"urlPattern"`
+	CrawlEnabled  bool   `json:"crawlEnabled"`
+	CrawlSchedule string `json:"crawlSchedule"`
+	Content       string `json:"content"`
+	Format        string `json:"format"`
 }
 
 func (h *KnowledgeSourceHandler) Create(c *gin.Context) {
@@ -122,6 +124,8 @@ func (h *KnowledgeSourceHandler) Create(c *gin.Context) {
 		// URL source
 		src.Format = SourceFormatURL
 		src.SourceURL = req.SourceURL
+		src.CrawlEnabled = req.CrawlEnabled
+		src.CrawlSchedule = req.CrawlSchedule
 		if src.Title == "" {
 			src.Title = req.SourceURL
 		}

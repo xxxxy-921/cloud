@@ -55,6 +55,11 @@ const (
 	KnowledgeLogLint      = "lint"
 )
 
+// Compile methods
+const (
+	CompileMethodKnowledgeGraph = "knowledge_graph"
+)
+
 // --- KnowledgeBase ---
 
 type KnowledgeBase struct {
@@ -62,12 +67,10 @@ type KnowledgeBase struct {
 	Name           string     `json:"name" gorm:"size:128;not null"`
 	Description    string     `json:"description" gorm:"type:text"`
 	CompileStatus  string     `json:"compileStatus" gorm:"size:16;not null;default:idle"`
+	CompileMethod  string     `json:"compileMethod" gorm:"size:64;not null;default:knowledge_graph"`
 	CompileModelID *uint      `json:"compileModelId" gorm:"index"`
 	CompiledAt     *time.Time `json:"compiledAt"`
 	AutoCompile    bool       `json:"autoCompile" gorm:"not null;default:false"`
-	CrawlEnabled   bool       `json:"crawlEnabled" gorm:"not null;default:false"`
-	CrawlSchedule  string     `json:"crawlSchedule" gorm:"size:64"`
-	LastCrawledAt  *time.Time `json:"lastCrawledAt"`
 	SourceCount    int        `json:"sourceCount" gorm:"not null;default:0"`
 	NodeCount      int        `json:"nodeCount" gorm:"not null;default:0"`
 }
@@ -79,12 +82,10 @@ type KnowledgeBaseResponse struct {
 	Name           string     `json:"name"`
 	Description    string     `json:"description"`
 	CompileStatus  string     `json:"compileStatus"`
+	CompileMethod  string     `json:"compileMethod"`
 	CompileModelID *uint      `json:"compileModelId"`
 	CompiledAt     *time.Time `json:"compiledAt"`
 	AutoCompile    bool       `json:"autoCompile"`
-	CrawlEnabled   bool       `json:"crawlEnabled"`
-	CrawlSchedule  string     `json:"crawlSchedule"`
-	LastCrawledAt  *time.Time `json:"lastCrawledAt"`
 	SourceCount    int        `json:"sourceCount"`
 	NodeCount      int        `json:"nodeCount"`
 	CreatedAt      time.Time  `json:"createdAt"`
@@ -97,12 +98,10 @@ func (kb *KnowledgeBase) ToResponse() KnowledgeBaseResponse {
 		Name:           kb.Name,
 		Description:    kb.Description,
 		CompileStatus:  kb.CompileStatus,
+		CompileMethod:  kb.CompileMethod,
 		CompileModelID: kb.CompileModelID,
 		CompiledAt:     kb.CompiledAt,
 		AutoCompile:    kb.AutoCompile,
-		CrawlEnabled:   kb.CrawlEnabled,
-		CrawlSchedule:  kb.CrawlSchedule,
-		LastCrawledAt:  kb.LastCrawledAt,
 		SourceCount:    kb.SourceCount,
 		NodeCount:      kb.NodeCount,
 		CreatedAt:      kb.CreatedAt,
@@ -121,8 +120,11 @@ type KnowledgeSource struct {
 	Format        string  `json:"format" gorm:"size:16;not null"`
 	SourceURL     string  `json:"sourceUrl" gorm:"size:1024"`
 	CrawlDepth    int     `json:"crawlDepth" gorm:"not null;default:0"`
-	URLPattern    string  `json:"urlPattern" gorm:"size:512"`
-	FileName      string  `json:"fileName" gorm:"size:256"`
+	URLPattern    string     `json:"urlPattern" gorm:"size:512"`
+	CrawlEnabled  bool       `json:"crawlEnabled" gorm:"not null;default:false"`
+	CrawlSchedule string     `json:"crawlSchedule" gorm:"size:64"`
+	LastCrawledAt *time.Time `json:"lastCrawledAt"`
+	FileName      string     `json:"fileName" gorm:"size:256"`
 	ByteSize      int64   `json:"byteSize"`
 	ExtractStatus string  `json:"extractStatus" gorm:"size:16;not null;default:pending"`
 	ContentHash   string  `json:"contentHash" gorm:"size:64"`
@@ -132,19 +134,22 @@ type KnowledgeSource struct {
 func (KnowledgeSource) TableName() string { return "ai_knowledge_sources" }
 
 type KnowledgeSourceResponse struct {
-	ID            uint      `json:"id"`
-	KbID          uint      `json:"kbId"`
-	ParentID      *uint     `json:"parentId"`
-	Title         string    `json:"title"`
-	Format        string    `json:"format"`
-	SourceURL     string    `json:"sourceUrl,omitempty"`
-	CrawlDepth    int       `json:"crawlDepth"`
-	FileName      string    `json:"fileName,omitempty"`
-	ByteSize      int64     `json:"byteSize"`
-	ExtractStatus string    `json:"extractStatus"`
-	ErrorMessage  string    `json:"errorMessage,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID            uint       `json:"id"`
+	KbID          uint       `json:"kbId"`
+	ParentID      *uint      `json:"parentId"`
+	Title         string     `json:"title"`
+	Format        string     `json:"format"`
+	SourceURL     string     `json:"sourceUrl,omitempty"`
+	CrawlDepth    int        `json:"crawlDepth"`
+	CrawlEnabled  bool       `json:"crawlEnabled"`
+	CrawlSchedule string     `json:"crawlSchedule,omitempty"`
+	LastCrawledAt *time.Time `json:"lastCrawledAt,omitempty"`
+	FileName      string     `json:"fileName,omitempty"`
+	ByteSize      int64      `json:"byteSize"`
+	ExtractStatus string     `json:"extractStatus"`
+	ErrorMessage  string     `json:"errorMessage,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
 }
 
 func (s *KnowledgeSource) ToResponse() KnowledgeSourceResponse {
@@ -156,6 +161,9 @@ func (s *KnowledgeSource) ToResponse() KnowledgeSourceResponse {
 		Format:        s.Format,
 		SourceURL:     s.SourceURL,
 		CrawlDepth:    s.CrawlDepth,
+		CrawlEnabled:  s.CrawlEnabled,
+		CrawlSchedule: s.CrawlSchedule,
+		LastCrawledAt: s.LastCrawledAt,
 		FileName:      s.FileName,
 		ByteSize:      s.ByteSize,
 		ExtractStatus: s.ExtractStatus,

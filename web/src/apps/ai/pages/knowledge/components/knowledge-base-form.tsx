@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 import { useForm } from "react-hook-form"
 import { useTranslation } from "react-i18next"
 import { z } from "zod"
@@ -35,10 +35,16 @@ import {
 } from "@/components/ui/select"
 import type { KnowledgeBaseItem } from "../index"
 
+interface ProviderOption {
+  id: number
+  name: string
+}
+
 interface ModelOption {
   id: number
   displayName: string
   modelId: string
+  providerId: number
 }
 
 function useKnowledgeBaseSchema() {
@@ -46,10 +52,10 @@ function useKnowledgeBaseSchema() {
   return z.object({
     name: z.string().min(1, t("validation.nameRequired")).max(128),
     description: z.string().max(512).optional(),
+    compileMethod: z.string(),
+    providerId: z.string().optional(),
     compileModelId: z.coerce.number().optional(),
     autoCompile: z.boolean(),
-    crawlEnabled: z.boolean(),
-    crawlSchedule: z.string().max(128).optional(),
   })
 }
 
@@ -67,54 +73,88 @@ export function KnowledgeBaseForm({ open, onOpenChange, knowledgeBase }: Knowled
   const isEditing = knowledgeBase !== null
   const schema = useKnowledgeBaseSchema()
 
-  const { data: modelsData } = useQuery({
-    queryKey: ["ai-models-llm"],
-    queryFn: () => api.get<PaginatedResponse<ModelOption>>("/api/v1/ai/models?type=llm&pageSize=100"),
+  // Fetch providers
+  const { data: providersData } = useQuery({
+    queryKey: ["ai-providers"],
+    queryFn: () => api.get<PaginatedResponse<ProviderOption>>("/api/v1/ai/providers?pageSize=100"),
     enabled: open,
   })
-  const llmModels = modelsData?.items ?? []
+  const providers = providersData?.items ?? []
+
+  // For edit mode: resolve the provider from the selected model
+  const { data: editModelDetail } = useQuery({
+    queryKey: ["ai-model-detail", knowledgeBase?.compileModelId],
+    queryFn: () =>
+      api.get<ModelOption>(`/api/v1/ai/models/${knowledgeBase!.compileModelId}`),
+    enabled: open && isEditing && knowledgeBase?.compileModelId != null,
+  })
+
+  // Derive the initial provider ID for edit mode
+  const editProviderId = editModelDetail?.providerId ? String(editModelDetail.providerId) : ""
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       name: "",
       description: "",
+      compileMethod: "knowledge_graph",
+      providerId: "",
       compileModelId: undefined,
       autoCompile: false,
-      crawlEnabled: false,
-      crawlSchedule: "",
     },
   })
 
-  const watchCrawlEnabled = form.watch("crawlEnabled")
+  const selectedProviderId = form.watch("providerId") ?? ""
+
+  // Fetch models filtered by selected provider
+  const { data: modelsData } = useQuery({
+    queryKey: ["ai-models-llm", selectedProviderId],
+    queryFn: () =>
+      api.get<PaginatedResponse<ModelOption>>(
+        `/api/v1/ai/models?type=llm&providerId=${selectedProviderId}&pageSize=100`,
+      ),
+    enabled: open && selectedProviderId !== "",
+  })
+  const llmModels = modelsData?.items ?? []
+
+  // Compute default form values based on mode
+  const resetValues = useMemo(() => {
+    if (knowledgeBase) {
+      return {
+        name: knowledgeBase.name,
+        description: knowledgeBase.description ?? "",
+        compileMethod: knowledgeBase.compileMethod || "knowledge_graph",
+        providerId: editProviderId,
+        compileModelId: knowledgeBase.compileModelId || undefined,
+        autoCompile: knowledgeBase.autoCompile,
+      }
+    }
+    return {
+      name: "",
+      description: "",
+      compileMethod: "knowledge_graph",
+      providerId: "",
+      compileModelId: undefined as number | undefined,
+      autoCompile: false,
+    }
+  }, [knowledgeBase, editProviderId])
 
   useEffect(() => {
     if (open) {
-      if (knowledgeBase) {
-        form.reset({
-          name: knowledgeBase.name,
-          description: knowledgeBase.description ?? "",
-          compileModelId: knowledgeBase.compileModelId || undefined,
-          autoCompile: knowledgeBase.autoCompile,
-          crawlEnabled: knowledgeBase.crawlEnabled,
-          crawlSchedule: knowledgeBase.crawlSchedule ?? "",
-        })
-      } else {
-        form.reset({
-          name: "",
-          description: "",
-          compileModelId: undefined,
-          autoCompile: false,
-          crawlEnabled: false,
-          crawlSchedule: "",
-        })
-      }
+      form.reset(resetValues)
     }
-  }, [open, knowledgeBase, form])
+  }, [open, resetValues, form])
+
+  function handleProviderChange(value: string) {
+    form.setValue("providerId", value)
+    form.setValue("compileModelId", undefined)
+  }
 
   const createMutation = useMutation({
-    mutationFn: (values: FormValues) =>
-      api.post("/api/v1/ai/knowledge-bases", values),
+    mutationFn: (values: FormValues) => {
+      const { name, description, compileMethod, compileModelId, autoCompile } = values
+      return api.post("/api/v1/ai/knowledge-bases", { name, description, compileMethod, compileModelId, autoCompile })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ai-knowledge-bases"] })
       onOpenChange(false)
@@ -124,8 +164,10 @@ export function KnowledgeBaseForm({ open, onOpenChange, knowledgeBase }: Knowled
   })
 
   const updateMutation = useMutation({
-    mutationFn: (values: FormValues) =>
-      api.put(`/api/v1/ai/knowledge-bases/${knowledgeBase!.id}`, values),
+    mutationFn: (values: FormValues) => {
+      const { name, description, compileMethod, compileModelId, autoCompile } = values
+      return api.put(`/api/v1/ai/knowledge-bases/${knowledgeBase!.id}`, { name, description, compileMethod, compileModelId, autoCompile })
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ai-knowledge-bases"] })
       onOpenChange(false)
@@ -188,6 +230,54 @@ export function KnowledgeBaseForm({ open, onOpenChange, knowledgeBase }: Knowled
                 </FormItem>
               )}
             />
+            {/* Compile Method */}
+            <FormField
+              control={form.control}
+              name="compileMethod"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("ai:knowledge.compileMethod")}</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder={t("ai:knowledge.selectCompileMethod")} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="knowledge_graph">
+                        {t("ai:knowledge.compileMethods.knowledge_graph")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            {/* Provider (cascade step 1) */}
+            <FormField
+              control={form.control}
+              name="providerId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("ai:knowledge.compileProvider")}</FormLabel>
+                  <Select value={field.value ?? ""} onValueChange={handleProviderChange}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder={t("ai:knowledge.selectCompileProvider")} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {providers.map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormItem>
+              )}
+            />
+            {/* Model (cascade step 2) */}
             <FormField
               control={form.control}
               name="compileModelId"
@@ -197,6 +287,7 @@ export function KnowledgeBaseForm({ open, onOpenChange, knowledgeBase }: Knowled
                   <Select
                     value={field.value ? String(field.value) : ""}
                     onValueChange={(v) => field.onChange(v ? Number(v) : undefined)}
+                    disabled={selectedProviderId === ""}
                   >
                     <FormControl>
                       <SelectTrigger>
@@ -232,38 +323,6 @@ export function KnowledgeBaseForm({ open, onOpenChange, knowledgeBase }: Knowled
                 </FormItem>
               )}
             />
-            <FormField
-              control={form.control}
-              name="crawlEnabled"
-              render={({ field }) => (
-                <FormItem className="flex items-center justify-between rounded-lg border p-3">
-                  <div className="space-y-0.5">
-                    <FormLabel>{t("ai:knowledge.crawlEnabled")}</FormLabel>
-                  </div>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </FormItem>
-              )}
-            />
-            {watchCrawlEnabled && (
-              <FormField
-                control={form.control}
-                name="crawlSchedule"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("ai:knowledge.crawlSchedule")}</FormLabel>
-                    <FormControl>
-                      <Input placeholder={t("ai:knowledge.crawlSchedulePlaceholder")} {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            )}
             <SheetFooter>
               <Button type="submit" size="sm" disabled={isPending}>
                 {isPending ? t("common:saving") : isEditing ? t("common:save") : t("common:create")}

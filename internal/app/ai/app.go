@@ -26,6 +26,9 @@ func (a *AIApp) Models() []any {
 		&Provider{}, &AIModel{}, &AILog{},
 		&KnowledgeBase{}, &KnowledgeSource{}, &KnowledgeNode{},
 		&KnowledgeEdge{}, &KnowledgeLog{},
+		// Tool registry
+		&Tool{}, &MCPServer{}, &Skill{},
+		&AgentTool{}, &AgentMCPServer{}, &AgentSkill{},
 	}
 }
 
@@ -55,6 +58,21 @@ func (a *AIApp) Providers(i do.Injector) {
 	do.Provide(i, NewKnowledgeExtractService)
 	do.Provide(i, NewKnowledgeCompileService)
 	do.Provide(i, NewKnowledgeQueryHandler)
+	// Tool registry
+	do.Provide(i, NewToolRepo)
+	do.Provide(i, NewToolService)
+	do.Provide(i, NewToolHandler)
+	do.Provide(i, NewMCPServerRepo)
+	do.Provide(i, NewMCPServerService)
+	do.Provide(i, NewMCPServerHandler)
+	do.Provide(i, NewSkillRepo)
+	do.Provide(i, NewSkillService)
+	do.Provide(i, NewSkillHandler)
+	// Tool bindings & assembly
+	do.Provide(i, NewAgentToolRepo)
+	do.Provide(i, NewAgentMCPServerRepo)
+	do.Provide(i, NewAgentSkillRepo)
+	do.Provide(i, NewToolAssemblyService)
 }
 
 func (a *AIApp) Routes(api *gin.RouterGroup) {
@@ -99,12 +117,44 @@ func (a *AIApp) Routes(api *gin.RouterGroup) {
 		kbs.GET("/:id/sources", sourceH.List)
 		kbs.GET("/:id/sources/:sid", sourceH.Get)
 		kbs.DELETE("/:id/sources/:sid", sourceH.Delete)
-		// Nodes
+		// Nodes & Graph
+		kbs.GET("/:id/graph", nodeH.GetFullGraph)
 		kbs.GET("/:id/nodes", nodeH.List)
 		kbs.GET("/:id/nodes/:nid", nodeH.Get)
 		kbs.GET("/:id/nodes/:nid/graph", nodeH.GetGraph)
 		// Logs
 		kbs.GET("/:id/logs", nodeH.ListLogs)
+	}
+
+	// Tool registry
+	toolH := do.MustInvoke[*ToolHandler](a.injector)
+	tools := api.Group("/ai/tools")
+	{
+		tools.GET("", toolH.List)
+		tools.PUT("/:id", toolH.Update)
+	}
+
+	mcpH := do.MustInvoke[*MCPServerHandler](a.injector)
+	mcpServers := api.Group("/ai/mcp-servers")
+	{
+		mcpServers.POST("", mcpH.Create)
+		mcpServers.GET("", mcpH.List)
+		mcpServers.GET("/:id", mcpH.Get)
+		mcpServers.PUT("/:id", mcpH.Update)
+		mcpServers.DELETE("/:id", mcpH.Delete)
+		mcpServers.POST("/:id/test", mcpH.TestConnection)
+	}
+
+	skillH := do.MustInvoke[*SkillHandler](a.injector)
+	skills := api.Group("/ai/skills")
+	{
+		skills.GET("", skillH.List)
+		skills.GET("/:id", skillH.Get)
+		skills.POST("/import-github", skillH.ImportGitHub)
+		skills.POST("/upload", skillH.Upload)
+		skills.PUT("/:id", skillH.Update)
+		skills.PATCH("/:id/active", skillH.ToggleActive)
+		skills.DELETE("/:id", skillH.Delete)
 	}
 
 	// Agent knowledge query API (Sidecar token auth, bypasses JWT+Casbin)
@@ -116,6 +166,12 @@ func (a *AIApp) Routes(api *gin.RouterGroup) {
 		knowledge.GET("/search", queryH.Search)
 		knowledge.GET("/nodes/:id", queryH.GetNode)
 		knowledge.GET("/nodes/:id/graph", queryH.GetNodeGraph)
+	}
+
+	// Internal API for Agent to download skill packages (Node token auth)
+	internal := r.Group("/api/v1/ai/internal", node.NodeTokenMiddleware(nodeRepo))
+	{
+		internal.GET("/skills/:id/package", skillH.Package)
 	}
 }
 

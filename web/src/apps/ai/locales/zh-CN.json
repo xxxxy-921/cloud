@@ -105,7 +105,121 @@
     "displayNameRequired": "显示名称不能为空",
     "providerRequired": "请选择供应商",
     "urlRequired": "URL 不能为空",
-    "urlInvalid": "请输入有效的 URL"
+    "urlInvalid": "请输入有效的 URL",
+    "commandRequired": "命令不能为空"
+  },
+  "tools": {
+    "title": "工具",
+    "tabs": {
+      "builtinTools": "内建工具",
+      "mcpServers": "MCP 服务",
+      "skills": "技能包"
+    },
+    "builtin": {
+      "empty": "暂无内建工具",
+      "enableSuccess": "工具已启用",
+      "disableSuccess": "工具已禁用"
+    },
+    "toolkits": {
+      "knowledge": {
+        "name": "知识库",
+        "description": "搜索和读取知识库文档，为 Agent 提供上下文信息。"
+      },
+      "network": {
+        "name": "网络请求",
+        "description": "向外部 API 和服务发起 HTTP 请求。"
+      },
+      "code": {
+        "name": "代码执行",
+        "description": "在沙箱环境中执行 Python 和 Bash 脚本。"
+      }
+    },
+    "mcp": {
+      "create": "新增 MCP 服务",
+      "edit": "编辑 MCP 服务",
+      "searchPlaceholder": "搜索 MCP 服务名称",
+      "name": "服务名称",
+      "namePlaceholder": "例如：My MCP Server",
+      "description": "描述",
+      "descriptionPlaceholder": "MCP 服务的简要描述",
+      "transport": "传输方式",
+      "transportTypes": {
+        "sse": "SSE（远程）",
+        "stdio": "STDIO（本地）"
+      },
+      "url": "SSE 端点 URL",
+      "urlPlaceholder": "例如：https://mcp.example.com/sse",
+      "command": "命令",
+      "commandPlaceholder": "例如：npx, python",
+      "args": "参数",
+      "argsPlaceholder": "每行一个参数",
+      "env": "环境变量",
+      "envPlaceholder": "KEY=VALUE，每行一条",
+      "authType": "认证方式",
+      "authTypes": {
+        "none": "无",
+        "api_key": "API Key",
+        "bearer": "Bearer Token",
+        "oauth": "OAuth",
+        "custom_header": "自定义 Header"
+      },
+      "authConfig": "认证配置",
+      "authConfigPlaceholder": "输入认证配置（JSON）",
+      "authConfigHint": "留空则不修改",
+      "testConnection": "测试连接",
+      "testing": "测试中...",
+      "testSuccess": "连接测试成功",
+      "testFailed": "连接测试失败：{{error}}",
+      "testStdioHint": "STDIO 服务只能在 Agent 节点上测试",
+      "empty": "暂无 MCP 服务",
+      "emptyHint": "点击「新增 MCP 服务」添加第一个 MCP 服务",
+      "createSuccess": "MCP 服务创建成功",
+      "updateSuccess": "MCP 服务更新成功",
+      "deleteSuccess": "MCP 服务已删除",
+      "deleteTitle": "删除 MCP 服务",
+      "deleteDesc": "确定要删除 MCP 服务「{{name}}」吗？",
+      "confirmDelete": "确定删除"
+    },
+    "skills": {
+      "importGitHub": "从 GitHub 导入",
+      "upload": "上传技能包",
+      "searchPlaceholder": "搜索技能名称",
+      "name": "技能名称",
+      "displayName": "显示名称",
+      "description": "描述",
+      "sourceType": "来源",
+      "sourceTypes": {
+        "github": "GitHub",
+        "upload": "上传"
+      },
+      "toolCount": "工具数",
+      "hasInstructions": "指令",
+      "yes": "有",
+      "no": "无",
+      "authType": "认证方式",
+      "authConfig": "认证配置",
+      "authConfigPlaceholder": "输入认证配置（JSON）",
+      "authConfigHint": "留空则不修改",
+      "instructions": "指令内容",
+      "toolsSchema": "工具定义",
+      "manifest": "清单",
+      "detail": "技能详情",
+      "editAuth": "编辑认证",
+      "githubUrl": "GitHub URL",
+      "githubUrlPlaceholder": "例如：https://github.com/user/repo",
+      "importSuccess": "技能已从 GitHub 导入",
+      "uploadSuccess": "技能包上传成功",
+      "updateSuccess": "技能更新成功",
+      "deleteSuccess": "技能已删除",
+      "deleteTitle": "删除技能",
+      "deleteDesc": "确定要删除技能「{{name}}」吗？",
+      "confirmDelete": "确定删除",
+      "empty": "暂无技能包",
+      "emptyHint": "从 GitHub 导入或上传技能包开始",
+      "dropHere": "拖拽 .tar.gz 文件到这里，或点击选择",
+      "uploading": "上传中...",
+      "uploadBtn": "上传"
+    }
   },
   "knowledge": {
     "title": "知识库管理",
@@ -120,10 +234,14 @@
     "nodeCount": "节点数",
     "compileModel": "编译模型",
     "selectCompileModel": "选择 LLM 模型",
+    "compileMethod": "编译方式",
+    "selectCompileMethod": "选择编译方式",
+    "compileProvider": "供应商",
+    "selectCompileProvider": "选择供应商",
+    "compileMethods": {
+      "knowledge_graph": "LLM 知识提炼"
+    },
     "autoCompile": "自动编译",
-    "crawlEnabled": "启用爬取",
-    "crawlSchedule": "爬取计划",
-    "crawlSchedulePlaceholder": "Cron 表达式，例如：0 2 * * *",
     "compile": "编译",
     "recompile": "重新编译",
     "compileStarted": "编译已开始",
@@ -170,7 +288,10 @@
         "2": "当前页面 + 两层链接"
       },
       "urlPattern": "URL 过滤规则",
-      "urlPatternPlaceholder": "正则表达式，例如：/docs/.*"
+      "urlPatternPlaceholder": "正则表达式，例如：/docs/.*",
+      "crawlEnabled": "启用定时爬取",
+      "crawlSchedule": "爬取计划",
+      "crawlSchedulePlaceholder": "Cron 表达式，例如：0 2 * * *"
     },
     "extractStatus": {
       "pending": "待处理",
@@ -187,6 +308,22 @@
       "empty": "暂无节点（尚未编译）",
       "loadingContent": "加载中...",
       "noContent": "（无内容）"
+    },
+    "graph": {
+      "viewGraph": "图谱视图",
+      "viewTable": "表格视图",
+      "emptyGraph": "暂无图谱数据（尚未编译）",
+      "clickNodeHint": "点击节点查看详情",
+      "nodeTypes": {
+        "concept": "概念",
+        "index": "索引"
+      },
+      "relations": {
+        "related": "关联",
+        "contradicts": "矛盾",
+        "extends": "扩展",
+        "part_of": "从属"
+      }
     },
     "logs": {
       "action": "操作",

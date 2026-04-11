@@ -105,7 +105,121 @@
     "displayNameRequired": "Display name is required",
     "providerRequired": "Please select a provider",
     "urlRequired": "URL is required",
-    "urlInvalid": "Please enter a valid URL"
+    "urlInvalid": "Please enter a valid URL",
+    "commandRequired": "Command is required"
+  },
+  "tools": {
+    "title": "Tools",
+    "tabs": {
+      "builtinTools": "Built-in Tools",
+      "mcpServers": "MCP Servers",
+      "skills": "Skill Packs"
+    },
+    "builtin": {
+      "empty": "No built-in tools",
+      "enableSuccess": "Tool enabled",
+      "disableSuccess": "Tool disabled"
+    },
+    "toolkits": {
+      "knowledge": {
+        "name": "Knowledge Base",
+        "description": "Search and read documents from knowledge bases to provide contextual information."
+      },
+      "network": {
+        "name": "Network",
+        "description": "Make HTTP requests to external APIs and services."
+      },
+      "code": {
+        "name": "Code Execution",
+        "description": "Execute Python and Bash scripts in a sandboxed environment."
+      }
+    },
+    "mcp": {
+      "create": "New MCP Server",
+      "edit": "Edit MCP Server",
+      "searchPlaceholder": "Search MCP server name",
+      "name": "Server Name",
+      "namePlaceholder": "e.g. My MCP Server",
+      "description": "Description",
+      "descriptionPlaceholder": "Brief description of this MCP server",
+      "transport": "Transport",
+      "transportTypes": {
+        "sse": "SSE (Remote)",
+        "stdio": "STDIO (Local)"
+      },
+      "url": "SSE Endpoint URL",
+      "urlPlaceholder": "e.g. https://mcp.example.com/sse",
+      "command": "Command",
+      "commandPlaceholder": "e.g. npx, python",
+      "args": "Arguments",
+      "argsPlaceholder": "One argument per line",
+      "env": "Environment Variables",
+      "envPlaceholder": "KEY=VALUE, one per line",
+      "authType": "Auth Type",
+      "authTypes": {
+        "none": "None",
+        "api_key": "API Key",
+        "bearer": "Bearer Token",
+        "oauth": "OAuth",
+        "custom_header": "Custom Header"
+      },
+      "authConfig": "Auth Config",
+      "authConfigPlaceholder": "Enter auth configuration (JSON)",
+      "authConfigHint": "Leave empty to keep unchanged",
+      "testConnection": "Test",
+      "testing": "Testing...",
+      "testSuccess": "Connection test passed",
+      "testFailed": "Connection test failed: {{error}}",
+      "testStdioHint": "STDIO servers can only be tested from Agent nodes",
+      "empty": "No MCP servers",
+      "emptyHint": "Click \"New MCP Server\" to add your first MCP server",
+      "createSuccess": "MCP server created",
+      "updateSuccess": "MCP server updated",
+      "deleteSuccess": "MCP server deleted",
+      "deleteTitle": "Delete MCP Server",
+      "deleteDesc": "Are you sure you want to delete MCP server \"{{name}}\"?",
+      "confirmDelete": "Delete"
+    },
+    "skills": {
+      "importGitHub": "Import from GitHub",
+      "upload": "Upload Package",
+      "searchPlaceholder": "Search skill name",
+      "name": "Skill Name",
+      "displayName": "Display Name",
+      "description": "Description",
+      "sourceType": "Source",
+      "sourceTypes": {
+        "github": "GitHub",
+        "upload": "Upload"
+      },
+      "toolCount": "Tools",
+      "hasInstructions": "Instructions",
+      "yes": "Yes",
+      "no": "No",
+      "authType": "Auth Type",
+      "authConfig": "Auth Config",
+      "authConfigPlaceholder": "Enter auth configuration (JSON)",
+      "authConfigHint": "Leave empty to keep unchanged",
+      "instructions": "Instructions",
+      "toolsSchema": "Tool Definitions",
+      "manifest": "Manifest",
+      "detail": "Skill Detail",
+      "editAuth": "Edit Auth",
+      "githubUrl": "GitHub URL",
+      "githubUrlPlaceholder": "e.g. https://github.com/user/repo",
+      "importSuccess": "Skill imported from GitHub",
+      "uploadSuccess": "Skill package uploaded",
+      "updateSuccess": "Skill updated",
+      "deleteSuccess": "Skill deleted",
+      "deleteTitle": "Delete Skill",
+      "deleteDesc": "Are you sure you want to delete skill \"{{name}}\"?",
+      "confirmDelete": "Delete",
+      "empty": "No skill packs",
+      "emptyHint": "Import from GitHub or upload a package to get started",
+      "dropHere": "Drag & drop a .tar.gz file here, or click to select",
+      "uploading": "Uploading...",
+      "uploadBtn": "Upload"
+    }
   },
   "knowledge": {
     "title": "Knowledge Bases",
@@ -120,10 +234,14 @@
     "nodeCount": "Nodes",
     "compileModel": "Compile Model",
     "selectCompileModel": "Select LLM model",
+    "compileMethod": "Compile Method",
+    "selectCompileMethod": "Select compile method",
+    "compileProvider": "Provider",
+    "selectCompileProvider": "Select provider",
+    "compileMethods": {
+      "knowledge_graph": "LLM Knowledge Distillation"
+    },
     "autoCompile": "Auto Compile",
-    "crawlEnabled": "Enable Crawling",
-    "crawlSchedule": "Crawl Schedule",
-    "crawlSchedulePlaceholder": "Cron expression, e.g. 0 2 * * *",
     "compile": "Compile",
     "recompile": "Recompile",
     "compileStarted": "Compilation started",
@@ -170,7 +288,10 @@
         "2": "Current page + 2 levels deep"
       },
       "urlPattern": "URL Filter Pattern",
-      "urlPatternPlaceholder": "Regex pattern, e.g. /docs/.*"
+      "urlPatternPlaceholder": "Regex pattern, e.g. /docs/.*",
+      "crawlEnabled": "Enable Scheduled Crawling",
+      "crawlSchedule": "Crawl Schedule",
+      "crawlSchedulePlaceholder": "Cron expression, e.g. 0 2 * * *"
     },
     "extractStatus": {
       "pending": "Pending",
@@ -187,6 +308,22 @@
       "empty": "No nodes (not compiled yet)",
       "loadingContent": "Loading...",
       "noContent": "(no content)"
+    },
+    "graph": {
+      "viewGraph": "Graph View",
+      "viewTable": "Table View",
+      "emptyGraph": "No graph data (not compiled yet)",
+      "clickNodeHint": "Click a node to see details",
+      "nodeTypes": {
+        "concept": "Concept",
+        "index": "Index"
+      },
+      "relations": {
+        "related": "Related",
+        "contradicts": "Contradicts",
+        "extends": "Extends",
+        "part_of": "Part Of"
+      }
     },
     "logs": {
       "action": "Action",

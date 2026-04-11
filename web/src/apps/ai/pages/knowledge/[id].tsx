@@ -1,11 +1,12 @@
-import { useState } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import { useParams, Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft, RefreshCw, BookOpen, ChevronDown, ChevronRight, FileText, Globe,
-  Plus, History,
+  Plus, History, Network, TableProperties, Maximize2,
 } from "lucide-react"
+import ForceGraph2D from "react-force-graph-2d"
 import { api } from "@/lib/api"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -32,10 +33,9 @@ interface KnowledgeBaseDetail {
   sourceCount: number
   nodeCount: number
   compileStatus: string
+  compileMethod: string
   compileModelId: number
   autoCompile: boolean
-  crawlEnabled: boolean
-  crawlSchedule: string
   createdAt: string
   updatedAt: string
 }
@@ -54,9 +54,23 @@ interface NodeItem {
   id: number
   title: string
   summary: string
+  nodeType: string
   hasContent: boolean
   edgeCount: number
   content?: string
+}
+
+interface EdgeItem {
+  id: number
+  fromNodeId: number
+  toNodeId: number
+  relation: string
+  description?: string
+}
+
+interface GraphResponse {
+  nodes: NodeItem[]
+  edges: EdgeItem[]
 }
 
 type CompileStatus = "idle" | "compiling" | "completed" | "error"
@@ -79,14 +93,14 @@ function CompileStatusBadge({ status }: { status: string }) {
 
   if (s === "compiling") {
     return (
-      <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">
+      <Badge variant="outline" className="border-transparent bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">
         {t("knowledge.compileStatus.compiling")}
       </Badge>
     )
   }
   if (s === "completed") {
     return (
-      <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+      <Badge variant="outline" className="border-transparent bg-green-500/20 text-green-700 dark:bg-green-500/20 dark:text-green-400">
         {t("knowledge.compileStatus.completed")}
       </Badge>
     )
@@ -109,7 +123,7 @@ function ExtractStatusBadge({ status }: { status: string }) {
   const { t } = useTranslation("ai")
   if (status === "completed") {
     return (
-      <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+      <Badge variant="outline" className="border-transparent bg-green-500/20 text-green-700 dark:bg-green-500/20 dark:text-green-400">
         {t("knowledge.extractStatus.completed")}
       </Badge>
     )
@@ -123,7 +137,7 @@ function ExtractStatusBadge({ status }: { status: string }) {
   }
   if (status === "processing") {
     return (
-      <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">
+      <Badge variant="outline" className="border-transparent bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">
         {t("knowledge.extractStatus.processing")}
       </Badge>
     )
@@ -269,6 +283,219 @@ function SourcesTab({ kbId, canCreate }: { kbId: number; canCreate: boolean }) {
 
 // ─── Knowledge Graph Tab ──────────────────────────────────────────────────────
 
+const RELATION_COLORS: Record<string, string> = {
+  related: "#94a3b8",
+  contradicts: "#ef4444",
+  extends: "#22c55e",
+  part_of: "#3b82f6",
+}
+
+const NODE_COLORS: Record<string, string> = {
+  concept: "#3b82f6",
+  index: "#8b5cf6",
+}
+
+interface GraphNode {
+  id: number
+  name: string
+  summary: string
+  nodeType: string
+  edgeCount: number
+  color: string
+  val: number
+}
+
+interface GraphLink {
+  source: number
+  target: number
+  relation: string
+  color: string
+}
+
+function KnowledgeGraphView({ kbId }: { kbId: number }) {
+  const { t } = useTranslation(["ai", "common"])
+  const containerRef = useRef<HTMLDivElement>(null)
+  const graphRef = useRef<{ zoomToFit: (ms?: number, px?: number) => void; zoom: (k: number, ms?: number) => void }>(null)
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [containerSize, setContainerSize] = useState<{ w: number; h: number } | null>(null)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["ai-kb-graph", kbId],
+    queryFn: () => api.get<GraphResponse>(`/api/v1/ai/knowledge-bases/${kbId}/graph`),
+  })
+
+  // ResizeObserver — container always mounted so ref is valid on first effect run
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect
+        if (width > 0 && height > 0) {
+          setContainerSize({ w: Math.round(width), h: Math.round(height) })
+        }
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  const graphData = (() => {
+    if (!data) return { nodes: [] as GraphNode[], links: [] as GraphLink[] }
+    const nodes: GraphNode[] = data.nodes.map((n) => ({
+      id: n.id,
+      name: n.title,
+      summary: n.summary,
+      nodeType: n.nodeType,
+      edgeCount: n.edgeCount,
+      color: NODE_COLORS[n.nodeType] ?? NODE_COLORS.concept,
+      val: 1 + Math.min(n.edgeCount, 10) * 0.3,
+    }))
+    const nodeIds = new Set(nodes.map((n) => n.id))
+    const links: GraphLink[] = data.edges
+      .filter((e) => nodeIds.has(e.fromNodeId) && nodeIds.has(e.toNodeId))
+      .map((e) => ({
+        source: e.fromNodeId,
+        target: e.toNodeId,
+        relation: e.relation,
+        color: RELATION_COLORS[e.relation] ?? RELATION_COLORS.related,
+      }))
+    return { nodes, links }
+  })()
+
+  const handleNodeClick = useCallback((node: GraphNode) => {
+    setSelectedNode((prev) => (prev?.id === node.id ? null : node))
+  }, [])
+
+  const nodeCanvasObject = useCallback(
+    (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const label = node.name
+      const fontSize = Math.max(12 / globalScale, 2)
+      ctx.font = `${fontSize}px sans-serif`
+      const isSelected = selectedNode?.id === node.id
+
+      // Node circle
+      const r = Math.sqrt(node.val) * 4
+      ctx.beginPath()
+      ctx.arc(node.x ?? 0, node.y ?? 0, r, 0, 2 * Math.PI)
+      ctx.fillStyle = isSelected ? "#f59e0b" : node.color
+      ctx.fill()
+      if (isSelected) {
+        ctx.strokeStyle = "#f59e0b"
+        ctx.lineWidth = 2 / globalScale
+        ctx.stroke()
+      }
+
+      // Label
+      if (globalScale > 0.6) {
+        ctx.textAlign = "center"
+        ctx.textBaseline = "top"
+        ctx.fillStyle = isSelected ? "#f59e0b" : "#374151"
+        ctx.fillText(label, node.x ?? 0, (node.y ?? 0) + r + 2)
+      }
+    },
+    [selectedNode],
+  )
+
+  const nodePointerAreaPaint = useCallback(
+    (node: GraphNode, color: string, ctx: CanvasRenderingContext2D) => {
+      const r = Math.sqrt(node.val) * 4 + 2
+      ctx.beginPath()
+      ctx.arc(node.x ?? 0, node.y ?? 0, r, 0, 2 * Math.PI)
+      ctx.fillStyle = color
+      ctx.fill()
+    },
+    [],
+  )
+
+  const handleZoomIn = useCallback(() => {
+    graphRef.current?.zoom(1.5, 300)
+  }, [])
+
+  const handleZoomOut = useCallback(() => {
+    graphRef.current?.zoom(0.67, 300)
+  }, [])
+
+  const handleZoomFit = useCallback(() => {
+    graphRef.current?.zoomToFit(400, 40)
+  }, [])
+
+  const showGraph = !isLoading && graphData.nodes.length > 0 && containerSize
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative rounded-lg border bg-card overflow-hidden"
+      style={{ height: "calc(100vh - 280px)", minHeight: 400 }}
+    >
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+          {t("common:loading")}
+        </div>
+      )}
+      {!isLoading && graphData.nodes.length === 0 && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+          <BookOpen className="h-10 w-10 stroke-1" />
+          <p className="text-sm font-medium">{t("ai:knowledge.graph.emptyGraph")}</p>
+        </div>
+      )}
+      {showGraph && (
+        <ForceGraph2D
+          ref={graphRef}
+          graphData={graphData}
+          width={containerSize.w}
+          height={containerSize.h}
+          nodeId="id"
+          linkSource="source"
+          linkTarget="target"
+          linkColor={(link: GraphLink) => link.color}
+          linkWidth={1.5}
+          linkDirectionalArrowLength={4}
+          linkDirectionalArrowRelPos={1}
+          linkLabel={(link: GraphLink) => link.relation}
+          nodeCanvasObject={nodeCanvasObject}
+          nodePointerAreaPaint={nodePointerAreaPaint}
+          onNodeClick={handleNodeClick}
+          cooldownTicks={100}
+          enableZoomInteraction={true}
+          enablePanInteraction={true}
+        />
+      )}
+      {/* Zoom controls */}
+      {showGraph && (
+        <div className="absolute bottom-3 right-3 flex flex-col gap-1">
+          <Button variant="outline" size="icon" className="h-7 w-7 bg-card/90 backdrop-blur" onClick={handleZoomIn}>
+            <span className="text-sm font-bold">+</span>
+          </Button>
+          <Button variant="outline" size="icon" className="h-7 w-7 bg-card/90 backdrop-blur" onClick={handleZoomOut}>
+            <span className="text-sm font-bold">−</span>
+          </Button>
+          <Button variant="outline" size="icon" className="h-7 w-7 bg-card/90 backdrop-blur" onClick={handleZoomFit} title="Fit">
+            <Maximize2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
+      {/* Node detail panel */}
+      {selectedNode && (
+        <div className="absolute top-3 right-3 w-72 rounded-lg border bg-card/95 backdrop-blur p-3 shadow-lg text-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <h4 className="font-semibold truncate flex-1">{selectedNode.name}</h4>
+            <Badge variant="outline" className="border-transparent text-xs" style={{ backgroundColor: selectedNode.color + "20", color: selectedNode.color }}>
+              {t(`ai:knowledge.graph.nodeTypes.${selectedNode.nodeType}`)}
+            </Badge>
+          </div>
+          <p className="text-muted-foreground text-xs leading-relaxed line-clamp-4">
+            {selectedNode.summary || "—"}
+          </p>
+          <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+            <span>{t("ai:knowledge.nodes.edgeCount")}: {selectedNode.edgeCount}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function NodeRow({ node, kbId }: { node: NodeItem; kbId: number }) {
   const { t } = useTranslation("ai")
   const [expanded, setExpanded] = useState(false)
@@ -309,7 +536,7 @@ function NodeRow({ node, kbId }: { node: NodeItem; kbId: number }) {
         <TableCell className="text-sm text-center">{node.edgeCount}</TableCell>
         <TableCell>
           {node.hasContent && (
-            <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+            <Badge variant="outline" className="border-transparent bg-green-500/20 text-green-700 dark:bg-green-500/20 dark:text-green-400">
               {t("knowledge.nodes.hasContent")}
             </Badge>
           )}
@@ -333,7 +560,7 @@ function NodeRow({ node, kbId }: { node: NodeItem; kbId: number }) {
   )
 }
 
-function KnowledgeGraphTab({ kbId }: { kbId: number }) {
+function NodeTableView({ kbId }: { kbId: number }) {
   const { t } = useTranslation(["ai", "common"])
 
   const { data, isLoading } = useQuery({
@@ -378,6 +605,39 @@ function KnowledgeGraphTab({ kbId }: { kbId: number }) {
         </TableBody>
       </Table>
     </DataTableCard>
+  )
+}
+
+function KnowledgeGraphTab({ kbId }: { kbId: number }) {
+  const { t } = useTranslation("ai")
+  const [view, setView] = useState<"graph" | "table">("graph")
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-1">
+        <Button
+          variant={view === "graph" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setView("graph")}
+        >
+          <Network className="mr-1.5 h-3.5 w-3.5" />
+          {t("knowledge.graph.viewGraph")}
+        </Button>
+        <Button
+          variant={view === "table" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setView("table")}
+        >
+          <TableProperties className="mr-1.5 h-3.5 w-3.5" />
+          {t("knowledge.graph.viewTable")}
+        </Button>
+      </div>
+      {view === "graph" ? (
+        <KnowledgeGraphView kbId={kbId} />
+      ) : (
+        <NodeTableView kbId={kbId} />
+      )}
+    </div>
   )
 }
 

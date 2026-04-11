@@ -79,14 +79,6 @@ func (r *KnowledgeBaseRepo) UpdateCounts(id uint) error {
 	`, id, id, id).Error
 }
 
-func (r *KnowledgeBaseRepo) ListCrawlEnabled() ([]KnowledgeBase, error) {
-	var items []KnowledgeBase
-	if err := r.db.Where("crawl_enabled = ?", true).Find(&items).Error; err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 func (r *KnowledgeBaseRepo) DB() *gorm.DB {
 	return r.db.DB
 }

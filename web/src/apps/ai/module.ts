@@ -30,5 +30,14 @@ registerApp({
         },
       ],
     },
+    {
+      path: "ai/tools",
+      children: [
+        {
+          index: true,
+          lazy: () => import("./pages/tools/index"),
+        },
+      ],
+    },
   ],
 })

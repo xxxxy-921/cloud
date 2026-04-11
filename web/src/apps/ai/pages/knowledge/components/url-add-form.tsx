@@ -8,6 +8,7 @@ import { api } from "@/lib/api"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import {
   Sheet,
   SheetContent,
@@ -38,6 +39,8 @@ function useUrlAddSchema() {
     sourceUrl: z.string().min(1, t("validation.urlRequired")).url(t("validation.urlInvalid")),
     crawlDepth: z.coerce.number().int().min(0).max(2),
     urlPattern: z.string().max(256).optional(),
+    crawlEnabled: z.boolean(),
+    crawlSchedule: z.string().max(128).optional(),
   })
 }
 
@@ -60,12 +63,22 @@ export function UrlAddForm({ open, onOpenChange, kbId, onSuccess }: UrlAddFormPr
       sourceUrl: "",
       crawlDepth: 0,
       urlPattern: "",
+      crawlEnabled: false,
+      crawlSchedule: "",
     },
   })
 
+  const watchCrawlEnabled = form.watch("crawlEnabled")
+
   useEffect(() => {
     if (open) {
-      form.reset({ sourceUrl: "", crawlDepth: 0, urlPattern: "" })
+      form.reset({
+        sourceUrl: "",
+        crawlDepth: 0,
+        urlPattern: "",
+        crawlEnabled: false,
+        crawlSchedule: "",
+      })
     }
   }, [open, form])
 
@@ -157,6 +170,41 @@ export function UrlAddForm({ open, onOpenChange, kbId, onSuccess }: UrlAddFormPr
                 </FormItem>
               )}
             />
+            <FormField
+              control={form.control}
+              name="crawlEnabled"
+              render={({ field }) => (
+                <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <FormLabel>{t("ai:knowledge.sources.crawlEnabled")}</FormLabel>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+            {watchCrawlEnabled && (
+              <FormField
+                control={form.control}
+                name="crawlSchedule"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("ai:knowledge.sources.crawlSchedule")}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t("ai:knowledge.sources.crawlSchedulePlaceholder")}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             <SheetFooter>
               <Button type="submit" size="sm" disabled={addMutation.isPending}>
                 {addMutation.isPending ? t("common:saving") : t("common:create")}

@@ -88,6 +88,49 @@ func (h *KnowledgeNodeHandler) GetGraph(c *gin.Context) {
 	handler.OK(c, gin.H{"nodes": nodeResps, "edges": edgeResps})
 }
 
+func (h *KnowledgeNodeHandler) GetFullGraph(c *gin.Context) {
+	kbID, _ := strconv.Atoi(c.Param("id"))
+
+	nodes, err := h.nodeRepo.FindByKbID(uint(kbID))
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Filter out index nodes — only concept nodes are visualized in the graph
+	conceptNodes := make([]KnowledgeNode, 0, len(nodes))
+	conceptIDs := make(map[uint]bool)
+	for _, n := range nodes {
+		if n.NodeType != "index" {
+			conceptNodes = append(conceptNodes, n)
+			conceptIDs[n.ID] = true
+		}
+	}
+
+	edges, err := h.edgeRepo.FindByKbID(uint(kbID))
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	nodeResps := make([]KnowledgeNodeResponse, len(conceptNodes))
+	for i, n := range conceptNodes {
+		nodeResps[i] = n.ToResponse()
+		edgeCount, _ := h.edgeRepo.CountByNodeID(n.ID)
+		nodeResps[i].EdgeCount = int(edgeCount)
+	}
+
+	// Only include edges between concept nodes
+	edgeResps := make([]KnowledgeEdgeResponse, 0, len(edges))
+	for _, e := range edges {
+		if conceptIDs[e.FromNodeID] && conceptIDs[e.ToNodeID] {
+			edgeResps = append(edgeResps, e.ToResponse())
+		}
+	}
+
+	handler.OK(c, gin.H{"nodes": nodeResps, "edges": edgeResps})
+}
+
 func (h *KnowledgeNodeHandler) ListLogs(c *gin.Context) {
 	kbID, _ := strconv.Atoi(c.Param("id"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))

@@ -28,10 +28,9 @@ func NewKnowledgeBaseHandler(i do.Injector) (*KnowledgeBaseHandler, error) {
 type createKBReq struct {
 	Name           string `json:"name" binding:"required"`
 	Description    string `json:"description"`
+	CompileMethod  string `json:"compileMethod"`
 	CompileModelID *uint  `json:"compileModelId"`
 	AutoCompile    bool   `json:"autoCompile"`
-	CrawlEnabled   bool   `json:"crawlEnabled"`
-	CrawlSchedule  string `json:"crawlSchedule"`
 }
 
 func (h *KnowledgeBaseHandler) Create(c *gin.Context) {
@@ -41,13 +40,17 @@ func (h *KnowledgeBaseHandler) Create(c *gin.Context) {
 		return
 	}
 
+	compileMethod := req.CompileMethod
+	if compileMethod == "" {
+		compileMethod = CompileMethodKnowledgeGraph
+	}
+
 	kb := &KnowledgeBase{
 		Name:           req.Name,
 		Description:    req.Description,
+		CompileMethod:  compileMethod,
 		CompileModelID: req.CompileModelID,
 		AutoCompile:    req.AutoCompile,
-		CrawlEnabled:   req.CrawlEnabled,
-		CrawlSchedule:  req.CrawlSchedule,
 	}
 
 	if err := h.svc.Create(kb); err != nil {
@@ -101,10 +104,9 @@ func (h *KnowledgeBaseHandler) Get(c *gin.Context) {
 type updateKBReq struct {
 	Name           string `json:"name" binding:"required"`
 	Description    string `json:"description"`
+	CompileMethod  string `json:"compileMethod"`
 	CompileModelID *uint  `json:"compileModelId"`
 	AutoCompile    bool   `json:"autoCompile"`
-	CrawlEnabled   bool   `json:"crawlEnabled"`
-	CrawlSchedule  string `json:"crawlSchedule"`
 }
 
 func (h *KnowledgeBaseHandler) Update(c *gin.Context) {
@@ -123,10 +125,12 @@ func (h *KnowledgeBaseHandler) Update(c *gin.Context) {
 
 	kb.Name = req.Name
 	kb.Description = req.Description
+	kb.CompileMethod = req.CompileMethod
+	if kb.CompileMethod == "" {
+		kb.CompileMethod = CompileMethodKnowledgeGraph
+	}
 	kb.CompileModelID = req.CompileModelID
 	kb.AutoCompile = req.AutoCompile
-	kb.CrawlEnabled = req.CrawlEnabled
-	kb.CrawlSchedule = req.CrawlSchedule
 
 	if err := h.svc.Update(kb); err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())

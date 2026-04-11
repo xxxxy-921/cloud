@@ -105,6 +105,15 @@ func (r *KnowledgeSourceRepo) FindURLSourcesByKbID(kbID uint) ([]KnowledgeSource
 	return items, nil
 }
 
+func (r *KnowledgeSourceRepo) FindCrawlEnabledSources() ([]KnowledgeSource, error) {
+	var items []KnowledgeSource
+	if err := r.db.Where("format = ? AND parent_id IS NULL AND crawl_enabled = ?", SourceFormatURL, true).
+		Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (r *KnowledgeSourceRepo) DB() *gorm.DB {
 	return r.db.DB
 }

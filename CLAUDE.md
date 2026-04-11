@@ -149,6 +149,31 @@ JWTAuth middleware → extracts UserID + Role from token → CasbinAuth middlewa
 
 通过 DB SystemConfig 配置（默认关闭）：`otel.enabled`, `otel.exporter_endpoint`, `otel.service_name`, `otel.sample_rate`。在系统设置页面修改。Trace ID/Span ID 自动注入 slog 日志。
 
+### AI App: Knowledge Module
+
+Knowledge 模块在 `internal/app/ai/` 中，是 AI App 的子系统，架构分两阶段：
+
+**Pipeline**: 添加来源 → 异步提取文本 → 异步 LLM 编译 → 知识图谱
+
+```
+KnowledgeBase         → 知识库（compile status: idle/compiling/completed/error）
+  └─ KnowledgeSource  → 来源（文件/URL/文本，extract status: pending/completed/error）
+  └─ KnowledgeNode    → 知识图谱节点（concept/index 两种类型）
+  └─ KnowledgeEdge    → 节点间关系（related/contradicts/extends/part_of）
+  └─ KnowledgeLog     → 编译日志
+```
+
+**Scheduler 任务**（注册在 `AIApp.Tasks()`）：
+- `ai-source-extract`（async）— 提取文件/URL 文本内容，md/txt 在上传时直接提取，PDF/DOCX/XLSX/PPTX 目前为 TODO（会返回 error）
+- `ai-knowledge-crawl`（cron `*/5 * * * *`）— 遍历开启爬取的 URL 来源，按 `CrawlSchedule` 决定是否重新爬取，内容变化时触发重新编译
+- `ai-knowledge-compile`（async）— 调用 LLM 将全部 `completed` 来源编译为知识图谱，编译后自动生成 `index` 节点并执行 lint
+
+**LLM 编译**（`KnowledgeCompileService`）：使用知识库配置的模型（未配置则取默认 LLM），构造 prompt → 调用 `internal/llm.Client` → 解析 JSON 输出（nodes + updated_nodes）→ 写入 node/edge。`internal/llm/` 是共享的 LLM 客户端包，通过 Provider 的 protocol（openai-compatible）+ BaseURL + 加密 API Key 构建客户端。
+
+**Agent 查询 API**：`/api/v1/ai/knowledge/*` 使用 `node.NodeTokenMiddleware` 鉴权（非 JWT+Casbin），供 Agent 节点调用，不走标准中间件链。`internal/app/node/` 提供 Node token 的中间件和 repo。
+
+**URL 爬取**：支持 `crawlDepth`（递归抓取同域链接）和 `urlPattern`（前缀过滤子链接）。HTML 内容用简单正则转换为 Markdown，10MB 大小限制。
+
 ### Frontend Stack (`web/src/`)
 
 ```

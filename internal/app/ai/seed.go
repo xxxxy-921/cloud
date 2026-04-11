@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"log/slog"
 
 	"github.com/casbin/casbin/v2"
@@ -105,7 +106,127 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		}
 	}
 
-	// 4. Casbin policies
+	// 4. 工具菜单
+	var toolMenu model.Menu
+	if err := db.Where("permission = ?", "ai:tool:list").First(&toolMenu).Error; err != nil {
+		toolMenu = model.Menu{
+			ParentID:   &aiDir.ID,
+			Name:       "工具",
+			Type:       model.MenuTypeMenu,
+			Path:       "/ai/tools",
+			Icon:       "Wrench",
+			Permission: "ai:tool:list",
+			Sort:       2,
+		}
+		if err := db.Create(&toolMenu).Error; err != nil {
+			return err
+		}
+		slog.Info("seed: created menu", "name", toolMenu.Name, "permission", toolMenu.Permission)
+	}
+
+	toolButtons := []model.Menu{
+		{Name: "编辑内建工具", Type: model.MenuTypeButton, Permission: "ai:tool:update", Sort: 0},
+		{Name: "新增 MCP 服务", Type: model.MenuTypeButton, Permission: "ai:mcp:create", Sort: 1},
+		{Name: "编辑 MCP 服务", Type: model.MenuTypeButton, Permission: "ai:mcp:update", Sort: 2},
+		{Name: "删除 MCP 服务", Type: model.MenuTypeButton, Permission: "ai:mcp:delete", Sort: 3},
+		{Name: "测试 MCP 连接", Type: model.MenuTypeButton, Permission: "ai:mcp:test", Sort: 4},
+		{Name: "导入技能包", Type: model.MenuTypeButton, Permission: "ai:skill:create", Sort: 5},
+		{Name: "编辑技能包", Type: model.MenuTypeButton, Permission: "ai:skill:update", Sort: 6},
+		{Name: "删除技能包", Type: model.MenuTypeButton, Permission: "ai:skill:delete", Sort: 7},
+	}
+	for _, btn := range toolButtons {
+		var existing model.Menu
+		if err := db.Where("permission = ?", btn.Permission).First(&existing).Error; err != nil {
+			btn.ParentID = &toolMenu.ID
+			if err := db.Create(&btn).Error; err != nil {
+				slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
+				continue
+			}
+			slog.Info("seed: created menu", "name", btn.Name, "permission", btn.Permission)
+		}
+	}
+
+	// 5. Builtin tools seed
+	builtinTools := []Tool{
+		{
+			Toolkit:     "knowledge",
+			Name:        "search_knowledge",
+			DisplayName: "Search Knowledge",
+			Description: "Search for relevant documents in a knowledge base using full-text search.",
+			ParametersSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"knowledge_base_id": {"type": "integer", "description": "The ID of the knowledge base to search"},
+					"query": {"type": "string", "description": "The search query"}
+				},
+				"required": ["knowledge_base_id", "query"]
+			}`),
+			IsActive: true,
+		},
+		{
+			Toolkit:     "knowledge",
+			Name:        "read_document",
+			DisplayName: "Read Document",
+			Description: "Read the full content of a specific document from a knowledge base.",
+			ParametersSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"knowledge_base_id": {"type": "integer", "description": "The ID of the knowledge base"},
+					"node_id": {"type": "integer", "description": "The ID of the knowledge node to read"}
+				},
+				"required": ["knowledge_base_id", "node_id"]
+			}`),
+			IsActive: true,
+		},
+		{
+			Toolkit:     "network",
+			Name:        "http_request",
+			DisplayName: "HTTP Request",
+			Description: "Make an HTTP request to an external URL and return the response.",
+			ParametersSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"], "description": "HTTP method"},
+					"url": {"type": "string", "description": "The URL to request"},
+					"headers": {"type": "object", "description": "Request headers"},
+					"body": {"type": "string", "description": "Request body (for POST/PUT/PATCH)"}
+				},
+				"required": ["method", "url"]
+			}`),
+			IsActive: false,
+		},
+		{
+			Toolkit:     "code",
+			Name:        "execute_script",
+			DisplayName: "Execute Script",
+			Description: "Execute a script in a sandboxed environment and return stdout/stderr.",
+			ParametersSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"language": {"type": "string", "enum": ["python", "bash"], "description": "Script language"},
+					"code": {"type": "string", "description": "The script source code to execute"},
+					"timeout": {"type": "integer", "description": "Execution timeout in seconds (default 30, max 300)"}
+				},
+				"required": ["language", "code"]
+			}`),
+			IsActive: false,
+		},
+	}
+	for _, tool := range builtinTools {
+		var existing Tool
+		if err := db.Where("name = ?", tool.Name).First(&existing).Error; err != nil {
+			if err := db.Create(&tool).Error; err != nil {
+				slog.Error("seed: failed to create builtin tool", "name", tool.Name, "error", err)
+				continue
+			}
+			slog.Info("seed: created builtin tool", "name", tool.Name)
+		} else if existing.Toolkit != tool.Toolkit {
+			db.Model(&existing).Update("toolkit", tool.Toolkit)
+			slog.Info("seed: updated toolkit for builtin tool", "name", tool.Name, "toolkit", tool.Toolkit)
+		}
+	}
+
+	// 6. Casbin policies
 	policies := [][]string{
 		// Providers
 		{"admin", "/api/v1/ai/providers", "GET"},
@@ -140,6 +261,25 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/ai/knowledge-bases/:id/nodes/:nid", "GET"},
 		{"admin", "/api/v1/ai/knowledge-bases/:id/nodes/:nid/graph", "GET"},
 		{"admin", "/api/v1/ai/knowledge-bases/:id/logs", "GET"},
+		{"admin", "/api/v1/ai/knowledge-bases/:id/graph", "GET"},
+		// Tools
+		{"admin", "/api/v1/ai/tools", "GET"},
+		{"admin", "/api/v1/ai/tools/:id", "PUT"},
+		// MCP Servers
+		{"admin", "/api/v1/ai/mcp-servers", "GET"},
+		{"admin", "/api/v1/ai/mcp-servers", "POST"},
+		{"admin", "/api/v1/ai/mcp-servers/:id", "GET"},
+		{"admin", "/api/v1/ai/mcp-servers/:id", "PUT"},
+		{"admin", "/api/v1/ai/mcp-servers/:id", "DELETE"},
+		{"admin", "/api/v1/ai/mcp-servers/:id/test", "POST"},
+		// Skills
+		{"admin", "/api/v1/ai/skills", "GET"},
+		{"admin", "/api/v1/ai/skills/:id", "GET"},
+		{"admin", "/api/v1/ai/skills/import-github", "POST"},
+		{"admin", "/api/v1/ai/skills/upload", "POST"},
+		{"admin", "/api/v1/ai/skills/:id", "PUT"},
+		{"admin", "/api/v1/ai/skills/:id/active", "PATCH"},
+		{"admin", "/api/v1/ai/skills/:id", "DELETE"},
 	}
 
 	menuPerms := [][]string{
@@ -161,6 +301,16 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{"admin", "ai:knowledge:compile", "read"},
 		{"admin", "ai:knowledge:source:create", "read"},
 		{"admin", "ai:knowledge:source:delete", "read"},
+		// Tool registry
+		{"admin", "ai:tool:list", "read"},
+		{"admin", "ai:tool:update", "read"},
+		{"admin", "ai:mcp:create", "read"},
+		{"admin", "ai:mcp:update", "read"},
+		{"admin", "ai:mcp:delete", "read"},
+		{"admin", "ai:mcp:test", "read"},
+		{"admin", "ai:skill:create", "read"},
+		{"admin", "ai:skill:update", "read"},
+		{"admin", "ai:skill:delete", "read"},
 	}
 
 	allPolicies := append(policies, menuPerms...)

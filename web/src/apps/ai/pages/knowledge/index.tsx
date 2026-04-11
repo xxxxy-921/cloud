@@ -52,10 +52,9 @@ export interface KnowledgeBaseItem {
   sourceCount: number
   nodeCount: number
   compileStatus: string
+  compileMethod: string
   compileModelId: number
   autoCompile: boolean
-  crawlEnabled: boolean
-  crawlSchedule: string
   createdAt: string
   updatedAt: string
 }
@@ -68,14 +67,14 @@ function CompileStatusBadge({ status }: { status: string }) {
 
   if (s === "compiling") {
     return (
-      <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">
+      <Badge variant="outline" className="border-transparent bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">
         {t("knowledge.compileStatus.compiling")}
       </Badge>
     )
   }
   if (s === "completed") {
     return (
-      <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+      <Badge variant="outline" className="border-transparent bg-green-500/20 text-green-700 dark:bg-green-500/20 dark:text-green-400">
         {t("knowledge.compileStatus.completed")}
       </Badge>
     )
