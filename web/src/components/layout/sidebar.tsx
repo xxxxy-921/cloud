@@ -124,7 +124,7 @@ export function Sidebar() {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={8}>
-                {t(`menu.${app.permission}`, { defaultValue: app.label })}
+                {t(`menu.${app.permission}`, { defaultValue: app.label, nsSeparator: false })}
               </TooltipContent>
             </Tooltip>
           )
@@ -166,7 +166,7 @@ export function Sidebar() {
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              <span className="truncate">{t(`menu.${item.permission ?? ""}`, { defaultValue: item.name })}</span>
+              <span className="truncate">{t(`menu.${item.permission ?? ""}`, { defaultValue: item.name, nsSeparator: false })}</span>
             </button>
           )
         })}

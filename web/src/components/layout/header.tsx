@@ -9,7 +9,7 @@ function buildPathLabels(menuTree: MenuItem[], t: (key: string, opts?: Record<st
   function walk(items: MenuItem[]) {
     for (const m of items) {
       if (m.path) {
-        labels[m.path] = t(`layout:menu.${m.permission ?? ""}`, { defaultValue: m.name })
+        labels[m.path] = t(`menu.${m.permission ?? ""}`, { defaultValue: m.name, nsSeparator: false })
       }
       if (m.children) walk(m.children)
     }
