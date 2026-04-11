@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -14,9 +15,10 @@ var (
 )
 
 type ProcessDefService struct {
-	processDefRepo *ProcessDefRepo
+	processDefRepo  *ProcessDefRepo
 	nodeProcessRepo *NodeProcessRepo
-	commandRepo    *NodeCommandRepo
+	commandRepo     *NodeCommandRepo
+	hub             *NodeHub
 }
 
 func NewProcessDefService(i do.Injector) (*ProcessDefService, error) {
@@ -24,6 +26,7 @@ func NewProcessDefService(i do.Injector) (*ProcessDefService, error) {
 		processDefRepo:  do.MustInvoke[*ProcessDefRepo](i),
 		nodeProcessRepo: do.MustInvoke[*NodeProcessRepo](i),
 		commandRepo:     do.MustInvoke[*NodeCommandRepo](i),
+		hub:             do.MustInvoke[*NodeHub](i),
 	}, nil
 }
 
@@ -62,7 +65,7 @@ func (s *ProcessDefService) Update(id uint, updates map[string]any) (*ProcessDef
 		return nil, err
 	}
 
-	// Enqueue config.update for all nodes running this process
+	// Push config.update to all nodes running this process
 	nodeProcesses, _ := s.nodeProcessRepo.ListByProcessDefID(id)
 	for _, np := range nodeProcesses {
 		payload, _ := json.Marshal(map[string]any{
@@ -75,7 +78,12 @@ func (s *ProcessDefService) Update(id uint, updates map[string]any) (*ProcessDef
 			Payload: JSONMap(payload),
 			Status:  CommandStatusPending,
 		}
-		_ = s.commandRepo.Create(cmd)
+		if err := s.commandRepo.Create(cmd); err != nil {
+			slog.Warn("failed to enqueue config.update", "nodeId", np.NodeID, "processDef", pd.Name, "error", err)
+			continue
+		}
+		// Push via SSE
+		s.hub.SendCommand(np.NodeID, cmd)
 	}
 
 	return s.processDefRepo.FindByID(id)
@@ -100,7 +108,11 @@ func (s *ProcessDefService) Delete(id uint) error {
 			Payload: JSONMap(payload),
 			Status:  CommandStatusPending,
 		}
-		_ = s.commandRepo.Create(cmd)
+		if err := s.commandRepo.Create(cmd); err != nil {
+			slog.Warn("failed to enqueue stop on delete", "nodeId", np.NodeID, "error", err)
+			continue
+		}
+		s.hub.SendCommand(np.NodeID, cmd)
 	}
 
 	return s.processDefRepo.Delete(id)

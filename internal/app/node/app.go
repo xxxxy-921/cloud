@@ -34,6 +34,10 @@ func (a *NodeApp) Providers(i do.Injector) {
 	do.Provide(i, NewProcessDefRepo)
 	do.Provide(i, NewNodeProcessRepo)
 	do.Provide(i, NewNodeCommandRepo)
+	do.Provide(i, func(i do.Injector) (*NodeHub, error) {
+		nodeRepo := do.MustInvoke[*NodeRepo](i)
+		return NewNodeHub(nodeRepo), nil
+	})
 	do.Provide(i, NewNodeService)
 	do.Provide(i, NewProcessDefService)
 	do.Provide(i, NewNodeProcessService)
@@ -75,6 +79,8 @@ func (a *NodeApp) Routes(api *gin.RouterGroup) {
 		nodeProcesses.POST("", nodeProcessH.Bind)
 		nodeProcesses.GET("", nodeProcessH.List)
 		nodeProcesses.DELETE("/:processId", nodeProcessH.Unbind)
+		nodeProcesses.POST("/:processId/start", nodeProcessH.Start)
+		nodeProcesses.POST("/:processId/stop", nodeProcessH.Stop)
 		nodeProcesses.POST("/:processId/restart", nodeProcessH.Restart)
 	}
 
@@ -85,6 +91,7 @@ func (a *NodeApp) Routes(api *gin.RouterGroup) {
 	{
 		sidecar.POST("/register", sidecarH.Register)
 		sidecar.POST("/heartbeat", sidecarH.Heartbeat)
+		sidecar.GET("/stream", sidecarH.Stream)
 		sidecar.GET("/commands", sidecarH.PollCommands)
 		sidecar.POST("/commands/:id/ack", sidecarH.AckCommand)
 		sidecar.GET("/configs/:name", sidecarH.DownloadConfig)
@@ -105,7 +112,7 @@ func (a *NodeApp) Tasks() []scheduler.TaskDef {
 			Name:        "node-command-cleanup",
 			Type:        scheduler.TypeScheduled,
 			Description: "Clean up expired pending commands",
-			CronExpr:    "0 */5 * * *",
+			CronExpr:    "*/5 * * * *",
 			Handler:     sidecarSvc.CleanupExpiredCommands,
 		},
 	}

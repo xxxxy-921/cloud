@@ -71,6 +71,13 @@ The application SHALL define kernel routes for config, users, roles, menus, sess
 - **WHEN** an App route requires permission checking
 - **THEN** the App's module.ts SHALL wrap its route components with PermissionGuard, same as kernel routes
 
+### Requirement: Frontend app registry includes AI module
+The frontend app registry SHALL import the AI module for route registration.
+
+#### Scenario: AI routes registered in frontend
+- **WHEN** the frontend app loads
+- **THEN** `web/src/apps/registry.ts` includes `import './ai/module'` and AI management pages are accessible via routing
+
 ### Requirement: Breadcrumb from route segments
 The header breadcrumb SHALL be generated from the current route pathname segments. The breadcrumb SHALL NOT include a "首页" root entry.
 

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	heartbeatTimeout = 30 * time.Second
+	heartbeatTimeout = 60 * time.Second
 	commandTimeout   = 5 * time.Minute
 )
 
@@ -23,6 +23,7 @@ type SidecarService struct {
 	processDefRepo  *ProcessDefRepo
 	nodeProcessRepo *NodeProcessRepo
 	commandRepo     *NodeCommandRepo
+	hub             *NodeHub
 }
 
 func NewSidecarService(i do.Injector) (*SidecarService, error) {
@@ -31,6 +32,7 @@ func NewSidecarService(i do.Injector) (*SidecarService, error) {
 		processDefRepo:  do.MustInvoke[*ProcessDefRepo](i),
 		nodeProcessRepo: do.MustInvoke[*NodeProcessRepo](i),
 		commandRepo:     do.MustInvoke[*NodeCommandRepo](i),
+		hub:             do.MustInvoke[*NodeHub](i),
 	}, nil
 }
 
@@ -42,13 +44,66 @@ type RegisterRequest struct {
 
 func (s *SidecarService) Register(nodeID uint, req RegisterRequest) error {
 	now := time.Now()
-	return s.nodeRepo.Update(nodeID, map[string]any{
+	if err := s.nodeRepo.Update(nodeID, map[string]any{
 		"status":         NodeStatusOnline,
 		"system_info":    JSONMap(req.SystemInfo),
 		"capabilities":   JSONMap(req.Capabilities),
 		"version":        req.Version,
 		"last_heartbeat": &now,
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Enqueue process.start commands for all bound processes
+	s.enqueueStartCommandsForNode(nodeID)
+
+	return nil
+}
+
+// enqueueStartCommandsForNode sends a process.start command for every process
+// currently bound to the given node so the sidecar picks them up after (re-)registration.
+func (s *SidecarService) enqueueStartCommandsForNode(nodeID uint) {
+	nodeProcesses, err := s.nodeProcessRepo.ListByNodeID(nodeID)
+	if err != nil || len(nodeProcesses) == 0 {
+		return
+	}
+
+	for _, np := range nodeProcesses {
+		pd, err := s.processDefRepo.FindByID(np.ProcessDefID)
+		if err != nil {
+			continue
+		}
+
+		payload, _ := json.Marshal(map[string]any{
+			"process_def_id":  pd.ID,
+			"node_process_id": np.ID,
+			"override_vars":   json.RawMessage(np.OverrideVars),
+			"process_def": map[string]any{
+				"id":            pd.ID,
+				"name":          pd.Name,
+				"startCommand":  pd.StartCommand,
+				"stopCommand":   pd.StopCommand,
+				"reloadCommand": pd.ReloadCommand,
+				"env":           json.RawMessage(pd.Env),
+				"configFiles":   json.RawMessage(pd.ConfigFiles),
+				"probeType":     pd.ProbeType,
+				"probeConfig":   json.RawMessage(pd.ProbeConfig),
+				"restartPolicy": pd.RestartPolicy,
+				"maxRestarts":   pd.MaxRestarts,
+			},
+		})
+		cmd := &NodeCommand{
+			NodeID:  nodeID,
+			Type:    CommandTypeProcessStart,
+			Payload: JSONMap(payload),
+			Status:  CommandStatusPending,
+		}
+		if err := s.commandRepo.Create(cmd); err != nil {
+			slog.Warn("failed to enqueue start command on register", "nodeId", nodeID, "processDef", pd.Name, "error", err)
+			continue
+		}
+		s.hub.SendCommand(nodeID, cmd)
+	}
 }
 
 type HeartbeatRequest struct {
@@ -115,7 +170,7 @@ type ConfigFile struct {
 	Content  string `json:"content"`
 }
 
-func (s *SidecarService) RenderConfig(nodeID uint, processName string) (string, string, error) {
+func (s *SidecarService) RenderConfig(nodeID uint, processName string, filename string) (string, string, error) {
 	node, err := s.nodeRepo.FindByID(nodeID)
 	if err != nil {
 		return "", "", err
@@ -130,6 +185,23 @@ func (s *SidecarService) RenderConfig(nodeID uint, processName string) (string, 
 	var configFiles []ConfigFile
 	if err := json.Unmarshal([]byte(pd.ConfigFiles), &configFiles); err != nil || len(configFiles) == 0 {
 		return "", "", fmt.Errorf("no config files defined for process %q", processName)
+	}
+
+	// Find the target config file
+	var targetFile *ConfigFile
+	if filename != "" {
+		for i := range configFiles {
+			if configFiles[i].Filename == filename {
+				targetFile = &configFiles[i]
+				break
+			}
+		}
+		if targetFile == nil {
+			return "", "", fmt.Errorf("config file %q not found for process %q", filename, processName)
+		}
+	} else {
+		// Backward compatible: render first file
+		targetFile = &configFiles[0]
 	}
 
 	// Find the node process for override vars
@@ -147,8 +219,8 @@ func (s *SidecarService) RenderConfig(nodeID uint, processName string) (string, 
 		"Override": overrideVars,
 	}
 
-	// Render the first config file
-	tmpl, err := template.New("config").Parse(configFiles[0].Content)
+	// Render the target config file
+	tmpl, err := template.New("config").Parse(targetFile.Content)
 	if err != nil {
 		return "", "", fmt.Errorf("template parse error: %w", err)
 	}

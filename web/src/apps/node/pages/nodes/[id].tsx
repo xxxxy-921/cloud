@@ -9,6 +9,8 @@ import {
   Plus,
   Unlink,
   RotateCw,
+  Play,
+  Square,
   Loader2,
   Copy,
   Check,
@@ -206,6 +208,26 @@ export function Component() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["node-commands", id] })
       toast.success(t("node:nodes.restartSuccess"))
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const startMutation = useMutation({
+    mutationFn: (processDefId: number) =>
+      api.post(`/api/v1/nodes/${id}/processes/${processDefId}/start`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["node-commands", id] })
+      toast.success(t("node:nodes.startSuccess"))
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const stopMutation = useMutation({
+    mutationFn: (processDefId: number) =>
+      api.post(`/api/v1/nodes/${id}/processes/${processDefId}/stop`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["node-commands", id] })
+      toast.success(t("node:nodes.stopSuccess"))
     },
     onError: (err) => toast.error(err.message),
   })
@@ -426,7 +448,7 @@ export function Component() {
                     <TableHead className="w-[100px]">{t("common:status")}</TableHead>
                     <TableHead className="w-[80px]">{t("node:nodes.pid")}</TableHead>
                     <TableHead className="w-[120px]">{t("node:nodes.configVersion")}</TableHead>
-                    {canManageProcess && <TableHead className="w-[150px]">{t("common:actions")}</TableHead>}
+                    {canManageProcess && <TableHead className="w-[220px]">{t("common:actions")}</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -450,6 +472,29 @@ export function Component() {
                         {canManageProcess && (
                           <TableCell>
                             <div className="flex items-center gap-1">
+                              {proc.status === "running" ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="px-2"
+                                  onClick={() => stopMutation.mutate(proc.processDefId)}
+                                  disabled={stopMutation.isPending}
+                                >
+                                  <Square className="mr-1 h-3.5 w-3.5" />
+                                  {t("node:nodes.stop")}
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="px-2"
+                                  onClick={() => startMutation.mutate(proc.processDefId)}
+                                  disabled={startMutation.isPending}
+                                >
+                                  <Play className="mr-1 h-3.5 w-3.5" />
+                                  {t("node:nodes.start")}
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"

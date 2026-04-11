@@ -1,7 +1,7 @@
 package node
 
 import (
-	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,12 +20,14 @@ type AckCommandRequest struct {
 type SidecarHandler struct {
 	nodeRepo   *NodeRepo
 	sidecarSvc *SidecarService
+	hub        *NodeHub
 }
 
 func NewSidecarHandler(i do.Injector) (*SidecarHandler, error) {
 	return &SidecarHandler{
 		nodeRepo:   do.MustInvoke[*NodeRepo](i),
 		sidecarSvc: do.MustInvoke[*SidecarService](i),
+		hub:        do.MustInvoke[*NodeHub](i),
 	}, nil
 }
 
@@ -68,39 +70,65 @@ func (h *SidecarHandler) Heartbeat(c *gin.Context) {
 	handler.OK(c, nil)
 }
 
+// Stream establishes an SSE connection for real-time command delivery.
+func (h *SidecarHandler) Stream(c *gin.Context) {
+	nodeID := GetNodeID(c)
+
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	// Register this connection with NodeHub
+	conn := h.hub.Register(nodeID)
+	defer h.hub.Unregister(nodeID)
+
+	// Push any pending commands first
+	pendingCmds, _ := h.sidecarSvc.PollCommands(nodeID)
+	for _, cmd := range pendingCmds {
+		data, _ := json.Marshal(cmd.ToResponse())
+		c.SSEvent("command", json.RawMessage(data))
+		c.Writer.Flush()
+	}
+
+	// Ping ticker for keepalive
+	pingTicker := time.NewTicker(15 * time.Second)
+	defer pingTicker.Stop()
+
+	clientGone := c.Request.Context().Done()
+
+	for {
+		select {
+		case <-clientGone:
+			return
+		case <-conn.DoneCh:
+			return
+		case event := <-conn.EventCh:
+			data, _ := json.Marshal(event.Data)
+			c.SSEvent(event.Event, json.RawMessage(data))
+			c.Writer.Flush()
+		case <-pingTicker.C:
+			c.SSEvent("ping", "{}")
+			c.Writer.Flush()
+		}
+	}
+}
+
 func (h *SidecarHandler) PollCommands(c *gin.Context) {
 	nodeID := GetNodeID(c)
 
-	// Long-polling: check for pending commands, wait up to 30s
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		cmds, err := h.sidecarSvc.PollCommands(nodeID)
-		if err != nil {
-			handler.Fail(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if len(cmds) > 0 {
-			result := make([]NodeCommandResponse, len(cmds))
-			for i, cmd := range cmds {
-				result[i] = cmd.ToResponse()
-			}
-			handler.OK(c, result)
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			handler.OK(c, []any{})
-			return
-		case <-ticker.C:
-			continue
-		}
+	// Fallback: return pending commands immediately (no long-poll)
+	cmds, err := h.sidecarSvc.PollCommands(nodeID)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
 	}
+	result := make([]NodeCommandResponse, len(cmds))
+	for i, cmd := range cmds {
+		result[i] = cmd.ToResponse()
+	}
+	handler.OK(c, result)
 }
 
 func (h *SidecarHandler) AckCommand(c *gin.Context) {
@@ -130,8 +158,9 @@ func (h *SidecarHandler) AckCommand(c *gin.Context) {
 func (h *SidecarHandler) DownloadConfig(c *gin.Context) {
 	nodeID := GetNodeID(c)
 	processName := c.Param("name")
+	filename := c.Query("file")
 
-	rendered, hash, err := h.sidecarSvc.RenderConfig(nodeID, processName)
+	rendered, hash, err := h.sidecarSvc.RenderConfig(nodeID, processName, filename)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return

@@ -20,6 +20,7 @@ import (
 	"metis/internal/handler"
 	"metis/internal/locales"
 	"metis/internal/middleware"
+	"metis/internal/pkg/crypto"
 	"metis/internal/pkg/token"
 	"metis/internal/repository"
 	"metis/internal/scheduler"
@@ -91,6 +92,9 @@ func main() {
 		// JWT secret from config
 		jwtSecret := []byte(cfg.JWTSecret)
 		do.ProvideValue(injector, jwtSecret)
+
+		// Encryption key from secret_key (for API key encryption etc.)
+		do.ProvideValue(injector, crypto.EncryptionKey(crypto.DeriveKey(cfg.SecretKey)))
 
 		// Locale service
 		localeSvc, err := locales.New()

@@ -6,6 +6,7 @@ package main
 // When no build tag is specified, this file is compiled by default,
 // giving you the full-featured build.
 import (
+	_ "metis/internal/app/ai"
 	_ "metis/internal/app/license"
 	_ "metis/internal/app/node"
 )

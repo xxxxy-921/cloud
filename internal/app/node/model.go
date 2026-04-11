@@ -242,7 +242,7 @@ type NodeProcess struct {
 	NodeID        uint    `json:"nodeId" gorm:"not null;index;uniqueIndex:idx_node_process"`
 	ProcessDefID  uint    `json:"processDefId" gorm:"not null;index;uniqueIndex:idx_node_process"`
 	Status        string  `json:"status" gorm:"size:16;not null;default:pending_config"`
-	PID           int     `json:"pid" gorm:"default:0"`
+	PID           int     `json:"pid" gorm:"column:pid;default:0"`
 	ConfigVersion string  `json:"configVersion" gorm:"size:64"`
 	LastProbe     JSONMap `json:"lastProbe" gorm:"type:text"`
 	OverrideVars  JSONMap `json:"overrideVars" gorm:"type:text"`

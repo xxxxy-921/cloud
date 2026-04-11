@@ -1,9 +1,9 @@
 ### Requirement: samber/do IOC container
-The system SHALL use samber/do v2 as the dependency injection container for managing service lifecycle. In **normal mode** (installed), the container SHALL register all kernel and app providers at startup as before. In **install mode** (not installed), the container SHALL register only minimal providers needed for installation: database.DB (with default SQLite or from metis.yaml), SysConfigRepo, SysConfigService, and InstallHandler. After installation completes, the install handler SHALL register remaining providers and routes into the same container (hot switch).
+The system SHALL use samber/do v2 as the dependency injection container for managing service lifecycle. Kernel provider registration (repositories, services, handlers, scheduler) SHALL be defined in a single shared function `registerKernelProviders()` in `cmd/server/providers.go`. Both normal-mode startup (`main.go`) and install hot-switch (`install.go:hotSwitch`) SHALL call this shared function, eliminating duplication. The function SHALL accept a registration function parameter (`func(do.Injector, ...)`) to support both `do.Provide` (normal mode) and `do.Override` (hot-switch mode).
 
 #### Scenario: Service registration in normal mode
 - **WHEN** the application starts and the system is installed
-- **THEN** all kernel services (database, repositories, services, handlers, scheduler engine) SHALL be registered first, followed by each registered App's providers, all resolved lazily on first use
+- **THEN** `main.go` SHALL call `registerKernelProviders()` with `do.Provide` semantics, registering all kernel services followed by each registered App's providers, all resolved lazily on first use
 
 #### Scenario: Service registration in install mode
 - **WHEN** the application starts and the system is not installed
@@ -11,11 +11,18 @@ The system SHALL use samber/do v2 as the dependency injection container for mana
 
 #### Scenario: Hot switch after installation
 - **WHEN** the install handler completes installation successfully
-- **THEN** it SHALL register all remaining kernel and app providers, run app seeds, register all routes, and start the scheduler engine -- all within the same process
+- **THEN** it SHALL call `registerKernelProviders()` with `do.Override` semantics, then run app seeds, register all routes, and start the scheduler engine
 
 #### Scenario: App provider registration
 - **WHEN** optional Apps are registered in the global registry
 - **THEN** main.go SHALL call `a.Providers(injector)` for each App, allowing App services to reference kernel services via `do.MustInvoke`
+
+### Requirement: Edition full imports all apps
+The `edition_full.go` file SHALL import all available app packages including the AI app.
+
+#### Scenario: AI app registered in full edition
+- **WHEN** the server binary is built without edition tags (default full edition)
+- **THEN** `cmd/server/edition_full.go` includes `import _ "metis/internal/app/ai"` and the AI app is registered
 
 ### Requirement: Graceful shutdown
 The system SHALL shut down gracefully on SIGTERM or SIGINT signals.
@@ -33,7 +40,7 @@ The system SHALL initialize a Gin engine with slog-based request logging and pan
 
 #### Scenario: Panic recovery
 - **WHEN** a handler panics during request processing
-- **THEN** the middleware SHALL recover, log the error, and return a 500 response
+- **THEN** the middleware SHALL recover, log the error, and return a 500 response using the unified response format `{"code":-1,"message":"internal server error"}` (the `handler.R` struct)
 
 #### Scenario: Install mode routes
 - **WHEN** the system is in install mode

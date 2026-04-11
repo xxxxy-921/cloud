@@ -81,3 +81,14 @@ func (r *NodeCommandRepo) CleanupExpired(timeout time.Duration) (int64, error) {
 		})
 	return result.RowsAffected, result.Error
 }
+
+func (r *NodeCommandRepo) FailPendingByNodeID(nodeID uint, reason string) error {
+	now := time.Now()
+	return r.db.Model(&NodeCommand{}).
+		Where("node_id = ? AND status = ?", nodeID, CommandStatusPending).
+		Updates(map[string]any{
+			"status":   CommandStatusFailed,
+			"result":   reason,
+			"acked_at": &now,
+		}).Error
+}

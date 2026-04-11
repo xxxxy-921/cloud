@@ -114,6 +114,8 @@ func seedNode(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/nodes/:id/processes", "POST"},
 		{"admin", "/api/v1/nodes/:id/processes", "GET"},
 		{"admin", "/api/v1/nodes/:id/processes/:processId", "DELETE"},
+		{"admin", "/api/v1/nodes/:id/processes/:processId/start", "POST"},
+		{"admin", "/api/v1/nodes/:id/processes/:processId/stop", "POST"},
 		{"admin", "/api/v1/nodes/:id/processes/:processId/restart", "POST"},
 		// Process definitions
 		{"admin", "/api/v1/process-defs", "POST"},

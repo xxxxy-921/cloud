@@ -18,6 +18,7 @@ import (
 	"metis/internal/config"
 	"metis/internal/database"
 	"metis/internal/model"
+	"metis/internal/pkg/crypto"
 	"metis/internal/pkg/token"
 	"metis/internal/repository"
 	"metis/internal/scheduler"
@@ -292,6 +293,9 @@ func (h *InstallHandler) hotSwitch(cfg *config.MetisConfig, db *database.DB, enf
 		return fmt.Errorf("decode jwt_secret: %w", err)
 	}
 	do.OverrideValue(injector, jwtSecret)
+
+	// Encryption key from secret_key
+	do.OverrideValue(injector, crypto.EncryptionKey(crypto.DeriveKey(cfg.SecretKey)))
 
 	blacklist := do.MustInvoke[*token.TokenBlacklist](injector)
 

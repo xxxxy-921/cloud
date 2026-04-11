@@ -117,6 +117,68 @@ func (h *NodeProcessHandler) Unbind(c *gin.Context) {
 	handler.OK(c, nil)
 }
 
+func (h *NodeProcessHandler) Start(c *gin.Context) {
+	nodeID, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid node id")
+		return
+	}
+
+	processIDStr := c.Param("processId")
+	processDefID, err := strconv.ParseUint(processIDStr, 10, 64)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid process id")
+		return
+	}
+
+	c.Set("audit_action", "start_process")
+	c.Set("audit_resource", "node_process")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	if err := h.nodeProcessSvc.Start(nodeID, uint(processDefID)); err != nil {
+		if errors.Is(err, ErrNodeProcessNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.Set("audit_summary", "started process on node")
+	handler.OK(c, nil)
+}
+
+func (h *NodeProcessHandler) Stop(c *gin.Context) {
+	nodeID, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid node id")
+		return
+	}
+
+	processIDStr := c.Param("processId")
+	processDefID, err := strconv.ParseUint(processIDStr, 10, 64)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid process id")
+		return
+	}
+
+	c.Set("audit_action", "stop_process")
+	c.Set("audit_resource", "node_process")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	if err := h.nodeProcessSvc.Stop(nodeID, uint(processDefID)); err != nil {
+		if errors.Is(err, ErrNodeProcessNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.Set("audit_summary", "stopped process on node")
+	handler.OK(c, nil)
+}
+
 func (h *NodeProcessHandler) Restart(c *gin.Context) {
 	nodeID, err := parseID(c)
 	if err != nil {

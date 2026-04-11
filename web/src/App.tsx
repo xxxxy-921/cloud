@@ -10,6 +10,7 @@ import { getAppRoutes } from "@/apps/registry"
 import { setSiteLocaleTimezone } from "@/lib/utils"
 import { changeLocale } from "@/i18n"
 // Pluggable app module imports — must be after registry is defined
+import "@/apps/ai/module"
 import "@/apps/license/module"
 import "@/apps/node/module"
 import LoginPage from "@/pages/login"
