@@ -104,6 +104,7 @@ func (s *KnowledgeCompileService) HandleCompile(ctx context.Context, payload jso
 		Sources:    ProgressCounter{Total: 0, Done: 0},
 		Nodes:      ProgressCounter{Total: 0, Done: 0},
 		Embeddings: ProgressCounter{Total: 0, Done: 0},
+		StartedAt:  time.Now().Unix(),
 	}
 
 	// If recompile, delete the entire FalkorDB graph

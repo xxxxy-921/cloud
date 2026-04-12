@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Plus, Globe, FileText, Loader2 } from "lucide-react"
@@ -55,6 +55,22 @@ export function SourcesTab({ kbId, canCreate, progress }: SourcesTabProps) {
   const doneItems = (progress?.sources.done ?? 0) + (progress?.nodes.done ?? 0) + (progress?.embeddings.done ?? 0)
   const percent = totalItems > 0 ? Math.round((doneItems / totalItems) * 100) : 0
 
+  // Calculate elapsed time from server timestamp (persists across refresh)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  useEffect(() => {
+    if (isCompiling && progress?.startedAt) {
+      const updateElapsed = () => {
+        const now = Math.floor(Date.now() / 1000)
+        setElapsedSeconds(now - progress.startedAt)
+      }
+      updateElapsed() // initial
+      const interval = setInterval(updateElapsed, 1000)
+      return () => clearInterval(interval)
+    } else {
+      setElapsedSeconds(0)
+    }
+  }, [isCompiling, progress?.startedAt])
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
@@ -78,6 +94,9 @@ export function SourcesTab({ kbId, canCreate, progress }: SourcesTabProps) {
                 <span className="flex items-center gap-1.5">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   {t(`ai:knowledge.compileStage.${progress.stage}`)}
+                  {elapsedSeconds > 0 && (
+                    <span className="text-muted-foreground/70">({elapsedSeconds}s)</span>
+                  )}
                 </span>
                 <span>{doneItems}/{totalItems}</span>
               </div>

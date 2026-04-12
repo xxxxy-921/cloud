@@ -4,13 +4,56 @@ import { useQuery, useMutation } from "@tanstack/react-query"
 import { Bot, BrainCircuit, Code2, MessageSquare } from "lucide-react"
 import { agentApi, sessionApi, type AgentInfo } from "@/lib/api"
 import { Button } from "@/components/ui/button"
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 
-const TYPE_ICON: Record<string, typeof Bot> = {
-  assistant: BrainCircuit,
-  coding: Code2,
+const TYPE_CONFIG: Record<string, { icon: typeof Bot; label: string; gradient: string }> = {
+  assistant: {
+    icon: BrainCircuit,
+    label: "AI 助手",
+    gradient: "from-violet-500/10 to-indigo-500/10",
+  },
+  coding: {
+    icon: Code2,
+    label: "编程助手",
+    gradient: "from-emerald-500/10 to-teal-500/10",
+  },
+}
+
+function AgentCard({ agent, onChat }: { agent: AgentInfo; onChat: () => void }) {
+  const { t } = useTranslation(["ai"])
+  const config = TYPE_CONFIG[agent.type] ?? { icon: Bot, label: agent.type, gradient: "from-gray-500/10 to-gray-400/10" }
+  const Icon = config.icon
+
+  return (
+    <div
+      className="group relative flex flex-col gap-3 rounded-lg border bg-card p-4 transition-all duration-200 hover:shadow-sm hover:border-primary/30 cursor-pointer"
+      onClick={onChat}
+    >
+      {/* 图标 + 名称 - 单行 */}
+      <div className="flex items-center gap-3">
+        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-br ${config.gradient}`}>
+          <Icon className="h-4 w-4 text-foreground/70" />
+        </div>
+        <h3 className="font-medium text-sm truncate">{agent.name}</h3>
+      </div>
+
+      {/* 描述 - 单行截断 */}
+      <p className="text-xs text-muted-foreground truncate leading-relaxed">
+        {agent.description || config.label}
+      </p>
+
+      {/* 底部按钮 */}
+      <div className="pt-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          className="w-full h-8 text-xs"
+        >
+          {t("ai:chat.startChat")}
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 export function Component() {
@@ -47,37 +90,14 @@ export function Component() {
           <p className="text-sm text-muted-foreground">{t("ai:agents.empty")}</p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {agents.map((agent: AgentInfo) => {
-            const Icon = TYPE_ICON[agent.type] ?? Bot
-            return (
-              <Card key={agent.id} className="flex flex-col">
-                <CardHeader className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Icon className="h-4 w-4 text-muted-foreground" />
-                    <Badge variant="outline" className="text-xs">
-                      {t(`ai:agents.agentTypes.${agent.type}`)}
-                    </Badge>
-                  </div>
-                  <CardTitle className="text-base">{agent.name}</CardTitle>
-                  {agent.description && (
-                    <CardDescription className="line-clamp-2">{agent.description}</CardDescription>
-                  )}
-                </CardHeader>
-                <CardFooter>
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    disabled={createSessionMutation.isPending}
-                    onClick={() => createSessionMutation.mutate(agent.id)}
-                  >
-                    <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                    {t("ai:chat.startChat")}
-                  </Button>
-                </CardFooter>
-              </Card>
-            )
-          })}
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {agents.map((agent: AgentInfo) => (
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onChat={() => createSessionMutation.mutate(agent.id)}
+            />
+          ))}
         </div>
       )}
     </div>

@@ -245,6 +245,12 @@
     "title": "Agents",
     "create": "New Agent",
     "edit": "Edit Agent",
+    "sections": {
+      "basic": "Basic Info",
+      "modelConfig": "Model Config",
+      "execution": "Execution Config",
+      "instructions": "Instructions"
+    },
     "searchPlaceholder": "Search agent name",
     "name": "Agent Name",
     "namePlaceholder": "e.g. Customer Support Bot",

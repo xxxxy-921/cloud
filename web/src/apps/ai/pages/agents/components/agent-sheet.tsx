@@ -140,122 +140,159 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="sm:max-w-lg overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>{isEditing ? t("ai:agents.edit") : t("ai:agents.create")}</SheetTitle>
+      <SheetContent className="sm:max-w-xl overflow-y-auto px-5">
+        <SheetHeader className="pb-4">
+          <SheetTitle className="flex items-center gap-2">
+            <Bot className="h-5 w-5" />
+            {isEditing ? t("ai:agents.edit") : t("ai:agents.create")}
+          </SheetTitle>
           <SheetDescription className="sr-only">
             {isEditing ? t("ai:agents.edit") : t("ai:agents.create")}
           </SheetDescription>
         </SheetHeader>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-5 px-4">
-            {/* Basic fields */}
-            <FormField control={form.control} name="name" render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t("ai:agents.name")}</FormLabel>
-                <FormControl><Input placeholder={t("ai:agents.namePlaceholder")} {...field} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )} />
+          <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-6">
+            {/* === Section: Basic Info === */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <FileText className="h-4 w-4" />
+                {t("ai:agents.sections.basic")}
+              </div>
 
-            <FormField control={form.control} name="description" render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t("ai:agents.description")}</FormLabel>
-                <FormControl><Textarea placeholder={t("ai:agents.descriptionPlaceholder")} rows={2} {...field} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )} />
+              <div className="grid grid-cols-2 gap-3">
+                <FormField control={form.control} name="name" render={({ field }) => (
+                  <FormItem className="col-span-2">
+                    <FormLabel>{t("ai:agents.name")}</FormLabel>
+                    <FormControl><Input placeholder={t("ai:agents.namePlaceholder")} {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
 
-            <div className="grid grid-cols-2 gap-4">
-              <FormField control={form.control} name="type" render={({ field }) => (
+                <FormField control={form.control} name="type" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("ai:agents.type")}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={isEditing}>
+                      <FormControl><SelectTrigger className="w-full"><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="assistant">{t("ai:agents.agentTypes.assistant")}</SelectItem>
+                        <SelectItem value="coding">{t("ai:agents.agentTypes.coding")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="visibility" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("ai:agents.visibility")}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger className="w-full"><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="private">{t("ai:agents.visibilityOptions.private")}</SelectItem>
+                        <SelectItem value="team">{t("ai:agents.visibilityOptions.team")}</SelectItem>
+                        <SelectItem value="public">{t("ai:agents.visibilityOptions.public")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+
+              <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t("ai:agents.type")}</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value} disabled={isEditing}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      <SelectItem value="assistant">{t("ai:agents.agentTypes.assistant")}</SelectItem>
-                      <SelectItem value="coding">{t("ai:agents.agentTypes.coding")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )} />
-
-              <FormField control={form.control} name="visibility" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t("ai:agents.visibility")}</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      <SelectItem value="private">{t("ai:agents.visibilityOptions.private")}</SelectItem>
-                      <SelectItem value="team">{t("ai:agents.visibilityOptions.team")}</SelectItem>
-                      <SelectItem value="public">{t("ai:agents.visibilityOptions.public")}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <FormLabel>{t("ai:agents.description")}</FormLabel>
+                  <FormControl><Textarea placeholder={t("ai:agents.descriptionPlaceholder")} rows={2} {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
             </div>
 
-            {/* === Assistant-specific fields === */}
+            <Separator />
+
+            {/* === Section: Assistant-specific fields === */}
             {watchType === "assistant" && (
               <>
-                <div className="grid grid-cols-2 gap-4">
-                  <FormField control={form.control} name="strategy" render={({ field }) => (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Settings2 className="h-4 w-4" />
+                    {t("ai:agents.sections.modelConfig")}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField control={form.control} name="modelId" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.model")}</FormLabel>
+                        <Select onValueChange={(v) => field.onChange(Number(v))} value={field.value ? String(field.value) : ""}>
+                          <FormControl><SelectTrigger className="w-full"><SelectValue placeholder={t("ai:agents.selectModel")} /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            {models.map((m) => (
+                              <SelectItem key={m.id} value={String(m.id)}>{m.displayName}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+
+                    <FormField control={form.control} name="strategy" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.strategy")}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || "react"}>
+                          <FormControl><SelectTrigger className="w-full"><SelectValue /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="react">{t("ai:agents.strategies.react")}</SelectItem>
+                            <SelectItem value="plan_and_execute">{t("ai:agents.strategies.plan_and_execute")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
+
+                  <FormField control={form.control} name="systemPrompt" render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t("ai:agents.strategy")}</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || "react"}>
-                        <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          <SelectItem value="react">{t("ai:agents.strategies.react")}</SelectItem>
-                          <SelectItem value="plan_and_execute">{t("ai:agents.strategies.plan_and_execute")}</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <FormLabel>{t("ai:agents.systemPrompt")}</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder={t("ai:agents.systemPromptPlaceholder")}
+                          rows={6}
+                          className="min-h-[120px] resize-y font-mono text-sm"
+                          {...field}
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
 
-                  <FormField control={form.control} name="modelId" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("ai:agents.model")}</FormLabel>
-                      <Select onValueChange={(v) => field.onChange(Number(v))} value={field.value ? String(field.value) : ""}>
-                        <FormControl><SelectTrigger><SelectValue placeholder={t("ai:agents.selectModel")} /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          {models.map((m) => (
-                            <SelectItem key={m.id} value={String(m.id)}>{m.displayName}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField control={form.control} name="temperature" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="flex items-center gap-2">
+                          {t("ai:agents.temperature")}
+                          <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{field.value}</span>
+                        </FormLabel>
+                        <FormControl>
+                          <input
+                            type="range"
+                            min={0} max={2} step={0.1}
+                            value={field.value ?? 0.7}
+                            onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                            className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
 
-                <FormField control={form.control} name="systemPrompt" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("ai:agents.systemPrompt")}</FormLabel>
-                    <FormControl><Textarea placeholder={t("ai:agents.systemPromptPlaceholder")} rows={4} {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
+                    <FormField control={form.control} name="maxTurns" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.maxTurns")}</FormLabel>
+                        <FormControl><Input type="number" {...field} /></FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
 
-                <FormField control={form.control} name="temperature" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("ai:agents.temperature")}: {field.value}</FormLabel>
-                    <FormControl>
-                      <input
-                        type="range"
-                        min={0} max={2} step={0.1}
-                        value={field.value ?? 0.7}
-                        onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                        className="w-full"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-
-                <div className="grid grid-cols-2 gap-4">
                   <FormField control={form.control} name="maxTokens" render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("ai:agents.maxTokens")}</FormLabel>
@@ -263,83 +300,99 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
                       <FormMessage />
                     </FormItem>
                   )} />
-
-                  <FormField control={form.control} name="maxTurns" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("ai:agents.maxTurns")}</FormLabel>
-                      <FormControl><Input type="number" {...field} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
                 </div>
+
+                <Separator />
               </>
             )}
 
-            {/* === Coding-specific fields === */}
+            {/* === Section: Coding-specific fields === */}
             {watchType === "coding" && (
               <>
-                <div className="grid grid-cols-2 gap-4">
-                  <FormField control={form.control} name="runtime" render={({ field }) => (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Cpu className="h-4 w-4" />
+                    {t("ai:agents.sections.execution")}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField control={form.control} name="runtime" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.runtime")}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || "claude-code"}>
+                          <FormControl><SelectTrigger className="w-full"><SelectValue /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="claude-code">{t("ai:agents.runtimes.claude-code")}</SelectItem>
+                            <SelectItem value="codex">{t("ai:agents.runtimes.codex")}</SelectItem>
+                            <SelectItem value="opencode">{t("ai:agents.runtimes.opencode")}</SelectItem>
+                            <SelectItem value="aider">{t("ai:agents.runtimes.aider")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+
+                    <FormField control={form.control} name="execMode" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.execMode")}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || "local"}>
+                          <FormControl><SelectTrigger className="w-full"><SelectValue /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="local">{t("ai:agents.execModes.local")}</SelectItem>
+                            <SelectItem value="remote">{t("ai:agents.execModes.remote")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
+
+                  <FormField control={form.control} name="workspace" render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t("ai:agents.runtime")}</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || "claude-code"}>
-                        <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          <SelectItem value="claude-code">{t("ai:agents.runtimes.claude-code")}</SelectItem>
-                          <SelectItem value="codex">{t("ai:agents.runtimes.codex")}</SelectItem>
-                          <SelectItem value="opencode">{t("ai:agents.runtimes.opencode")}</SelectItem>
-                          <SelectItem value="aider">{t("ai:agents.runtimes.aider")}</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <FormLabel>{t("ai:agents.workspace")}</FormLabel>
+                      <FormControl><Input placeholder={t("ai:agents.workspacePlaceholder")} {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
 
-                  <FormField control={form.control} name="execMode" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("ai:agents.execMode")}</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || "local"}>
-                        <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          <SelectItem value="local">{t("ai:agents.execModes.local")}</SelectItem>
-                          <SelectItem value="remote">{t("ai:agents.execModes.remote")}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
+                  {watchExecMode === "remote" && (
+                    <FormField control={form.control} name="nodeId" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.node")}</FormLabel>
+                        <FormControl><Input type="number" placeholder={t("ai:agents.selectNode")} {...field} /></FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  )}
                 </div>
 
-                <FormField control={form.control} name="workspace" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("ai:agents.workspace")}</FormLabel>
-                    <FormControl><Input placeholder={t("ai:agents.workspacePlaceholder")} {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-
-                {watchExecMode === "remote" && (
-                  <FormField control={form.control} name="nodeId" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("ai:agents.node")}</FormLabel>
-                      <FormControl><Input type="number" placeholder={t("ai:agents.selectNode")} {...field} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                )}
+                <Separator />
               </>
             )}
 
-            {/* Common: Instructions */}
-            <FormField control={form.control} name="instructions" render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t("ai:agents.instructions")}</FormLabel>
-                <FormControl><Textarea placeholder={t("ai:agents.instructionsPlaceholder")} rows={3} {...field} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )} />
+            {/* === Section: Instructions === */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <FileText className="h-4 w-4" />
+                {t("ai:agents.sections.instructions")}
+              </div>
 
-            <SheetFooter>
+              <FormField control={form.control} name="instructions" render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <Textarea
+                      placeholder={t("ai:agents.instructionsPlaceholder")}
+                      rows={5}
+                      className="min-h-[100px] resize-y"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+            </div>
+
+            <SheetFooter className="pt-2 border-t">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("common:cancel")}
               </Button>

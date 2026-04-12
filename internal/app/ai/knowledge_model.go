@@ -89,6 +89,7 @@ type CompileProgress struct {
 	Nodes       ProgressCounter `json:"nodes"`
 	Embeddings  ProgressCounter `json:"embeddings"`
 	CurrentItem string          `json:"currentItem"`
+	StartedAt   int64           `json:"startedAt"` // Unix timestamp when compile started
 }
 
 // --- KnowledgeBase ---

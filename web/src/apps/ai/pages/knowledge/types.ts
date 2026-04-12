@@ -14,6 +14,7 @@ export interface CompileProgress {
   nodes: ProgressCounter
   embeddings: ProgressCounter
   currentItem: string
+  startedAt: number // Unix timestamp when compile started
 }
 
 export interface KnowledgeBaseDetail {

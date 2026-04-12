@@ -245,6 +245,12 @@
     "title": "智能体管理",
     "create": "新建智能体",
     "edit": "编辑智能体",
+    "sections": {
+      "basic": "基本信息",
+      "modelConfig": "模型配置",
+      "execution": "执行配置",
+      "instructions": "附加指令"
+    },
     "searchPlaceholder": "搜索智能体名称",
     "name": "智能体名称",
     "namePlaceholder": "例如：客服助手",
