@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useQuery, useMutation } from "@tanstack/react-query"
-import { Bot, BrainCircuit, Code2, MessageSquare } from "lucide-react"
+import { Bot, BrainCircuit, Code2 } from "lucide-react"
 import { agentApi, sessionApi, type AgentInfo } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
@@ -43,7 +43,7 @@ function AgentCard({ agent, onChat }: { agent: AgentInfo; onChat: () => void }) 
       </p>
 
       {/* 底部按钮 */}
-      <div className="pt-1">
+      <div className="mt-auto pt-2">
         <Button
           variant="secondary"
           size="sm"
@@ -75,11 +75,8 @@ export function Component() {
   })
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <MessageSquare className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">{t("ai:chat.selectAgent")}</h2>
-      </div>
+    <div className="space-y-4">
+      <h2 className="text-lg font-semibold">{t("ai:chat.selectAgent")}</h2>
       <p className="text-sm text-muted-foreground">{t("ai:chat.selectAgentHint")}</p>
 
       {isLoading ? (
@@ -90,7 +87,7 @@ export function Component() {
           <p className="text-sm text-muted-foreground">{t("ai:agents.empty")}</p>
         </div>
       ) : (
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {agents.map((agent: AgentInfo) => (
             <AgentCard
               key={agent.id}

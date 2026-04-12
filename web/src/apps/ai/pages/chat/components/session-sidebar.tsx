@@ -11,9 +11,10 @@ import { cn } from "@/lib/utils"
 interface SessionSidebarProps {
   agentId?: number
   currentSessionId?: number
+  collapsed?: boolean
 }
 
-export function SessionSidebar({ agentId, currentSessionId }: SessionSidebarProps) {
+export function SessionSidebar({ agentId, currentSessionId, collapsed = false }: SessionSidebarProps) {
   const { t } = useTranslation(["ai"])
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -46,8 +47,47 @@ export function SessionSidebar({ agentId, currentSessionId }: SessionSidebarProp
     onError: (err) => toast.error(err.message),
   })
 
+  if (collapsed) {
+    return (
+      <div className="w-12 border-r flex flex-col shrink-0 transition-all duration-200">
+        <div className="p-2 border-b">
+          <Button
+            variant="outline"
+            size="icon"
+            className="w-8 h-8"
+            disabled={!agentId || createMutation.isPending}
+            onClick={() => createMutation.mutate()}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        <ScrollArea className="flex-1">
+          <div className="p-1.5 space-y-1">
+            {sessions.map((s: AgentSession) => (
+              <button
+                key={s.id}
+                type="button"
+                className={cn(
+                  "w-full flex items-center justify-center h-8 rounded-md hover:bg-accent",
+                  s.id === currentSessionId && "bg-accent"
+                )}
+                onClick={() => navigate(`/ai/chat/${s.id}`)}
+                title={s.title || `#${s.id}`}
+              >
+                <MessageSquare className={cn(
+                  "h-4 w-4 shrink-0",
+                  s.id === currentSessionId ? "text-foreground" : "text-muted-foreground"
+                )} />
+              </button>
+            ))}
+          </div>
+        </ScrollArea>
+      </div>
+    )
+  }
+
   return (
-    <div className="w-64 border-r flex flex-col shrink-0 hidden md:flex">
+    <div className="w-64 border-r flex flex-col shrink-0 transition-all duration-200 hidden md:flex">
       <div className="p-3 border-b">
         <Button
           variant="outline"

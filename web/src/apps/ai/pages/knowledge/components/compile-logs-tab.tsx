@@ -52,7 +52,7 @@ function CascadeDetailsRow({ log }: { log: LogItem }) {
   const [expanded, setExpanded] = useState(false)
 
   const cascade = log.cascadeDetails
-  if (!cascade || cascade.cascadeUpdates.length === 0) return null
+  if (!cascade || !cascade.cascadeUpdates || cascade.cascadeUpdates.length === 0) return null
 
   return (
     <TableRow className="bg-muted/30">
@@ -65,13 +65,13 @@ function CascadeDetailsRow({ log }: { log: LogItem }) {
             onClick={() => setExpanded(!expanded)}
           >
             {expanded ? <ChevronDown className="h-3 w-3 mr-1" /> : <ChevronRight className="h-3 w-3 mr-1" />}
-            {expanded ? t("knowledge.logs.hideCascade") : t("knowledge.logs.showCascade", { count: cascade.cascadeUpdates.length })}
+            {expanded ? t("knowledge.logs.hideCascade") : t("knowledge.logs.showCascade", { count: cascade.cascadeUpdates?.length ?? 0 })}
           </Button>
 
           {expanded && (
             <div className="pl-4 space-y-2">
               {/* Primary Nodes */}
-              {cascade.primaryNodes.length > 0 && (
+              {cascade.primaryNodes && cascade.primaryNodes.length > 0 && (
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">{t("knowledge.logs.primaryNodes")}:</p>
                   <div className="flex flex-wrap gap-1">

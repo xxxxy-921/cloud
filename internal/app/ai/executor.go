@@ -25,8 +25,8 @@ type AgentExecuteConfig struct {
 	Type          string
 	Strategy      string
 	ModelID       uint
-	ModelName     string // Actual model identifier (e.g., "claude-opus-4-20250514")
-	Temperature   float64
+	ModelName     string  // Actual model identifier (e.g., "claude-opus-4-20250514")
+	Temperature   *float32 // nil means don't send temperature (for models that don't support it)
 	MaxTokens     int
 	Runtime       string
 	RuntimeConfig json.RawMessage

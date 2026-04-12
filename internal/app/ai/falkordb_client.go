@@ -51,7 +51,12 @@ func (c *FalkorDBClient) GraphFor(kbID uint) *falkordb.Graph {
 // DeleteGraph deletes the graph for a knowledge base.
 func (c *FalkorDBClient) DeleteGraph(kbID uint) error {
 	graph := c.GraphFor(kbID)
-	return graph.Delete()
+	err := graph.Delete()
+	// Ignore error if graph doesn't exist (never compiled)
+	if err != nil && err.Error() == "ERR Invalid graph operation on empty key" {
+		return nil
+	}
+	return err
 }
 
 // Available returns true if FalkorDB is configured and connected.

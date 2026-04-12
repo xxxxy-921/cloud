@@ -45,7 +45,6 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 		}
 
 		tools := buildLLMTools(req.Tools)
-		temp := float32(req.AgentConfig.Temperature)
 		var totalInput, totalOutput int
 
 		for turn := 1; turn <= maxTurns; turn++ {
@@ -59,10 +58,11 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 			emit(Event{Type: EventTypeLLMStart, Turn: turn, Model: req.AgentConfig.Runtime})
 
 			chatReq := llm.ChatRequest{
+				Model:       req.AgentConfig.ModelName,
 				Messages:    messages,
 				Tools:       tools,
 				MaxTokens:   req.AgentConfig.MaxTokens,
-				Temperature: &temp,
+				Temperature: req.AgentConfig.Temperature,
 			}
 
 			streamCh, err := e.llmClient.ChatStream(ctx, chatReq)

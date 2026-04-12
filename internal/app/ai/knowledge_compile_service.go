@@ -189,12 +189,14 @@ func (s *KnowledgeCompileService) HandleCompile(ctx context.Context, payload jso
 		if updateErr := s.kbRepo.Update(kb); updateErr != nil {
 			slog.Error("failed to update kb status", "kb_id", kb.ID, "error", updateErr)
 		}
-		s.logRepo.Create(&KnowledgeLog{
+		if logErr := s.logRepo.Create(&KnowledgeLog{
 			KbID:         kb.ID,
 			Action:       KnowledgeLogCompile,
 			ModelID:      modelIDStr,
 			ErrorMessage: err.Error(),
-		})
+		}); logErr != nil {
+			slog.Error("knowledge compile: failed to create log", "kb_id", kb.ID, "error", logErr)
+		}
 		return fmt.Errorf("LLM call: %w", err)
 	}
 
@@ -205,12 +207,14 @@ func (s *KnowledgeCompileService) HandleCompile(ctx context.Context, payload jso
 		if updateErr := s.kbRepo.Update(kb); updateErr != nil {
 			slog.Error("failed to update kb status", "kb_id", kb.ID, "error", updateErr)
 		}
-		s.logRepo.Create(&KnowledgeLog{
+		if logErr := s.logRepo.Create(&KnowledgeLog{
 			KbID:         kb.ID,
 			Action:       KnowledgeLogCompile,
 			ModelID:      modelIDStr,
 			ErrorMessage: "parse LLM output: " + err.Error(),
-		})
+		}); logErr != nil {
+			slog.Error("knowledge compile: failed to create log", "kb_id", kb.ID, "error", logErr)
+		}
 		return fmt.Errorf("parse output: %w", err)
 	}
 
@@ -236,6 +240,7 @@ func (s *KnowledgeCompileService) HandleCompile(ctx context.Context, payload jso
 		if updateErr := s.kbRepo.Update(kb); updateErr != nil {
 			slog.Error("failed to update kb status", "kb_id", kb.ID, "error", updateErr)
 		}
+		slog.Error("knowledge compile: write output failed", "kb_id", kb.ID, "error", err)
 		return fmt.Errorf("write output: %w", err)
 	}
 

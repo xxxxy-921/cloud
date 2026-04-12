@@ -54,11 +54,11 @@ func (e *PlanAndExecuteExecutor) Execute(ctx context.Context, req ExecuteRequest
 			last.Content += planningPromptSuffix
 		}
 
-		temp := float32(req.AgentConfig.Temperature)
 		planResp, err := e.llmClient.Chat(ctx, llm.ChatRequest{
+			Model:       req.AgentConfig.ModelName,
 			Messages:    planMessages,
 			MaxTokens:   req.AgentConfig.MaxTokens,
-			Temperature: &temp,
+			Temperature: req.AgentConfig.Temperature,
 		})
 		if err != nil {
 			emit(Event{Type: EventTypeError, Message: fmt.Sprintf("planning failed: %v", err)})
@@ -101,10 +101,11 @@ func (e *PlanAndExecuteExecutor) Execute(ctx context.Context, req ExecuteRequest
 			// Run a mini ReAct loop for this step (max 5 turns per step)
 			for turn := 0; turn < 5; turn++ {
 				streamCh, err := e.llmClient.ChatStream(ctx, llm.ChatRequest{
+					Model:       req.AgentConfig.ModelName,
 					Messages:    stepMessages,
 					Tools:       tools,
 					MaxTokens:   req.AgentConfig.MaxTokens,
-					Temperature: &temp,
+					Temperature: req.AgentConfig.Temperature,
 				})
 				if err != nil {
 					emit(Event{Type: EventTypeError, Message: fmt.Sprintf("step %d failed: %v", step.Index, err)})

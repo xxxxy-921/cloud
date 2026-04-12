@@ -102,6 +102,13 @@ func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (<-chan Event, 
 		}
 	}
 
+	// Convert temperature to *float32 (nil if 0 to avoid sending it for models that don't support it)
+	var tempPtr *float32
+	if agent.Temperature != 0 {
+		temp := float32(agent.Temperature)
+		tempPtr = &temp
+	}
+
 	execReq := ExecuteRequest{
 		SessionID: sessionID,
 		AgentConfig: AgentExecuteConfig{
@@ -109,7 +116,7 @@ func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (<-chan Event, 
 			Strategy:      agent.Strategy,
 			ModelID:       modelID,
 			ModelName:     modelName,
-			Temperature:   agent.Temperature,
+			Temperature:   tempPtr,
 			MaxTokens:     agent.MaxTokens,
 			Runtime:       agent.Runtime,
 			RuntimeConfig: agent.RuntimeConfig,
