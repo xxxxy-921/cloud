@@ -91,11 +91,24 @@ func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (<-chan Event, 
 		return nil, fmt.Errorf("build tools: %w", err)
 	}
 
+	// Fetch model info for ModelName
+	var modelID uint
+	var modelName string
+	if agent.ModelID != nil {
+		modelID = *agent.ModelID
+		model, err := gw.modelRepo.FindByID(*agent.ModelID)
+		if err == nil {
+			modelName = model.ModelID
+		}
+	}
+
 	execReq := ExecuteRequest{
 		SessionID: sessionID,
 		AgentConfig: AgentExecuteConfig{
 			Type:          agent.Type,
 			Strategy:      agent.Strategy,
+			ModelID:       modelID,
+			ModelName:     modelName,
 			Temperature:   agent.Temperature,
 			MaxTokens:     agent.MaxTokens,
 			Runtime:       agent.Runtime,

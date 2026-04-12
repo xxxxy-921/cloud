@@ -25,6 +25,7 @@ type AgentExecuteConfig struct {
 	Type          string
 	Strategy      string
 	ModelID       uint
+	ModelName     string // Actual model identifier (e.g., "claude-opus-4-20250514")
 	Temperature   float64
 	MaxTokens     int
 	Runtime       string

@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"io"
+	"net/http"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -15,6 +17,10 @@ func newOpenAIClient(baseURL, apiKey string) *openaiClient {
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		cfg.BaseURL = baseURL
+	}
+	// Set HTTP client with 60s timeout to avoid Cloudflare 524 error
+	cfg.HTTPClient = &http.Client{
+		Timeout: 60 * time.Second,
 	}
 	return &openaiClient{client: openai.NewClientWithConfig(cfg)}
 }

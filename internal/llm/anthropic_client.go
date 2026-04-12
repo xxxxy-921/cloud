@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -15,6 +17,10 @@ type anthropicClient struct {
 func newAnthropicClient(baseURL, apiKey string) *anthropicClient {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
+		// Set HTTP client with 60s timeout to avoid Cloudflare 524 error
+		option.WithHTTPClient(&http.Client{
+			Timeout: 60 * time.Second,
+		}),
 	}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
