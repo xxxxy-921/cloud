@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/robfig/cron/v3"
 	"github.com/samber/do/v2"
 
@@ -328,26 +329,18 @@ func hashContent(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// simpleHTMLToMarkdown does a basic HTML to text conversion.
-// Strips tags, preserves text content. For production, use a proper library.
+// simpleHTMLToMarkdown converts HTML to clean Markdown using html-to-markdown.
 func simpleHTMLToMarkdown(html string) string {
-	// Remove script and style blocks
-	for _, tag := range []string{"script", "style", "nav", "footer", "header"} {
-		for {
-			start := strings.Index(strings.ToLower(html), "<"+tag)
-			if start == -1 {
-				break
-			}
-			end := strings.Index(strings.ToLower(html[start:]), "</"+tag+">")
-			if end == -1 {
-				html = html[:start]
-				break
-			}
-			html = html[:start] + html[start+end+len("</"+tag+">"):]
-		}
+	md, err := htmltomarkdown.ConvertString(html)
+	if err != nil {
+		slog.Warn("html-to-markdown conversion failed, falling back to tag stripping", "error", err)
+		return stripHTMLTags(html)
 	}
+	return md
+}
 
-	// Strip remaining HTML tags
+// stripHTMLTags is a minimal fallback: removes all HTML tags and cleans whitespace.
+func stripHTMLTags(html string) string {
 	var result strings.Builder
 	inTag := false
 	for _, r := range html {
@@ -360,8 +353,6 @@ func simpleHTMLToMarkdown(html string) string {
 			result.WriteRune(r)
 		}
 	}
-
-	// Clean up whitespace
 	lines := strings.Split(result.String(), "\n")
 	var cleaned []string
 	for _, line := range lines {

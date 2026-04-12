@@ -30,6 +30,10 @@ github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2 h1:oygO0locgZJ
 github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2/go.mod h1:wP83P5OoQ5p6ip3ScPr0BAq0BvuPAvacpEuSzyouqAI=
 github.com/FalkorDB/falkordb-go/v2 v2.1.0 h1:gWw745P/HlaT4INn6yUEWDYj199BkY17TpEtH9MJxC4=
 github.com/FalkorDB/falkordb-go/v2 v2.1.0/go.mod h1:Oyo2k7KLL7JqeNQm/e7zJDz547Bw5tyLgiZFmB/DJ34=
+github.com/JohannesKaufmann/dom v0.2.0 h1:1bragmEb19K8lHAqgFgqCpiPCFEZMTXzOIEjuxkUfLQ=
+github.com/JohannesKaufmann/dom v0.2.0/go.mod h1:57iSUl5RKric4bUkgos4zu6Xt5LMHUnw3TF1l5CbGZo=
+github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0 h1:mklaPbT4f/EiDr1Q+zPrEt9lgKAkVrIBtWf33d9GpVA=
+github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0/go.mod h1:D56Cl9r8M5i3UwAchE+LlLc5hPN3kJtdZNVJn06lSHU=
 github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e h1:4dAU9FXIyQktpoUAgOJK3OTFc/xug0PCXYCqU0FgDKI=
 github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e/go.mod h1:cEWa1LVoE5KvSD9ONXsZrj0z6KqySlCCNKHlLzbqAt4=
 github.com/anthropics/anthropic-sdk-go v1.35.0 h1:W6K8mIkD1zIU0VUPMuokWONUvdlt2C//b11Zr6v5Oz4=

@@ -142,7 +142,9 @@ func (h *KnowledgeQueryHandler) respondSearchResult(
 	for _, n := range nodes {
 		var ids []uint
 		if n.SourceIDs != "" {
-			_ = json.Unmarshal([]byte(n.SourceIDs), &ids)
+			if err := json.Unmarshal([]byte(n.SourceIDs), &ids); err != nil {
+				slog.Warn("failed to parse node source_ids", "node_id", n.ID, "source_ids", n.SourceIDs, "error", err)
+			}
 		}
 		for i, id := range ids {
 			if i >= 3 {
@@ -153,7 +155,7 @@ func (h *KnowledgeQueryHandler) respondSearchResult(
 	}
 
 	// Batch-fetch source records and build sourceTexts map
-	var sourceTexts []SourceTextEntry
+	sourceTexts := make([]SourceTextEntry, 0)
 	if len(sourceIDSet) > 0 {
 		sourceIDs := make([]uint, 0, len(sourceIDSet))
 		for id := range sourceIDSet {
@@ -161,12 +163,15 @@ func (h *KnowledgeQueryHandler) respondSearchResult(
 		}
 		sources, err := h.sourceRepo.FindByIDs(sourceIDs)
 		if err != nil {
-			slog.Debug("failed to fetch sources for RAG grounding", "error", err)
+			slog.Warn("failed to fetch sources for RAG grounding", "source_ids", sourceIDs, "error", err)
 		} else {
+			if len(sources) < len(sourceIDs) {
+				slog.Warn("some sources not found for RAG grounding", "requested", len(sourceIDs), "found", len(sources))
+			}
 			for _, src := range sources {
 				content := src.Content
-				if len(content) > 2000 {
-					content = content[:2000]
+				if len(content) > 5000 {
+					content = content[:5000]
 				}
 				sourceTexts = append(sourceTexts, SourceTextEntry{
 					ID:      src.ID,

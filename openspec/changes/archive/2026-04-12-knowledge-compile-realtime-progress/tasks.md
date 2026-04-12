@@ -50,11 +50,11 @@
 
 ## 7. Testing & Verification
 
-- [ ] 7.1 Test progress updates correctly during source reading phase
-- [ ] 7.2 Test progress shows "calling_llm" stage during LLM call
-- [ ] 7.3 Test nodes count displays correctly when LLM returns
-- [ ] 7.4 Test progress increments during node writing
-- [ ] 7.5 Test progress increments during embedding generation
-- [ ] 7.6 Test progress clears after compilation completes
-- [ ] 7.7 Test polling stops when user navigates away
-- [ ] 7.8 Test page refresh shows current progress
+- [x] 7.1 Test progress updates correctly during source reading phase
+- [x] 7.2 Test progress shows "calling_llm" stage during LLM call
+- [x] 7.3 Test nodes count displays correctly when LLM returns
+- [x] 7.4 Test progress increments during node writing
+- [x] 7.5 Test progress increments during embedding generation
+- [x] 7.6 Test progress clears after compilation completes
+- [x] 7.7 Test polling stops when user navigates away
+- [x] 7.8 Test page refresh shows current progress

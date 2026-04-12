@@ -51,10 +51,10 @@
 
 ## 8. Verification
 
-- [ ] 8.1 Test fast-path compilation: short source produces nodes with mandatory content, no empty nodes
-- [ ] 8.2 Test long-doc path: source exceeding maxChunkSize triggers three-phase, all produced nodes have content
-- [ ] 8.3 Test edge creation: references to non-existent concepts are skipped (no ghost nodes)
-- [ ] 8.4 Test incremental compilation: updated_nodes merge correctly, contradicts edges created
-- [ ] 8.5 Test recompilation: old nodes replaced, no index node generated
+- [x] 8.1 Test fast-path compilation: short source produces nodes with mandatory content, no empty nodes
+- [x] 8.2 Test long-doc path: source exceeding maxChunkSize triggers three-phase, all produced nodes have content
+- [x] 8.3 Test edge creation: references to non-existent concepts are skipped (no ghost nodes)
+- [x] 8.4 Test incremental compilation: updated_nodes merge correctly, contradicts edges created
+- [x] 8.5 Test recompilation: old nodes replaced, no index node generated
 - [x] 8.6 Verify `go build -tags dev ./cmd/server/` compiles without errors
 - [x] 8.7 Verify `cd web && bun run lint` passes

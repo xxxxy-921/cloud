@@ -91,6 +91,15 @@ func (r *KnowledgeSourceRepo) DeleteByParentID(parentID uint) error {
 	return r.db.Where("parent_id = ?", parentID).Delete(&KnowledgeSource{}).Error
 }
 
+// FindChildIDs returns IDs of child sources (URL crawl children) for the given parent.
+func (r *KnowledgeSourceRepo) FindChildIDs(parentID uint) ([]uint, error) {
+	var ids []uint
+	if err := r.db.Model(&KnowledgeSource{}).Where("parent_id = ?", parentID).Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (r *KnowledgeSourceRepo) FindByKbIDAndFormat(kbID uint, format string) ([]KnowledgeSource, error) {
 	var items []KnowledgeSource
 	if err := r.db.Where("kb_id = ? AND format = ?", kbID, format).Find(&items).Error; err != nil {

@@ -44,6 +44,43 @@ func (r *KnowledgeGraphRepo) DeleteGraph(kbID uint) error {
 	return nil
 }
 
+// DeleteNodesBySourceID deletes all nodes whose source_ids JSON array contains the given source ID,
+// along with their connected edges (FalkorDB cascades edge deletion on node removal).
+func (r *KnowledgeGraphRepo) DeleteNodesBySourceID(kbID uint, sourceID uint) (int64, error) {
+	g := r.client.GraphFor(kbID)
+
+	// source_ids is a JSON string like "[1,5,12]". Match the integer at array boundaries
+	// to avoid false positives (e.g. sourceID=1 matching "12").
+	idStr := fmt.Sprintf("%d", sourceID)
+	query := `MATCH (n:KnowledgeNode)
+WHERE n.source_ids CONTAINS $p1
+   OR n.source_ids CONTAINS $p2
+   OR n.source_ids CONTAINS $p3
+   OR n.source_ids CONTAINS $p4
+WITH n, count(n) AS cnt
+DELETE n
+RETURN sum(cnt) AS deleted`
+	params := map[string]interface{}{
+		"p1": "[" + idStr + "]",  // sole element: [1]
+		"p2": "[" + idStr + ",",  // first element: [1,
+		"p3": "," + idStr + "]",  // last element: ,1]
+		"p4": "," + idStr + ",",  // middle element: ,1,
+	}
+	result, err := g.Query(query, params, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "Graph does not exist") {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if result.Next() {
+		if v, ok := result.Record().Get("deleted"); ok {
+			return toInt64(v), nil
+		}
+	}
+	return 0, nil
+}
+
 // --- Node operations ---
 
 // CreateNode creates a new KnowledgeNode in FalkorDB.

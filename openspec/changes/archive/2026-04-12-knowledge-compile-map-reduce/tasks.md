@@ -25,4 +25,4 @@
 ## 5. 验证
 
 - [x] 5.1 `go build -tags dev ./cmd/server/` 编译通过
-- [ ] 5.2 手动测试：创建知识库，添加 2-3 个 source，触发编译，确认 Map-Reduce 流程正常完成
+- [x] 5.2 手动测试：创建知识库，添加 2-3 个 source，触发编译，确认 Map-Reduce 流程正常完成

@@ -33,6 +33,8 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Azure/go-ntlmssp v0.1.0 // indirect
 	github.com/FalkorDB/falkordb-go/v2 v2.1.0 // indirect
+	github.com/JohannesKaufmann/dom v0.2.0 // indirect
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.35.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect

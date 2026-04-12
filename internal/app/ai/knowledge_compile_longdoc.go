@@ -185,7 +185,8 @@ func (s *KnowledgeCompileService) scanChunks(ctx context.Context, llmClient llm.
 		}
 
 		resp, err := llmClient.Chat(ctx, llm.ChatRequest{
-			Model: modelID,
+			Model:     modelID,
+			MaxTokens: 8192,
 			Messages: []llm.Message{
 				{Role: llm.RoleSystem, Content: scanSystemPrompt},
 				{Role: llm.RoleUser, Content: prompt},
@@ -384,7 +385,8 @@ func (s *KnowledgeCompileService) writeConceptArticles(ctx context.Context, llmC
 		prompt := fmt.Sprintf("## Concept to write about: %s\n\nSummary: %s\n\n## Source material:\n\n%s", concept.Title, concept.Summary, evidence)
 
 		resp, err := llmClient.Chat(ctx, llm.ChatRequest{
-			Model: modelID,
+			Model:     modelID,
+			MaxTokens: 16384,
 			Messages: []llm.Message{
 				{Role: llm.RoleSystem, Content: systemPrompt},
 				{Role: llm.RoleUser, Content: prompt},

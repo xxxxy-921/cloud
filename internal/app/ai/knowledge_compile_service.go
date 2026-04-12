@@ -418,7 +418,8 @@ func (s *KnowledgeCompileService) mapSource(ctx context.Context, llmClient llm.C
 	systemPrompt := fmt.Sprintf(mapSystemPrompt, cfg.MinContentLength, cfg.TargetContentLength)
 
 	resp, err := llmClient.Chat(ctx, llm.ChatRequest{
-		Model: modelID,
+		Model:     modelID,
+		MaxTokens: 16384,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: systemPrompt},
 			{Role: llm.RoleUser, Content: prompt},
@@ -457,7 +458,8 @@ func (s *KnowledgeCompileService) runReducePhase(ctx context.Context, llmClient 
 	systemPrompt := fmt.Sprintf(compileSystemPrompt, cfg.TargetContentLength, cfg.MinContentLength)
 
 	resp, err := llmClient.Chat(ctx, llm.ChatRequest{
-		Model: modelID,
+		Model:     modelID,
+		MaxTokens: 16384,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: systemPrompt},
 			{Role: llm.RoleUser, Content: prompt},

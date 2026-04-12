@@ -40,4 +40,4 @@
 
 - [x] 7.1 Verify `go build -tags dev ./cmd/server/` compiles without errors
 - [x] 7.2 Verify `cd web && bun run lint` passes
-- [ ] 7.3 Test: recompile a knowledge base — nodes should have keywords, citation markers, and edges should have descriptions
+- [x] 7.3 Test: recompile a knowledge base — nodes should have keywords, citation markers, and edges should have descriptions

@@ -15,4 +15,4 @@
 ## 4. Verify
 
 - [x] 4.1 Run `go build -tags dev ./cmd/server/` to verify compilation
-- [ ] 4.2 Test agent conversation to confirm LLM calls succeed
+- [x] 4.2 Test agent conversation to confirm LLM calls succeed
