@@ -9,9 +9,10 @@ import { useKbSources } from "../hooks/use-kb-sources"
 import type { NodeItem, SourceItem } from "../types"
 
 function RecallCard({
-  node, sources, expandedId, expandedContent, loadingContent, onToggleExpand, t,
+  node, rank, sources, expandedId, expandedContent, loadingContent, onToggleExpand, t,
 }: {
   node: NodeItem
+  rank: number
   sources: SourceItem[]
   expandedId: string | null
   expandedContent: Record<string, string>
@@ -31,11 +32,9 @@ function RecallCard({
       <div className="flex items-start justify-between gap-2">
         <h4 className="font-medium leading-snug">{node.title}</h4>
         <div className="flex items-center gap-1.5 shrink-0">
-          {node.score != null && node.score > 0 && (
-            <span className="text-[10px] text-primary font-medium bg-primary/10 rounded px-1 py-0.5">
-              {(node.score * 100).toFixed(1)}%
-            </span>
-          )}
+          <span className="text-[10px] text-primary font-medium bg-primary/10 rounded px-1.5 py-0.5">
+            #{rank}
+          </span>
           <span className="text-xs text-muted-foreground whitespace-nowrap">
             {node.edgeCount} {t("ai:knowledge.recall.edgeCount")}
           </span>
@@ -150,10 +149,11 @@ export function RecallPanel({
         ) : results.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center mt-8">{t("ai:knowledge.recall.noResults")}</p>
         ) : (
-          results.map((node) => (
+          results.map((node, index) => (
             <RecallCard
               key={node.id}
               node={node}
+              rank={index + 1}
               sources={sources}
               expandedId={expandedId}
               expandedContent={expandedContent}

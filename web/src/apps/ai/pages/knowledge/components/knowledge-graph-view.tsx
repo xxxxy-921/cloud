@@ -154,6 +154,22 @@ export function KnowledgeGraphView({ kbId, highlightedNodeIds }: { kbId: number;
     graphRef.current?.zoomToFit(400, 40)
   }, [])
 
+  // Auto-fit when engine stops (simulation completes)
+  const handleEngineStop = useCallback(() => {
+    graphRef.current?.zoomToFit(600, 50)
+  }, [])
+
+  // Auto-fit when graph data changes (initial load)
+  useEffect(() => {
+    if (graphData.nodes.length > 0 && containerSize) {
+      // Small delay to ensure graph has rendered
+      const timer = setTimeout(() => {
+        graphRef.current?.zoomToFit(400, 50)
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [graphData.nodes.length, containerSize])
+
   const showGraph = !isLoading && graphData.nodes.length > 0 && containerSize
 
   return (
@@ -191,8 +207,10 @@ export function KnowledgeGraphView({ kbId, highlightedNodeIds }: { kbId: number;
           nodePointerAreaPaint={nodePointerAreaPaint}
           onNodeClick={handleNodeClick}
           cooldownTicks={100}
+          warmupTicks={30}
           enableZoomInteraction={true}
           enablePanInteraction={true}
+          onEngineStop={handleEngineStop}
         />
       )}
       {/* Legend */}

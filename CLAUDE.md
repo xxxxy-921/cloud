@@ -13,11 +13,20 @@ Metis is a Go 1.25 web application with an embedded React frontend. It compiles 
 make dev              # Run Go server (port 8080) with -tags dev (no frontend embed needed)
 make web-dev          # Run Vite dev server (port 3000, proxies /api → :8080)
 make build            # Build frontend + compile single binary (./metis)
-make release          # Cross-compile for linux/darwin/windows (amd64+arm64) → dist/
 make run              # build + run
+make release          # Cross-compile for linux/darwin/windows (amd64+arm64) → dist/
+
+# Sidecar (separate binary for remote agent execution)
+make build-sidecar    # Build sidecar binary (./metis-sidecar)
+make release-sidecar  # Cross-compile sidecar → dist/
+
+# License edition
 make build-license    # Build license edition binary (./metis-license)
 make release-license  # Cross-compile license edition → dist/
-cd web && bun run lint  # ESLint the frontend (includes React Compiler rules)
+
+# Frontend
+make web-build        # Build frontend for production
+cd web && bun run lint  # ESLint (includes React Compiler rules)
 ```
 
 For development, run `make dev` and `make web-dev` in separate terminals. The Vite dev server at :3000 proxies `/api/*` to the Go server at :8080. On first run, open `http://localhost:3000` — the install wizard will guide you through database selection, site setup, and admin account creation.
@@ -78,7 +87,7 @@ All dependencies are registered as `do.Provide()` providers in main.go and resol
                │
      ┌─────────┼─────────┐
      ▼         ▼         ▼
-  App: AI   App: License  ...     ← 可选模块，build tag 控制
+  App: AI   App: Node  App: License  ...     ← 可选模块，build tag 控制
 ```
 
 每个 App 实现 `app.App` 接口（`internal/app/app.go`）：
@@ -170,9 +179,74 @@ KnowledgeBase         → 知识库（compile status: idle/compiling/completed/e
 
 **LLM 编译**（`KnowledgeCompileService`）：使用知识库配置的模型（未配置则取默认 LLM），构造 prompt → 调用 `internal/llm.Client` → 解析 JSON 输出（nodes + updated_nodes）→ 写入 node/edge。`internal/llm/` 是共享的 LLM 客户端包，通过 Provider 的 protocol（openai-compatible）+ BaseURL + 加密 API Key 构建客户端。
 
-**Agent 查询 API**：`/api/v1/ai/knowledge/*` 使用 `node.NodeTokenMiddleware` 鉴权（非 JWT+Casbin），供 Agent 节点调用，不走标准中间件链。`internal/app/node/` 提供 Node token 的中间件和 repo。
-
 **URL 爬取**：支持 `crawlDepth`（递归抓取同域链接）和 `urlPattern`（前缀过滤子链接）。HTML 内容用简单正则转换为 Markdown，10MB 大小限制。
+
+### AI App: Agent Runtime
+
+Agent Runtime 是 AI App 的子系统，支持多轮对话会话和多种执行策略：
+
+**核心模型**：
+```
+Agent                 → 智能体配置（类型、策略、模型、工具绑定）
+  ├─ AgentTypeAssistant  → 通用助手（ReAct/Plan-and-Execute 策略）
+  ├─ AgentTypeCoding     → 编码助手（本地或远程执行）
+  └─ AgentTemplate       → 可复用的模板配置
+AgentSession          → 会话（多轮消息流）
+  └─ SessionMessage     → 消息（user/assistant/tool 角色）
+AgentMemory           → 长期记忆（关键信息提取存储）
+```
+
+**执行策略**：
+- **ReAct** (`AgentStrategyReact`) — 思考-行动-观察循环，适合多步推理
+- **Plan-and-Execute** (`AgentStrategyPlanAndExecute`) — 先规划再执行，适合复杂任务
+
+**编码执行模式** (`AgentTypeCoding`)：
+- **Local** — 本地执行（通过 `executor_coding_local.go` 直接调用 CLI 工具）
+- **Remote** — 远程执行（通过 Node/Sidecar 在远程节点上执行）
+
+**工具系统**：
+- **Tool Registry** — 内置工具注册表
+- **MCP Server** — Model Context Protocol 服务器支持
+- **Skill** — Git 仓库形式的技能包，可导入并绑定到 Agent
+
+**会话 API**：
+- `POST /api/v1/ai/sessions/:sid/messages` — 发送消息
+- `GET /api/v1/ai/sessions/:sid/stream` — SSE 流式响应
+- `POST /api/v1/ai/sessions/:sid/cancel` — 取消正在执行的会话
+
+### Node App: Sidecar Architecture
+
+Node App 提供远程节点管理，支持 Agent 的远程代码执行：
+
+```
+Node                  → 工作节点（注册 token、标签、资源限制）
+  ├─ NodeProcess      → 绑定的进程实例
+  └─ ProcessDef       → 进程定义（镜像、配置模板）
+NodeCommand           → 下发给节点的命令（启动/停止/重启/重载）
+NodeProcessLog        → 进程日志收集
+```
+
+**通信协议**：
+- Sidecar 在远程节点运行（`cmd/sidecar` 编译的独立二进制）
+- 长连接 SSE `/api/v1/nodes/sidecar/stream` — 服务器→节点命令推送
+- 轮询 `GET /api/v1/nodes/sidecar/commands` — 节点获取待处理命令
+- REST API — 心跳、日志上传、配置下载
+
+**认证**：Node Token（通过 `X-Node-Token` header），不同于用户 JWT。
+
+**Scheduler 任务**：
+- `node-offline-detection` — 检测心跳超时的离线节点
+- `node-command-cleanup` — 清理过期未确认命令
+- `node-log-cleanup` — 清理历史进程日志
+
+### Agent & Knowledge 的 Node Token API
+
+以下 API 使用 Node Token 鉴权（非 JWT+Casbin），供 Sidecar 调用：
+
+```
+/api/v1/ai/knowledge/*       → 知识查询（搜索、节点、图谱）
+/api/v1/ai/internal/skills/* → Skill 包下载
+```
 
 ### Frontend Stack (`web/src/`)
 

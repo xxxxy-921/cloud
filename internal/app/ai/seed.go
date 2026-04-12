@@ -378,6 +378,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/ai/knowledge-bases/:id/nodes/:nid/graph", "GET"},
 		{"admin", "/api/v1/ai/knowledge-bases/:id/logs", "GET"},
 		{"admin", "/api/v1/ai/knowledge-bases/:id/graph", "GET"},
+		{"admin", "/api/v1/ai/knowledge-bases/:id/search", "GET"},
 		// Tools
 		{"admin", "/api/v1/ai/tools", "GET"},
 		{"admin", "/api/v1/ai/tools/:id", "PUT"},
