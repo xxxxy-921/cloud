@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useChat, type UseChatHelpers } from "@ai-sdk/react"
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai"
 import { sessionApi, type SessionMessage } from "@/lib/api"
@@ -193,6 +193,14 @@ export function useAiChat(
     onFinish: options?.onFinish,
     onError: options?.onError,
   })
+
+  // Sync server-loaded messages when useChat doesn't pick them up on mount
+  const { messages: chatMessages, setMessages: chatSetMessages } = chat
+  useEffect(() => {
+    if (initialSessionMessages && chatMessages.length === 0) {
+      chatSetMessages(sessionMessagesToUIMessages(initialSessionMessages))
+    }
+  }, [initialSessionMessages, chatMessages.length, chatSetMessages])
 
   return {
     ...chat,
