@@ -27,7 +27,7 @@
 
 ## 5. Integration & Cleanup
 
-- [ ] 5.1 Run `make dev` and `make web-dev` to verify end-to-end flow: send message → stream text → tool call → done
-- [ ] 5.2 Verify no console errors and no DOM flashes when stream transitions from streaming to completed
+- [x] 5.1 Run `make dev` and `make web-dev` to verify end-to-end flow: send message → stream text → tool call → done
+- [x] 5.2 Verify no console errors and no DOM flashes when stream transitions from streaming to completed
 - [x] 5.3 Delete `use-chat-stream.ts` or move it to a legacy folder if rollback insurance is desired
 - [x] 5.4 Run `cd web && bun run lint` to ensure React Compiler and ESLint pass
