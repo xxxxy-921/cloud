@@ -10,6 +10,7 @@ import (
 	"github.com/samber/do/v2"
 
 	"metis/internal/handler"
+	"metis/internal/model"
 )
 
 type ModelHandler struct {
@@ -43,9 +44,9 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		return
 	}
 
-	caps := req.Capabilities
+	caps := model.JSONText(req.Capabilities)
 	if len(caps) == 0 {
-		caps = json.RawMessage("[]")
+		caps = model.JSONText("[]")
 	}
 
 	m := &AIModel{
@@ -146,7 +147,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	m.ModelID = req.ModelID
 	m.DisplayName = req.DisplayName
 	m.Type = req.Type
-	m.Capabilities = req.Capabilities
+	m.Capabilities = model.JSONText(req.Capabilities)
 	m.ContextWindow = req.ContextWindow
 	m.MaxOutputTokens = req.MaxOutputTokens
 	m.InputPrice = req.InputPrice

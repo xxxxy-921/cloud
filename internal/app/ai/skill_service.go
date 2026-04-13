@@ -14,6 +14,7 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	"metis/internal/model"
 	"metis/internal/pkg/crypto"
 )
 
@@ -58,9 +59,9 @@ func (s *SkillService) InstallFromUpload(data io.Reader) (*Skill, error) {
 		DisplayName: manifest.DisplayName,
 		Description: manifest.Description,
 		SourceType:  SkillSourceUpload,
-		Manifest:    manifestJSON,
+		Manifest:    model.JSONText(manifestJSON),
 		Instructions: instructions,
-		ToolsSchema: toolsSchema,
+		ToolsSchema: model.JSONText(toolsSchema),
 		AuthType:    AuthTypeNone,
 		IsActive:    true,
 	}

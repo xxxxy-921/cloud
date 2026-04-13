@@ -20,6 +20,8 @@
   "import": "导入",
   "copy": "复制",
   "copied": "已复制",
+  "expandAll": "全部展开",
+  "collapseAll": "全部收起",
   "actions": "操作",
   "status": "状态",
   "name": "名称",

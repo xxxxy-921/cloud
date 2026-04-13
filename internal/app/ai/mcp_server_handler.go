@@ -10,6 +10,7 @@ import (
 	"github.com/samber/do/v2"
 
 	"metis/internal/handler"
+	"metis/internal/model"
 )
 
 type MCPServerHandler struct {
@@ -53,8 +54,8 @@ func (h *MCPServerHandler) Create(c *gin.Context) {
 		Transport:   req.Transport,
 		URL:         req.URL,
 		Command:     req.Command,
-		Args:        req.Args,
-		Env:         req.Env,
+		Args:        model.JSONText(req.Args),
+		Env:         model.JSONText(req.Env),
 		AuthType:    authType,
 		IsActive:    req.IsActive,
 	}
@@ -143,8 +144,8 @@ func (h *MCPServerHandler) Update(c *gin.Context) {
 		Transport:   req.Transport,
 		URL:         req.URL,
 		Command:     req.Command,
-		Args:        req.Args,
-		Env:         req.Env,
+		Args:        model.JSONText(req.Args),
+		Env:         model.JSONText(req.Env),
 		AuthType:    authType,
 		IsActive:    req.IsActive,
 	}

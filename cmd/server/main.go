@@ -32,8 +32,8 @@ import (
 )
 
 func main() {
-	// 1. Try to load metis.yaml
-	cfg, err := config.Load("metis.yaml")
+	// 1. Try to load config.yml
+	cfg, err := config.Load("config.yml")
 	if err != nil && !errors.Is(err, config.ErrConfigNotFound) {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)

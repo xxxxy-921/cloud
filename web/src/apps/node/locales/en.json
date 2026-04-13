@@ -25,7 +25,7 @@
     "tokenCopied": "Token copied",
     "copyToken": "Copy Token",
     "installGuide": "Installation Guide",
-    "installStep1": "1. Download metis-sidecar to the target node",
+    "installStep1": "1. Download sidecar to the target node",
     "installStep2": "2. Create config file sidecar.yaml:",
     "installStep3": "3. Start the sidecar:",
     "rotateToken": "Rotate Token",

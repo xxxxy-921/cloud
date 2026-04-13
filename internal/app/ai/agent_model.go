@@ -84,15 +84,15 @@ type Agent struct {
 	MaxTurns     int     `json:"maxTurns" gorm:"default:10"`
 
 	// coding type fields
-	Runtime       string          `json:"runtime" gorm:"size:32"`
-	RuntimeConfig json.RawMessage `json:"runtimeConfig" gorm:"type:text"`
+	Runtime       string           `json:"runtime" gorm:"size:32"`
+	RuntimeConfig model.JSONText   `json:"runtimeConfig" gorm:"type:text"`
 	ExecMode      string          `json:"execMode" gorm:"size:16"`
 	NodeID        *uint           `json:"nodeId" gorm:"index"`
 	Workspace     string          `json:"workspace" gorm:"size:512"`
 
 	// common
 	Instructions     string          `json:"instructions" gorm:"type:text"`
-	SuggestedPrompts json.RawMessage `json:"suggestedPrompts" gorm:"type:text"`
+	SuggestedPrompts model.JSONText `json:"suggestedPrompts" gorm:"type:text"`
 }
 
 func (Agent) TableName() string { return "ai_agents" }
@@ -140,12 +140,12 @@ func (a *Agent) ToResponse() AgentResponse {
 		MaxTokens:     a.MaxTokens,
 		MaxTurns:      a.MaxTurns,
 		Runtime:       a.Runtime,
-		RuntimeConfig: a.RuntimeConfig,
+		RuntimeConfig: json.RawMessage(a.RuntimeConfig),
 		ExecMode:      a.ExecMode,
 		NodeID:        a.NodeID,
 		Workspace:     a.Workspace,
 		Instructions:  a.Instructions,
-		SuggestedPrompts: a.SuggestedPrompts,
+		SuggestedPrompts: json.RawMessage(a.SuggestedPrompts),
 		CreatedAt:     a.CreatedAt,
 		UpdatedAt:     a.UpdatedAt,
 	}
@@ -168,7 +168,7 @@ type AgentTemplate struct {
 	Description string          `json:"description" gorm:"type:text"`
 	Icon        string          `json:"icon" gorm:"size:64"`
 	Type        string          `json:"type" gorm:"size:16;not null"`
-	Config      json.RawMessage `json:"config" gorm:"type:text"`
+	Config      model.JSONText  `json:"config" gorm:"type:text"`
 }
 
 func (AgentTemplate) TableName() string { return "ai_agent_templates" }
@@ -184,7 +184,7 @@ type AgentTemplateResponse struct {
 }
 
 func (t *AgentTemplate) ToResponse() AgentTemplateResponse {
-	cfg := t.Config
+	cfg := json.RawMessage(t.Config)
 	if len(cfg) == 0 {
 		cfg = json.RawMessage("{}")
 	}
@@ -243,7 +243,7 @@ type SessionMessage struct {
 	SessionID uint            `json:"sessionId" gorm:"not null;index"`
 	Role      string          `json:"role" gorm:"size:16;not null"`
 	Content   string          `json:"content" gorm:"type:text"`
-	Metadata  json.RawMessage `json:"metadata" gorm:"type:text"`
+	Metadata  model.JSONText  `json:"metadata" gorm:"type:text"`
 	TokenCount int            `json:"tokenCount" gorm:"default:0"`
 	Sequence  int             `json:"sequence" gorm:"not null;index"`
 	CreatedAt time.Time       `json:"createdAt"`
@@ -263,7 +263,7 @@ type SessionMessageResponse struct {
 }
 
 func (m *SessionMessage) ToResponse() SessionMessageResponse {
-	meta := m.Metadata
+	meta := json.RawMessage(m.Metadata)
 	if len(meta) == 0 {
 		meta = nil
 	}

@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"encoding/json"
 	"log/slog"
 
 	"github.com/casbin/casbin/v2"
@@ -181,24 +180,6 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		}
 	}
 
-	// 6. 对话菜单
-	var chatMenu model.Menu
-	if err := db.Where("permission = ?", "ai:chat").First(&chatMenu).Error; err != nil {
-		chatMenu = model.Menu{
-			ParentID:   &aiDir.ID,
-			Name:       "对话",
-			Type:       model.MenuTypeMenu,
-			Path:       "/ai/chat",
-			Icon:       "MessageSquare",
-			Permission: "ai:chat",
-			Sort:       4,
-		}
-		if err := db.Create(&chatMenu).Error; err != nil {
-			return err
-		}
-		slog.Info("seed: created menu", "name", chatMenu.Name, "permission", chatMenu.Permission)
-	}
-
 	// 7. Agent templates seed
 	agentTemplates := []AgentTemplate{
 		{
@@ -206,7 +187,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Description: "通用 AI 助手，可回答问题、调用工具完成任务",
 			Icon:        "Bot",
 			Type:        AgentTypeAssistant,
-			Config: json.RawMessage(`{
+			Config: model.JSONText(`{
 				"strategy": "react",
 				"systemPrompt": "你是一个通用 AI 助手，能够回答各种问题并帮助用户完成任务。",
 				"temperature": 0.7,
@@ -219,7 +200,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Description: "面向客户的智能客服，挂载知识库回答产品问题",
 			Icon:        "Headphones",
 			Type:        AgentTypeAssistant,
-			Config: json.RawMessage(`{
+			Config: model.JSONText(`{
 				"strategy": "react",
 				"systemPrompt": "你是一个专业的客服助手。请根据知识库中的信息回答客户问题，保持友好、专业的态度。如果不确定答案，请坦诚告知。",
 				"temperature": 0.3,
@@ -232,7 +213,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Description: "运维 AI 助手，帮助排查故障、分析日志、调用监控工具",
 			Icon:        "Terminal",
 			Type:        AgentTypeAssistant,
-			Config: json.RawMessage(`{
+			Config: model.JSONText(`{
 				"strategy": "plan_and_execute",
 				"systemPrompt": "你是一个运维助手，擅长排查线上故障、分析日志、查看监控数据。先制定排查计划，再逐步执行。",
 				"temperature": 0.5,
@@ -245,7 +226,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Description: "编程 AI 助手，在代码仓库中读写文件、执行命令",
 			Icon:        "Code",
 			Type:        AgentTypeCoding,
-			Config: json.RawMessage(`{
+			Config: model.JSONText(`{
 				"runtime": "claude-code",
 				"execMode": "local"
 			}`),
@@ -269,7 +250,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Name:        "search_knowledge",
 			DisplayName: "Search Knowledge",
 			Description: "Search for relevant documents in a knowledge base using full-text search.",
-			ParametersSchema: json.RawMessage(`{
+			ParametersSchema: model.JSONText(`{
 				"type": "object",
 				"properties": {
 					"knowledge_base_id": {"type": "integer", "description": "The ID of the knowledge base to search"},
@@ -284,7 +265,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Name:        "read_document",
 			DisplayName: "Read Document",
 			Description: "Read the full content of a specific document from a knowledge base.",
-			ParametersSchema: json.RawMessage(`{
+			ParametersSchema: model.JSONText(`{
 				"type": "object",
 				"properties": {
 					"knowledge_base_id": {"type": "integer", "description": "The ID of the knowledge base"},
@@ -299,7 +280,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Name:        "http_request",
 			DisplayName: "HTTP Request",
 			Description: "Make an HTTP request to an external URL and return the response.",
-			ParametersSchema: json.RawMessage(`{
+			ParametersSchema: model.JSONText(`{
 				"type": "object",
 				"properties": {
 					"method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"], "description": "HTTP method"},
@@ -316,7 +297,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			Name:        "execute_script",
 			DisplayName: "Execute Script",
 			Description: "Execute a script in a sandboxed environment and return stdout/stderr.",
-			ParametersSchema: json.RawMessage(`{
+			ParametersSchema: model.JSONText(`{
 				"type": "object",
 				"properties": {
 					"language": {"type": "string", "enum": ["python", "bash"], "description": "Script language"},
@@ -453,7 +434,6 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{"admin", "ai:agent:create", "read"},
 		{"admin", "ai:agent:update", "read"},
 		{"admin", "ai:agent:delete", "read"},
-		{"admin", "ai:chat", "read"},
 	}
 
 	allPolicies := append(policies, menuPerms...)
@@ -462,6 +442,16 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			if _, err := enforcer.AddPolicy(p); err != nil {
 				slog.Error("seed: failed to add policy", "policy", p, "error", err)
 			}
+		}
+	}
+
+	// Cleanup: remove deprecated "对话" menu (merged into Agent cards)
+	if err := db.Where("permission = ?", "ai:chat").Delete(&model.Menu{}).Error; err != nil {
+		slog.Warn("seed: failed to cleanup chat menu", "error", err)
+	}
+	if has, _ := enforcer.HasPolicy([]string{"admin", "ai:chat", "read"}); has {
+		if _, err := enforcer.RemovePolicy([]string{"admin", "ai:chat", "read"}); err != nil {
+			slog.Warn("seed: failed to remove ai:chat policy", "error", err)
 		}
 	}
 

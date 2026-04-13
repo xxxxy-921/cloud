@@ -7,15 +7,17 @@ interface UseListPageOptions {
   endpoint: string
   pageSize?: number
   extraParams?: Record<string, string>
+  enabled?: boolean
 }
 
-export function useListPage<T>({ queryKey, endpoint, pageSize = 20, extraParams }: UseListPageOptions) {
+export function useListPage<T>({ queryKey, endpoint, pageSize = 20, extraParams, enabled }: UseListPageOptions) {
   const [keyword, setKeyword] = useState("")
   const [searchKeyword, setSearchKeyword] = useState("")
   const [page, setPage] = useState(1)
 
   const { data, isLoading } = useQuery({
     queryKey: [queryKey, searchKeyword, page, extraParams],
+    enabled,
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
       if (searchKeyword) params.set("keyword", searchKeyword)

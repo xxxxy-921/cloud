@@ -20,6 +20,8 @@
   "import": "Import",
   "copy": "Copy",
   "copied": "Copied",
+  "expandAll": "Expand All",
+  "collapseAll": "Collapse All",
   "actions": "Actions",
   "status": "Status",
   "name": "Name",

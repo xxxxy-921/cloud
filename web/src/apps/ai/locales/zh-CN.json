@@ -325,6 +325,7 @@
     "deleteTitle": "删除智能体",
     "deleteDesc": "确定要删除智能体「{{name}}」吗？",
     "confirmDelete": "确定删除",
+    "viewDetail": "查看详情",
     "hasRunningSessions": "该智能体存在运行中的会话，无法删除"
   },
   "chat": {

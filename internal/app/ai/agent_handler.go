@@ -10,6 +10,7 @@ import (
 	"github.com/samber/do/v2"
 
 	"metis/internal/handler"
+	"metis/internal/model"
 )
 
 type AgentHandler struct {
@@ -76,7 +77,7 @@ func (h *AgentHandler) Create(c *gin.Context) {
 		MaxTokens:     req.MaxTokens,
 		MaxTurns:      req.MaxTurns,
 		Runtime:       req.Runtime,
-		RuntimeConfig: req.RuntimeConfig,
+		RuntimeConfig: model.JSONText(req.RuntimeConfig),
 		ExecMode:      req.ExecMode,
 		NodeID:        req.NodeID,
 		Workspace:     req.Workspace,
@@ -219,7 +220,7 @@ func (h *AgentHandler) Update(c *gin.Context) {
 	a.MaxTokens = req.MaxTokens
 	a.MaxTurns = req.MaxTurns
 	a.Runtime = req.Runtime
-	a.RuntimeConfig = req.RuntimeConfig
+	a.RuntimeConfig = model.JSONText(req.RuntimeConfig)
 	a.ExecMode = req.ExecMode
 	a.NodeID = req.NodeID
 	a.Workspace = req.Workspace

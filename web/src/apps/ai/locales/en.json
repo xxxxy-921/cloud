@@ -325,6 +325,7 @@
     "deleteTitle": "Delete Agent",
     "deleteDesc": "Are you sure you want to delete agent \"{{name}}\"?",
     "confirmDelete": "Delete",
+    "viewDetail": "View Details",
     "hasRunningSessions": "This agent has running sessions and cannot be deleted"
   },
   "chat": {

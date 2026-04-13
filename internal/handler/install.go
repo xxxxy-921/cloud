@@ -272,8 +272,8 @@ func (h *InstallHandler) Execute(c *gin.Context) {
 		return
 	}
 
-	// 10. Write metis.yaml
-	if err := cfg.Save("metis.yaml"); err != nil {
+	// 10. Write config.yml
+	if err := cfg.Save("config.yml"); err != nil {
 		Fail(c, http.StatusInternalServerError, "failed to write config: "+err.Error())
 		return
 	}

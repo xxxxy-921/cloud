@@ -1,9 +1,12 @@
-import { useCallback, useMemo, useRef, useState, useEffect } from "react"
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useNavigate } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Square, Trash2, Brain, PanelLeft, PanelLeftClose, Paperclip, AlertTriangle, RotateCcw, Play, X } from "lucide-react"
-import { sessionApi, type SessionMessage as SessionMsg } from "@/lib/api"
+import { Square, Trash2, Brain, PanelLeft, PanelLeftClose, Paperclip, AlertTriangle, RotateCcw, X } from "lucide-react"
+import { isDataUIPart, isReasoningUIPart, type UIMessage } from "ai"
+import { sessionApi } from "@/lib/api"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -11,8 +14,8 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { useChatStream, type ChatEvent } from "./hooks/use-chat-stream"
-import { QAPair, AIResponse } from "./components/message-item"
+import { useAiChat } from "./hooks/use-ai-chat"
+import { QAPair } from "./components/message-item"
 import { ThinkingBlock } from "./components/thinking-block"
 import { PlanProgress } from "./components/plan-progress"
 import { WelcomeScreen } from "./components/welcome-screen"
@@ -21,81 +24,109 @@ import { MemoryPanel } from "./components/memory-panel"
 
 const SIDEBAR_COLLAPSED_KEY = "ai-chat-sidebar-collapsed"
 
-interface StreamState {
-  text: string
-  thinkingText: string
-  thinkingDone: boolean
-  thinkingDurationMs: number
-  planSteps: { description: string; durationMs?: number }[]
-  planStepIndex: number
-  doneMetrics: { durationMs?: number; inputTokens?: number; outputTokens?: number } | null
-  cancelled: boolean
-  error: string | null
-}
-
-const INITIAL_STREAM_STATE: StreamState = {
-  text: "",
-  thinkingText: "",
-  thinkingDone: false,
-  thinkingDurationMs: 0,
-  planSteps: [],
-  planStepIndex: -1,
-  doneMetrics: null,
-  cancelled: false,
-  error: null,
-}
-
 interface PendingImage {
   file: File
   preview: string
   uploading?: boolean
 }
 
-export function Component() {
-  const groupMessagesIntoPairs = useCallback((messages: SessionMsg[]): Array<{
-    userMessage: SessionMsg
-    aiMessage?: SessionMsg
-    tools: SessionMsg[]
-  }> => {
-    const pairs: Array<{ userMessage: SessionMsg; aiMessage?: SessionMsg; tools: SessionMsg[] }> = []
-    let currentPair: { userMessage?: SessionMsg; aiMessage?: SessionMsg; tools: SessionMsg[] } = { tools: [] }
+function groupUIMessagesIntoPairs(messages: UIMessage[]): Array<{ userMessage: UIMessage; aiMessages: UIMessage[] }> {
+  const pairs: Array<{ userMessage: UIMessage; aiMessages: UIMessage[] }> = []
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      pairs.push({ userMessage: msg, aiMessages: [] })
+    } else if (pairs.length > 0) {
+      pairs[pairs.length - 1].aiMessages.push(msg)
+    }
+  }
+  return pairs
+}
 
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        if (currentPair.userMessage) {
-          pairs.push({
-            userMessage: currentPair.userMessage,
-            aiMessage: currentPair.aiMessage,
-            tools: currentPair.tools,
-          })
+function getStreamingExtras(
+  pair: { aiMessages: UIMessage[] },
+  isStreaming: boolean,
+  agentName?: string,
+): React.ReactNode {
+  const mainAiMessage = pair.aiMessages
+    .filter((m) => {
+      const meta = m.metadata as { originalRole?: string } | undefined
+      return !["tool_call", "tool_result"].includes(meta?.originalRole || "")
+    })
+    .pop()
+
+  const reasoningParts = mainAiMessage?.parts?.filter(isReasoningUIPart) || []
+  const thinkingText = reasoningParts.map((p) => p.text).join("")
+
+  const dataParts = mainAiMessage?.parts?.filter(isDataUIPart) || []
+
+  let planSteps: { description: string; durationMs?: number }[] = []
+  let planStepIndex = -1
+  for (const part of dataParts) {
+    const d = part.data as Record<string, unknown> | undefined
+    if (!d) continue
+    if (part.type === "data-plan" && Array.isArray(d.steps)) {
+      planSteps = (d.steps as Array<{ description?: string }>).map((s) => ({
+        description: s.description || "",
+        durationMs: undefined,
+      }))
+      planStepIndex = 0
+    } else if (part.type === "data-step" && typeof d.index === "number") {
+      if (d.state === "start") {
+        planStepIndex = d.index as number
+      } else if (d.state === "done") {
+        const idx = d.index as number
+        if (planSteps[idx]) {
+          planSteps[idx].durationMs = typeof d.durationMs === "number" ? d.durationMs : undefined
         }
-        currentPair = { userMessage: msg, tools: [] }
-      } else if (msg.role === "assistant") {
-        currentPair.aiMessage = msg
-      } else if (msg.role === "tool_call" || msg.role === "tool_result") {
-        currentPair.tools.push(msg)
+        planStepIndex = idx + 1
       }
     }
+  }
 
-    if (currentPair.userMessage) {
-      pairs.push({
-        userMessage: currentPair.userMessage,
-        aiMessage: currentPair.aiMessage,
-        tools: currentPair.tools,
-      })
-    }
+  const textParts =
+    mainAiMessage?.parts?.filter(
+      (p): p is { type: "text"; text: string } => p.type === "text",
+    ) || []
+  const hasText = textParts.some((p) => p.text)
+  const hasTools = mainAiMessage?.parts?.some((p) => p.type === "dynamic-tool")
+  const hasContent = hasText || thinkingText || planSteps.length > 0 || hasTools
 
-    return pairs
-  }, [])
+  const extras: React.ReactNode[] = []
+  if (thinkingText) {
+    extras.push(<ThinkingBlock key="thinking" content={thinkingText} isStreaming={isStreaming} />)
+  }
+  if (planSteps.length > 0) {
+    extras.push(
+      <PlanProgress
+        key="plan"
+        steps={planSteps}
+        currentStepIndex={planStepIndex}
+        isStreaming={isStreaming}
+      />,
+    )
+  }
+  if (isStreaming && !hasContent) {
+    extras.push(
+      <div key="loading" className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
+        {agentName && <span className="text-xs font-medium">{agentName}</span>}
+        <span className="flex gap-1">
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
+        </span>
+      </div>,
+    )
+  }
+  return extras.length > 0 ? <>{extras}</> : null
+}
 
+export function Component() {
   const { sid } = useParams<{ sid: string }>()
   const sessionId = Number(sid)
   const { t } = useTranslation(["ai", "common"])
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [input, setInput] = useState("")
-  const [pendingMessages, setPendingMessages] = useState<SessionMsg[]>([])
-  const [stream, setStream] = useState<StreamState>(INITIAL_STREAM_STATE)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
@@ -112,79 +143,23 @@ export function Component() {
     enabled: !!sessionId,
   })
 
-  const messages = useMemo(() => {
-    const base = sessionData?.messages ?? []
-    const baseIds = new Set(base.map(m => m.id))
-    const uniquePending = pendingMessages.filter(m => !baseIds.has(m.id))
-    return [...base, ...uniquePending]
-  }, [sessionData, pendingMessages])
+  const chat = useAiChat(sessionId, sessionData?.messages, {
+    onFinish: () => {
+      queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
+    },
+    onError: (err) => {
+      toast.error(err.message)
+      queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
+    },
+  })
 
   const qaPairs = useMemo(() => {
-    return groupMessagesIntoPairs(messages)
-  }, [messages, groupMessagesIntoPairs])
+    return groupUIMessagesIntoPairs(chat.messages)
+  }, [chat.messages])
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  const scrollToBottom = useCallback((instant?: boolean) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: instant ? "instant" : "smooth" })
   }, [])
-
-  const handleEvent = useCallback((event: ChatEvent) => {
-    if (event.type === "content_delta" && event.text) {
-      setStream(prev => ({ ...prev, text: prev.text + event.text }))
-    } else if (event.type === "thinking_delta" && event.text) {
-      setStream(prev => ({ ...prev, thinkingText: prev.thinkingText + event.text }))
-    } else if (event.type === "thinking_done") {
-      setStream(prev => ({
-        ...prev,
-        thinkingDone: true,
-        thinkingDurationMs: event.durationMs ?? 0,
-      }))
-    } else if (event.type === "plan_steps" && event.steps) {
-      setStream(prev => ({
-        ...prev,
-        planSteps: event.steps!.map(s => ({ description: s.description })),
-        planStepIndex: 0,
-      }))
-    } else if (event.type === "step_start" && event.stepIndex != null) {
-      setStream(prev => ({ ...prev, planStepIndex: event.stepIndex! }))
-    } else if (event.type === "step_done" && event.stepIndex != null) {
-      setStream(prev => {
-        const steps = [...prev.planSteps]
-        if (steps[event.stepIndex!]) {
-          steps[event.stepIndex!] = { ...steps[event.stepIndex!], durationMs: event.durationMs }
-        }
-        return { ...prev, planSteps: steps, planStepIndex: event.stepIndex! + 1 }
-      })
-    }
-  }, [])
-
-  const handleDone = useCallback((event: ChatEvent) => {
-    setStream(prev => ({
-      ...prev,
-      doneMetrics: {
-        durationMs: event.durationMs,
-        inputTokens: event.inputTokens,
-        outputTokens: event.outputTokens,
-      },
-    }))
-    setPendingMessages([])
-    queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
-    // Reset stream state after query refresh, keeping metrics for last message
-    setTimeout(() => {
-      setStream(INITIAL_STREAM_STATE)
-    }, 100)
-  }, [queryClient, sessionId])
-
-  const handleStreamError = useCallback((msg: string) => {
-    setStream(prev => ({ ...prev, error: msg }))
-    setPendingMessages([])
-    queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
-  }, [queryClient, sessionId])
-
-  const { isStreaming, connect, disconnect } = useChatStream({
-    onEvent: handleEvent,
-    onDone: handleDone,
-    onError: handleStreamError,
-  })
 
   const uploadImageMutation = useMutation({
     mutationFn: (file: File) => sessionApi.uploadMessageImage(sessionId, file),
@@ -192,8 +167,7 @@ export function Component() {
   })
 
   const sendMutation = useMutation({
-    mutationFn: async (content: string) => {
-      // Upload pending images first
+    mutationFn: async (text: string) => {
       const imageUrls: string[] = []
       for (const img of pendingImages) {
         if (!img.uploading) {
@@ -201,24 +175,24 @@ export function Component() {
           imageUrls.push(res.url)
         }
       }
-      return sessionApi.sendMessage(sessionId, content, imageUrls)
+      chat.setPendingImageUrls(imageUrls)
+      return text
     },
-    onSuccess: (msg) => {
-      setPendingMessages(prev => [...prev, msg])
+    onSuccess: (text) => {
+      chat.sendMessage({ text })
       setInput("")
-      setPendingImages([]) // Clear pending images after sending
-      setStream(INITIAL_STREAM_STATE)
-      connect(sessionId)
+      setPendingImages([])
       scrollToBottom()
     },
     onError: (err) => toast.error(err.message),
   })
 
   const cancelMutation = useMutation({
-    mutationFn: () => sessionApi.cancel(sessionId),
+    mutationFn: async () => {
+      chat.stop()
+      return sessionApi.cancel(sessionId)
+    },
     onSuccess: () => {
-      disconnect()
-      setStream(prev => ({ ...prev, cancelled: true }))
       queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
     },
   })
@@ -229,11 +203,8 @@ export function Component() {
       queryClient.invalidateQueries({ queryKey: ["ai-sessions"] })
       toast.success(t("ai:chat.sessionDeleted"))
 
-      // 获取同 Agent 的其他会话（排除被删除的），导航到下一个
-      const currentData = queryClient.getQueryData<{ items: Array<{ id: number }> }>(
-        ["ai-sessions", agentId]
-      )
-      const otherSession = currentData?.items.find(s => s.id !== sessionId)
+      const currentData = queryClient.getQueryData<{ items: Array<{ id: number }> }>(["ai-sessions", agentId])
+      const otherSession = currentData?.items.find((s) => s.id !== sessionId)
 
       if (otherSession) {
         navigate(`/ai/chat/${otherSession.id}`)
@@ -247,19 +218,32 @@ export function Component() {
   const editMessageMutation = useMutation({
     mutationFn: ({ mid, content }: { mid: number; content: string }) =>
       sessionApi.editMessage(sessionId, mid, content),
-    onSuccess: () => {
-      setPendingMessages([])
-      setStream(INITIAL_STREAM_STATE)
-      queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
-      // Trigger new SSE stream after edit
-      connect(sessionId)
+    onSuccess: (_, { mid, content }) => {
+      const editedIndex = chat.messages.findIndex((m) => Number(m.id) === mid)
+      if (editedIndex !== -1) {
+        const newMessages = chat.messages.slice(0, editedIndex + 1)
+        newMessages[editedIndex] = {
+          ...newMessages[editedIndex],
+          parts:
+            newMessages[editedIndex].parts?.map((p) =>
+              p.type === "text" ? { ...p, text: content } : p,
+            ) || [{ type: "text", text: content }],
+        }
+        chat.setMessages(newMessages)
+        chat.regenerate()
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["ai-session", sessionId] })
+      }
     },
     onError: (err) => toast.error(err.message),
   })
 
-  const handleEditMessage = useCallback((messageId: number, content: string) => {
-    editMessageMutation.mutate({ mid: messageId, content })
-  }, [editMessageMutation])
+  const handleEditMessage = useCallback(
+    (messageId: number, content: string) => {
+      editMessageMutation.mutate({ mid: messageId, content })
+    },
+    [editMessageMutation],
+  )
 
   // Auto-resize textarea
   useEffect(() => {
@@ -270,22 +254,17 @@ export function Component() {
     textarea.style.height = `${newHeight}px`
   }, [input])
 
-  // Scroll to bottom when streaming
+  // Scroll to bottom on messages change (smooth for new messages, instant while streaming)
   useEffect(() => {
-    if (isStreaming && (stream.text || stream.thinkingText)) {
-      scrollToBottom()
-    }
-  }, [isStreaming, stream.text, stream.thinkingText, scrollToBottom])
+    const instant = chat.status === "streaming" || chat.status === "submitted"
+    scrollToBottom(instant)
+  }, [chat.messages, chat.status, scrollToBottom])
 
-  // Auto scroll on messages change
-  useEffect(() => {
-    scrollToBottom()
-  }, [qaPairs, scrollToBottom])
+  const isBusy = chat.status === "streaming" || chat.status === "submitted"
 
   function handleSend(content?: string) {
     const text = (content ?? input).trim()
-    // Allow sending if there's text or pending images
-    if ((!text && pendingImages.length === 0) || isStreaming || sendMutation.isPending) return
+    if ((!text && pendingImages.length === 0) || isBusy || sendMutation.isPending) return
     sendMutation.mutate(text)
   }
 
@@ -316,7 +295,7 @@ export function Component() {
         const reader = new FileReader()
         reader.onload = (event) => {
           const preview = event.target?.result as string
-          setPendingImages(prev => [...prev, { file, preview }])
+          setPendingImages((prev) => [...prev, { file, preview }])
         }
         reader.readAsDataURL(file)
       }
@@ -324,22 +303,19 @@ export function Component() {
   }
 
   function removePendingImage(index: number) {
-    setPendingImages(prev => {
+    setPendingImages((prev) => {
       const newImages = [...prev]
-      // Revoke object URL if created (for memory cleanup)
-      // Note: data URLs don't need revocation, but blob URLs would
       newImages.splice(index, 1)
       return newImages
     })
   }
 
   function handleRetry() {
-    setStream(INITIAL_STREAM_STATE)
-    connect(sessionId)
+    chat.regenerate()
   }
 
   const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed(prev => {
+    setSidebarCollapsed((prev) => {
       const newValue = !prev
       localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(newValue))
       return newValue
@@ -353,17 +329,14 @@ export function Component() {
   const session = sessionData?.session
   const agentId = session?.agentId
   const agentName = (session as unknown as Record<string, unknown>)?.agentName as string | undefined
-  const hasMessages = messages.length > 0 || isStreaming
-  const showWelcome = !hasMessages && !isStreaming
+  const hasMessages = chat.messages.length > 0
+  const showWelcome = !hasMessages && !isBusy
+  const lastPairIndex = qaPairs.length - 1
 
   return (
     <div className="flex h-full overflow-hidden">
       {/* Sidebar */}
-      <SessionSidebar
-        agentId={agentId}
-        currentSessionId={sessionId}
-        collapsed={sidebarCollapsed}
-      />
+      <SessionSidebar agentId={agentId} currentSessionId={sessionId} collapsed={sidebarCollapsed} />
 
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0 bg-background h-full">
@@ -375,7 +348,9 @@ export function Component() {
             </Button>
             <h3 className="font-medium truncate">{session?.title || t("ai:chat.newChat")}</h3>
             {session?.status && (
-              <Badge variant="outline" className="text-xs">{t(`ai:chat.sessionStatus.${session.status}`)}</Badge>
+              <Badge variant="outline" className="text-xs">
+                {t(`ai:chat.sessionStatus.${session.status}`)}
+              </Badge>
             )}
           </div>
           <div className="flex items-center gap-1">
@@ -416,91 +391,42 @@ export function Component() {
             />
           ) : (
             <div className="max-w-3xl mx-auto px-4 pb-4">
-              {/* Rendered QA pairs */}
-              {qaPairs.map((pair) => (
-                <QAPair
-                  key={pair.userMessage.id}
-                  userMessage={pair.userMessage}
-                  aiMessage={pair.aiMessage}
-                  tools={pair.tools}
-                  agentName={agentName}
-                  onEditMessage={handleEditMessage}
-                />
-              ))}
+              {qaPairs.map((pair, index) => {
+                const isLastPair = index === lastPairIndex
+                const isStreamingThisPair = isLastPair && isBusy
 
-              {/* Streaming area */}
-              {isStreaming && (
-                <div className="py-6">
-                  {/* Thinking block */}
-                  {stream.thinkingText && (
-                    <ThinkingBlock
-                      content={stream.thinkingText}
-                      isStreaming={!stream.thinkingDone}
-                      durationMs={stream.thinkingDurationMs}
-                    />
-                  )}
-
-                  {/* Plan progress */}
-                  {stream.planSteps.length > 0 && (
-                    <PlanProgress
-                      steps={stream.planSteps}
-                      currentStepIndex={stream.planStepIndex}
-                      isStreaming={isStreaming}
-                    />
-                  )}
-
-                  {/* Streaming AI response */}
-                  {stream.text && (
-                    <AIResponse
-                      content={stream.text}
-                      agentName={agentName}
-                      isStreaming
-                    />
-                  )}
-
-                  {/* Initial "thinking" indicator before any text */}
-                  {!stream.text && !stream.thinkingText && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      {agentName && <span className="text-xs font-medium">{agentName}</span>}
-                      <span className="flex gap-1">
-                        <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
-                        <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
-                        <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Cancelled state — preserved content */}
-              {stream.cancelled && stream.text && !isStreaming && (
-                <div className="py-6">
-                  <AIResponse content={stream.text} agentName={agentName} />
-                  <div className="flex items-center gap-3 mt-2 p-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
-                    <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                    <span className="text-sm text-amber-700 dark:text-amber-400">{t("ai:chat.stopped")}</span>
-                    <div className="flex items-center gap-2 ml-auto">
-                      <Button variant="outline" size="sm" onClick={() => { setStream(INITIAL_STREAM_STATE); connect(sessionId) }}>
-                        <Play className="h-3.5 w-3.5 mr-1" />
-                        {t("ai:chat.continueGenerating")}
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={handleRetry}>
-                        <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                        {t("ai:chat.regenerate")}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
+                return (
+                  <QAPair
+                    key={pair.userMessage.id}
+                    userMessage={pair.userMessage}
+                    aiMessages={pair.aiMessages}
+                    agentName={agentName}
+                    isStreaming={isStreamingThisPair}
+                    onRegenerate={isLastPair ? () => chat.regenerate() : undefined}
+                    onEditMessage={handleEditMessage}
+                    doneMetrics={
+                      isLastPair && chat.status === "ready"
+                        ? {
+                            inputTokens: chat.lastUsage.promptTokens,
+                            outputTokens: chat.lastUsage.completionTokens,
+                          }
+                        : undefined
+                    }
+                    streamingExtras={
+                      isStreamingThisPair ? getStreamingExtras(pair, true, agentName) : undefined
+                    }
+                  />
+                )
+              })}
 
               {/* Inline error */}
-              {stream.error && !isStreaming && (
+              {chat.error && chat.status !== "streaming" && chat.status !== "submitted" && (
                 <div className="py-6">
                   <div className="flex items-center gap-3 p-3 rounded-lg border-l-4 border-destructive bg-destructive/5">
                     <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
                     <div className="flex-1">
                       <div className="text-sm font-medium text-destructive">{t("ai:chat.generationError")}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">{stream.error}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">{chat.error.message}</div>
                     </div>
                     <Button variant="outline" size="sm" onClick={handleRetry}>
                       <RotateCcw className="h-3.5 w-3.5 mr-1" />
@@ -516,7 +442,7 @@ export function Component() {
         </div>
 
         {/* Centered stop button during streaming */}
-        {isStreaming && (
+        {isBusy && (
           <div className="flex justify-center pb-2 shrink-0">
             <Button
               variant="outline"
@@ -543,7 +469,7 @@ export function Component() {
                 placeholder={t("ai:chat.inputPlaceholder")}
                 rows={1}
                 className="w-full min-h-[44px] max-h-[200px] resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-relaxed placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={isStreaming}
+                disabled={isBusy}
               />
               {/* Pending images preview */}
               {pendingImages.length > 0 && (
@@ -574,14 +500,23 @@ export function Component() {
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
-                  {!isStreaming && (
+                  {!isBusy && (
                     <Button
                       size="icon"
                       className="h-8 w-8 rounded-full"
                       onClick={() => handleSend()}
                       disabled={(!input.trim() && pendingImages.length === 0) || sendMutation.isPending}
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-4 w-4"
+                      >
                         <path d="m22 2-7 20-4-9-9-4Z" />
                         <path d="M22 2 11 13" />
                       </svg>
@@ -590,17 +525,13 @@ export function Component() {
                 </div>
               </div>
             </div>
-            <p className="text-[10px] text-muted-foreground/50 text-center mt-1">
-              {t("ai:chat.inputHint")}
-            </p>
+            <p className="text-[10px] text-muted-foreground/50 text-center mt-1">{t("ai:chat.inputHint")}</p>
           </div>
         </div>
       </div>
 
       {/* Memory panel */}
-      {memoryOpen && agentId && (
-        <MemoryPanel agentId={agentId} onClose={() => setMemoryOpen(false)} />
-      )}
+      {memoryOpen && agentId && <MemoryPanel agentId={agentId} onClose={() => setMemoryOpen(false)} />}
     </div>
   )
 }

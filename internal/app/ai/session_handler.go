@@ -179,25 +179,27 @@ func (h *SessionHandler) Stream(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	c.Header("X-Vercel-AI-UI-Message-Stream", "v1")
 
-	eventCh, err := h.gateway.Run(c.Request.Context(), uint(sid))
+	streamReader, err := h.gateway.Run(c.Request.Context(), uint(sid))
 	if err != nil {
-		c.SSEvent("error", gin.H{"message": err.Error()})
+		data, _ := json.Marshal(map[string]any{"type": "error", "error": err.Error()})
+		c.String(http.StatusInternalServerError, "data: "+string(data)+"\n\n")
 		return
 	}
+	defer streamReader.Close()
 
 	c.Stream(func(w io.Writer) bool {
-		select {
-		case evt, ok := <-eventCh:
-			if !ok {
-				return false
-			}
-			data, _ := json.Marshal(evt)
-			c.SSEvent("message", string(data))
-			return true
-		case <-c.Request.Context().Done():
+		buf := make([]byte, 4096)
+		n, err := streamReader.Read(buf)
+		if err != nil {
 			return false
 		}
+		w.Write(buf[:n])
+		if f, ok := c.Writer.(http.Flusher); ok {
+			f.Flush()
+		}
+		return true
 	})
 }
 

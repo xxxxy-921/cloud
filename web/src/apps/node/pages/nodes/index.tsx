@@ -303,7 +303,7 @@ export function Component() {
               </div>
               <div className="space-y-1">
                 <p className="text-muted-foreground">{t("node:nodes.installStep3")}</p>
-                <pre className="rounded-lg bg-muted p-3 text-xs font-mono">./metis-sidecar -config sidecar.yaml</pre>
+                <pre className="rounded-lg bg-muted p-3 text-xs font-mono">./sidecar -config sidecar.yaml</pre>
               </div>
             </div>
           </div>

@@ -119,7 +119,7 @@ type AIModel struct {
 	DisplayName    string          `json:"displayName" gorm:"size:128;not null"`
 	ProviderID     uint            `json:"providerId" gorm:"not null;index"`
 	Type           string          `json:"type" gorm:"size:16;not null;index"`
-	Capabilities   json.RawMessage `json:"capabilities" gorm:"type:text"`
+	Capabilities   model.JSONText `json:"capabilities" gorm:"type:text"`
 	ContextWindow  int             `json:"contextWindow"`
 	MaxOutputTokens int            `json:"maxOutputTokens"`
 	InputPrice     float64         `json:"inputPrice"`
@@ -150,7 +150,7 @@ type AIModelResponse struct {
 }
 
 func (m *AIModel) ToResponse() AIModelResponse {
-	caps := m.Capabilities
+	caps := json.RawMessage(m.Capabilities)
 	if len(caps) == 0 {
 		caps = json.RawMessage("[]")
 	}

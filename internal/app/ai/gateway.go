@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 
@@ -42,8 +43,8 @@ func NewAgentGateway(i do.Injector) (*AgentGateway, error) {
 	}, nil
 }
 
-// Run executes an agent for a given session. Returns a channel of events.
-func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (<-chan Event, error) {
+// Run executes an agent for a given session. Returns a UI Message Stream reader.
+func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (io.ReadCloser, error) {
 	session, err := gw.sessionSvc.Get(sessionID)
 	if err != nil {
 		return nil, err
@@ -131,7 +132,7 @@ func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (<-chan Event, 
 			Temperature:   tempPtr,
 			MaxTokens:     agent.MaxTokens,
 			Runtime:       agent.Runtime,
-			RuntimeConfig: agent.RuntimeConfig,
+			RuntimeConfig: json.RawMessage(agent.RuntimeConfig),
 			ExecMode:      agent.ExecMode,
 			NodeID:        agent.NodeID,
 			Workspace:     agent.Workspace,
@@ -165,72 +166,87 @@ func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (<-chan Event, 
 		return nil, err
 	}
 
-	// Wrap the event channel to handle post-processing
-	outCh := make(chan Event, 64)
+	// Set up UI Message Stream pipe
+	pr, pw := io.Pipe()
+	encoder := NewUIMessageStreamEncoder(pw)
+
 	go func() {
-		defer close(outCh)
 		defer func() {
 			gw.mu.Lock()
 			delete(gw.executions, sessionID)
 			gw.mu.Unlock()
 		}()
+		defer encoder.Close()
+		defer pw.Close()
 
 		var assistantContent string
 
-		for evt := range eventCh {
-			// Forward event
-			outCh <- evt
-
-			// Post-process: store results
-			switch evt.Type {
-			case EventTypeContentDelta:
-				assistantContent += evt.Text
-
-			case EventTypeToolCall:
-				meta, _ := json.Marshal(map[string]any{
-					"tool_name": evt.ToolName,
-					"tool_args": evt.ToolArgs,
-				})
-				_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleToolCall, "", meta, 0)
-
-			case EventTypeToolResult:
-				meta, _ := json.Marshal(map[string]any{
-					"tool_call_id": evt.ToolCallID,
-					"duration_ms":  evt.DurationMs,
-				})
-				_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleToolResult, evt.ToolOutput, meta, 0)
-
-			case EventTypeMemoryUpdate:
-				_ = gw.memorySvc.Upsert(&AgentMemory{
-					AgentID: session.AgentID,
-					UserID:  userID,
-					Key:     evt.MemoryKey,
-					Content: evt.MemoryContent,
-					Source:  MemorySourceAgentGenerated,
-				})
-
-			case EventTypeDone:
-				if assistantContent != "" {
-					_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleAssistant, assistantContent, nil, evt.OutputTokens)
+		for {
+			select {
+			case evt, ok := <-eventCh:
+				if !ok {
+					return
 				}
-				_ = gw.sessionSvc.UpdateStatus(sessionID, SessionStatusCompleted)
-
-			case EventTypeError:
-				if assistantContent != "" {
-					_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleAssistant, assistantContent, nil, 0)
+				if err := encoder.Encode(evt); err != nil {
+					pw.CloseWithError(err)
+					return
 				}
-				_ = gw.sessionSvc.UpdateStatus(sessionID, SessionStatusError)
 
-			case EventTypeCancelled:
-				if assistantContent != "" {
-					_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleAssistant, assistantContent, nil, 0)
+				// Post-process: store results
+				switch evt.Type {
+				case EventTypeContentDelta:
+					assistantContent += evt.Text
+
+				case EventTypeToolCall:
+					meta, _ := json.Marshal(map[string]any{
+						"tool_name": evt.ToolName,
+						"tool_args": evt.ToolArgs,
+					})
+					_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleToolCall, "", meta, 0)
+
+				case EventTypeToolResult:
+					meta, _ := json.Marshal(map[string]any{
+						"tool_call_id": evt.ToolCallID,
+						"duration_ms":  evt.DurationMs,
+					})
+					_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleToolResult, evt.ToolOutput, meta, 0)
+
+				case EventTypeMemoryUpdate:
+					_ = gw.memorySvc.Upsert(&AgentMemory{
+						AgentID: session.AgentID,
+						UserID:  userID,
+						Key:     evt.MemoryKey,
+						Content: evt.MemoryContent,
+						Source:  MemorySourceAgentGenerated,
+					})
+
+				case EventTypeDone:
+					if assistantContent != "" {
+						_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleAssistant, assistantContent, nil, evt.OutputTokens)
+					}
+					_ = gw.sessionSvc.UpdateStatus(sessionID, SessionStatusCompleted)
+
+				case EventTypeError:
+					if assistantContent != "" {
+						_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleAssistant, assistantContent, nil, 0)
+					}
+					_ = gw.sessionSvc.UpdateStatus(sessionID, SessionStatusError)
+
+				case EventTypeCancelled:
+					if assistantContent != "" {
+						_, _ = gw.sessionSvc.StoreMessage(sessionID, MessageRoleAssistant, assistantContent, nil, 0)
+					}
+					_ = gw.sessionSvc.UpdateStatus(sessionID, SessionStatusCancelled)
 				}
-				_ = gw.sessionSvc.UpdateStatus(sessionID, SessionStatusCancelled)
+
+			case <-execCtx.Done():
+				pw.CloseWithError(context.Canceled)
+				return
 			}
 		}
 	}()
 
-	return outCh, nil
+	return pr, nil
 }
 
 // Cancel cancels an active execution for the given session.
@@ -312,7 +328,7 @@ func (gw *AgentGateway) buildToolDefinitions(agentID uint) ([]ToolDefinition, er
 			Type:        "builtin",
 			Name:        tool.Name,
 			Description: tool.Description,
-			Parameters:  tool.ParametersSchema,
+			Parameters:  json.RawMessage(tool.ParametersSchema),
 			SourceID:    tool.ID,
 		})
 	}

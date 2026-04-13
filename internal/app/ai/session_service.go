@@ -5,6 +5,8 @@ import (
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
+
+	"metis/internal/model"
 )
 
 var (
@@ -74,7 +76,7 @@ func (s *SessionService) StoreMessage(sessionID uint, role, content string, meta
 		SessionID:  sessionID,
 		Role:       role,
 		Content:    content,
-		Metadata:   metadata,
+		Metadata:   model.JSONText(metadata),
 		TokenCount: tokenCount,
 		Sequence:   seq,
 	}

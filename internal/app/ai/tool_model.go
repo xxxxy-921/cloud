@@ -41,7 +41,7 @@ type Tool struct {
 	Name             string          `json:"name" gorm:"size:64;uniqueIndex;not null"`
 	DisplayName      string          `json:"displayName" gorm:"size:128;not null"`
 	Description      string          `json:"description" gorm:"type:text"`
-	ParametersSchema json.RawMessage `json:"parametersSchema" gorm:"type:text"`
+	ParametersSchema model.JSONText `json:"parametersSchema" gorm:"type:text"`
 	IsActive         bool            `json:"isActive" gorm:"not null;default:true"`
 }
 
@@ -60,7 +60,7 @@ type ToolResponse struct {
 }
 
 func (t *Tool) ToResponse() ToolResponse {
-	params := t.ParametersSchema
+	params := json.RawMessage(t.ParametersSchema)
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
 	}
@@ -86,8 +86,8 @@ type MCPServer struct {
 	Transport           string          `json:"transport" gorm:"size:16;not null"` // sse | stdio
 	URL                 string          `json:"url" gorm:"size:512"`              // SSE endpoint
 	Command             string          `json:"command" gorm:"size:256"`           // STDIO command
-	Args                json.RawMessage `json:"args" gorm:"type:text"`             // STDIO args
-	Env                 json.RawMessage `json:"env" gorm:"type:text"`              // STDIO env vars
+	Args                model.JSONText  `json:"args" gorm:"type:text"`             // STDIO args
+	Env                 model.JSONText  `json:"env" gorm:"type:text"`              // STDIO env vars
 	AuthType            string          `json:"authType" gorm:"size:32;not null;default:none"`
 	AuthConfigEncrypted []byte          `json:"-" gorm:"column:auth_config_encrypted;type:bytes"`
 	IsActive            bool            `json:"isActive" gorm:"not null;default:true"`
@@ -119,8 +119,8 @@ func (m *MCPServer) ToResponse(authMasked string) MCPServerResponse {
 		Transport:   m.Transport,
 		URL:         m.URL,
 		Command:     m.Command,
-		Args:        m.Args,
-		Env:         m.Env,
+		Args:        json.RawMessage(m.Args),
+		Env:         json.RawMessage(m.Env),
 		AuthType:    m.AuthType,
 		AuthMasked:  authMasked,
 		IsActive:    m.IsActive,
@@ -138,9 +138,9 @@ type Skill struct {
 	Description         string          `json:"description" gorm:"type:text"`
 	SourceType          string          `json:"sourceType" gorm:"size:16;not null"` // github | upload
 	SourceURL           string          `json:"sourceUrl" gorm:"size:512"`
-	Manifest            json.RawMessage `json:"manifest" gorm:"type:text"`
+	Manifest            model.JSONText  `json:"manifest" gorm:"type:text"`
 	Instructions        string          `json:"instructions" gorm:"type:text"`
-	ToolsSchema         json.RawMessage `json:"toolsSchema" gorm:"type:text"`
+	ToolsSchema         model.JSONText  `json:"toolsSchema" gorm:"type:text"`
 	AuthType            string          `json:"authType" gorm:"size:32;not null;default:none"`
 	AuthConfigEncrypted []byte          `json:"-" gorm:"column:auth_config_encrypted;type:bytes"`
 	IsActive            bool            `json:"isActive" gorm:"not null;default:true"`
@@ -170,7 +170,7 @@ func (s *Skill) ToResponse() SkillResponse {
 	toolCount := 0
 	if len(s.ToolsSchema) > 0 {
 		var tools []json.RawMessage
-		if json.Unmarshal(s.ToolsSchema, &tools) == nil {
+		if json.Unmarshal([]byte(s.ToolsSchema), &tools) == nil {
 			toolCount = len(tools)
 		}
 	}
@@ -181,9 +181,9 @@ func (s *Skill) ToResponse() SkillResponse {
 		Description:     s.Description,
 		SourceType:      s.SourceType,
 		SourceURL:       s.SourceURL,
-		Manifest:        s.Manifest,
+		Manifest:        json.RawMessage(s.Manifest),
 		Instructions:    s.Instructions,
-		ToolsSchema:     s.ToolsSchema,
+		ToolsSchema:     json.RawMessage(s.ToolsSchema),
 		ToolCount:       toolCount,
 		HasInstructions: s.Instructions != "",
 		AuthType:        s.AuthType,

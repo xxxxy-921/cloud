@@ -11,6 +11,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 	"gorm.io/gorm"
 
+	"metis/internal/model"
 	"metis/internal/pkg/crypto"
 )
 
@@ -38,7 +39,7 @@ func (s *ModelService) Create(m *AIModel) error {
 		return ErrInvalidType
 	}
 	if m.Type != ModelTypeLLM {
-		m.Capabilities = json.RawMessage("[]")
+		m.Capabilities = model.JSONText("[]")
 	}
 	return s.repo.Create(m)
 }
@@ -56,7 +57,7 @@ func (s *ModelService) Get(id uint) (*AIModel, error) {
 
 func (s *ModelService) Update(m *AIModel) error {
 	if m.Type != ModelTypeLLM {
-		m.Capabilities = json.RawMessage("[]")
+		m.Capabilities = model.JSONText("[]")
 	}
 	return s.repo.Update(m)
 }
@@ -119,7 +120,7 @@ func (s *ModelService) syncOpenAIModels(ctx context.Context, p *Provider, apiKey
 			DisplayName:  m.ID,
 			ProviderID:   p.ID,
 			Type:         guessModelType(m.ID),
-			Capabilities: json.RawMessage("[]"),
+			Capabilities: model.JSONText("[]"),
 			Status:       ModelStatusActive,
 		}
 		if err := s.repo.Create(newModel); err != nil {

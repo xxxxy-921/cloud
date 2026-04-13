@@ -12,16 +12,16 @@ Metis is a Go 1.25 web application with an embedded React frontend. It compiles 
 ```bash
 make dev              # Run Go server (port 8080) with -tags dev (no frontend embed needed)
 make web-dev          # Run Vite dev server (port 3000, proxies /api → :8080)
-make build            # Build frontend + compile single binary (./metis)
+make build            # Build frontend + compile single binary (./server)
 make run              # build + run
 make release          # Cross-compile for linux/darwin/windows (amd64+arm64) → dist/
 
 # Sidecar (separate binary for remote agent execution)
-make build-sidecar    # Build sidecar binary (./metis-sidecar)
+make build-sidecar    # Build sidecar binary (./sidecar)
 make release-sidecar  # Cross-compile sidecar → dist/
 
 # License edition
-make build-license    # Build license edition binary (./metis-license)
+make build-license    # Build license edition binary (./license)
 make release-license  # Cross-compile license edition → dist/
 
 # Frontend
@@ -46,7 +46,7 @@ make build APPS=system,ai                        # 内核 + AI（前端裁剪，
 | `EDITION` | Go build tag，控制后端编译哪些 App | 空（全部编译） |
 | `APPS` | 前端模块列表，`scripts/gen-registry.sh` 据此生成 `web/src/apps/registry.ts` | 空（全量 registry） |
 
-**CLI subcommands**: None — all configuration is handled via the browser-based install wizard and `metis.yaml`.
+**CLI subcommands**: None — all configuration is handled via the browser-based install wizard and `config.yml`.
 
 **Package manager**: Frontend uses **bun** (`bun run dev`, `bun run build`). No Go tests exist yet.
 
@@ -63,7 +63,7 @@ internal/handler/     → HTTP handlers, route registration, unified response (R
 internal/service/     → Business logic, custom error types (ErrUserNotFound, etc.)
 internal/repository/  → GORM data access, ListParams/ListResult for pagination
 internal/model/       → Domain structs (BaseModel for common fields, SystemConfig for K/V table)
-internal/config/      → metis.yaml config (MetisConfig struct, Load/Save)
+internal/config/      → config.yml config (MetisConfig struct, Load/Save)
 internal/database/    → GORM init, SQLite + PostgreSQL support
 internal/middleware/   → slog request logger, panic recovery, JWT auth, Casbin RBAC, audit logging
 internal/scheduler/   → Task engine: cron scheduling + async queue, GORM-backed persistence
@@ -290,9 +290,9 @@ function MyComponent({ data }) {
 
 - **API prefix**: `/api/v1/*`
 - **Response format**: `handler.OK(c, data)` / `handler.Fail(c, status, msg)` — returns `{"code":0,"message":"ok","data":...}`
-- **Database**: SQLite (default, pure Go, CGO_ENABLED=0) or PostgreSQL. Default SQLite DSN 使用 `_pragma=journal_mode(WAL)` 开启 WAL 模式。Database driver is selected during the install wizard and stored in `metis.yaml`.
-- **Configuration**: `metis.yaml` stores infrastructure config (db_driver, db_dsn, secret_key, jwt_secret, license_key_secret). All other settings (server_port, OTel, site.name, etc.) are in DB `SystemConfig` table. No `.env` file is used.
-- **Install wizard**: On first run (no `metis.yaml`), the server enters install mode and serves only `/api/v1/install/*` + SPA. The frontend at `/install` guides database selection → site info → admin account creation. After install, the process hot-switches to normal mode.
+- **Database**: SQLite (default, pure Go, CGO_ENABLED=0) or PostgreSQL. Default SQLite DSN 使用 `_pragma=journal_mode(WAL)` 开启 WAL 模式。Database driver is selected during the install wizard and stored in `config.yml`.
+- **Configuration**: `config.yml` stores infrastructure config (db_driver, db_dsn, secret_key, jwt_secret, license_key_secret). All other settings (server_port, OTel, site.name, etc.) are in DB `SystemConfig` table. No `.env` file is used.
+- **Install wizard**: On first run (no `config.yml`), the server enters install mode and serves only `/api/v1/install/*` + SPA. The frontend at `/install` guides database selection → site info → admin account creation. After install, the process hot-switches to normal mode.
 - **Seed pattern**: `seed.Install()` runs during first-time installation (full seed). `seed.Sync()` runs on every subsequent startup (incremental — adds missing roles/menus/policies only, never overwrites existing SystemConfig values). 种子数据用 `db.Where("permission = ?", x).First(&existing)` 做幂等检查，只在记录不存在时创建。Casbin 策略用 `enforcer.HasPolicy()` 检查。
 - **New kernel models**: Add struct in `internal/model/`, register in `database.go` AutoMigrate call, create repo → service → handler. Wire into IOC in `main.go` via `do.Provide()`.
 - **New app models**: 在 App 的 `Models()` 方法中返回，main.go 自动 AutoMigrate。

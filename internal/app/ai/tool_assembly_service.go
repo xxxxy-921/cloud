@@ -71,7 +71,7 @@ func (s *ToolAssemblyService) Assemble(agentID uint, baseURL string) (*Assembled
 		return nil, fmt.Errorf("list agent tools: %w", err)
 	}
 	for _, t := range tools {
-		params := t.ParametersSchema
+		params := json.RawMessage(t.ParametersSchema)
 		if len(params) == 0 {
 			params = json.RawMessage("{}")
 		}
@@ -94,8 +94,8 @@ func (s *ToolAssemblyService) Assemble(agentID uint, baseURL string) (*Assembled
 			Transport: srv.Transport,
 			URL:       srv.URL,
 			Command:   srv.Command,
-			Args:      srv.Args,
-			Env:       srv.Env,
+			Args:      json.RawMessage(srv.Args),
+			Env:       json.RawMessage(srv.Env),
 		}
 		// Decrypt auth config
 		if len(srv.AuthConfigEncrypted) > 0 && srv.AuthType != AuthTypeNone {
