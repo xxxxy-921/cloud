@@ -109,35 +109,21 @@ export function Component() {
     enabled: !!license?.productId,
   })
 
-  const revokeMutation = useMutation({
-    mutationFn: () => api.patch(`/api/v1/license/licenses/${id}/revoke`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["license-license", id] })
-      queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
-      toast.success(t("license:licenses.revokeSuccess"))
-    },
-    onError: (err) => toast.error(err.message),
-  })
+  function createLifecycleMutation(method: "patch" | "post", path: string, successKey: string) {
+    return useMutation({
+      mutationFn: () => api[method](path),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["license-license", id] })
+        queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
+        toast.success(t(`license:licenses.${successKey}`))
+      },
+      onError: (err: Error) => toast.error(err.message),
+    })
+  }
 
-  const suspendMutation = useMutation({
-    mutationFn: () => api.post(`/api/v1/license/licenses/${id}/suspend`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["license-license", id] })
-      queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
-      toast.success(t("license:licenses.suspendSuccess"))
-    },
-    onError: (err) => toast.error(err.message),
-  })
-
-  const reactivateMutation = useMutation({
-    mutationFn: () => api.post(`/api/v1/license/licenses/${id}/reactivate`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["license-license", id] })
-      queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
-      toast.success(t("license:licenses.reactivateSuccess"))
-    },
-    onError: (err) => toast.error(err.message),
-  })
+  const revokeMutation = createLifecycleMutation("patch", `/api/v1/license/licenses/${id}/revoke`, "revokeSuccess")
+  const suspendMutation = createLifecycleMutation("post", `/api/v1/license/licenses/${id}/suspend`, "suspendSuccess")
+  const reactivateMutation = createLifecycleMutation("post", `/api/v1/license/licenses/${id}/reactivate`, "reactivateSuccess")
 
   async function handleExport() {
     if (!id) return

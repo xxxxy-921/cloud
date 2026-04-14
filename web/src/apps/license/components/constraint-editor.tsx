@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState, useMemo } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Plus,
@@ -46,17 +46,18 @@ const TYPE_META: Record<string, { label: string; icon: typeof Hash }> = {
   multiSelect: { label: "多选", icon: ListChecks },
 }
 
-let _keyCounter = 0
-function nextKey(prefix: string) {
-  return `${prefix}_${++_keyCounter}`
+function useKeyCounter() {
+  const counterRef = useRef(0)
+  return (prefix: string) => `${prefix}_${++counterRef.current}`
 }
 
 export function ConstraintEditor({ productId, schema, canEdit }: ConstraintEditorProps) {
   const queryClient = useQueryClient()
+  const nextKey = useKeyCounter()
   const [modules, setModules] = useState<ConstraintModule[]>(() =>
     schema && Array.isArray(schema) ? structuredClone(schema) : [],
   )
-  const initialJSON = JSON.stringify(schema ?? [])
+  const initialJSON = useMemo(() => JSON.stringify(schema ?? []), [schema])
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -70,7 +71,7 @@ export function ConstraintEditor({ productId, schema, canEdit }: ConstraintEdito
     onError: (err) => toast.error(err.message),
   })
 
-  const hasChanges = JSON.stringify(modules) !== initialJSON
+  const hasChanges = useMemo(() => JSON.stringify(modules) !== initialJSON, [modules, initialJSON])
 
   function handleAddModule() {
     const key = nextKey("module")

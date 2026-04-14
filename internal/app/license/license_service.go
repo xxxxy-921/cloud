@@ -309,7 +309,7 @@ func (s *LicenseService) UpgradeLicense(id uint, params IssueLicenseParams) (*Li
 
 	// Unbind registration from original license so it can be reused for upgrade
 	if original.RegistrationCode != "" && original.RegistrationCode == params.RegistrationCode {
-		if err := s.regRepo.UnbindLicenseInTx(s.db, params.RegistrationCode); err != nil {
+		if err := s.regRepo.UnbindLicenseInTx(s.db.DB, params.RegistrationCode); err != nil {
 			return nil, err
 		}
 	}
@@ -387,19 +387,7 @@ func (s *LicenseService) ReactivateLicense(id uint) error {
 }
 
 func (s *LicenseService) CheckExpiredLicenses() error {
-	now := time.Now()
-	expired, err := s.licenseRepo.FindExpired(now)
-	if err != nil {
-		return err
-	}
-	for i := range expired {
-		if err := s.licenseRepo.UpdateStatus(expired[i].ID, map[string]any{
-			"lifecycle_status": LicenseLifecycleExpired,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.licenseRepo.UpdateExpiredStatus(time.Now(), []string{LicenseLifecyclePending, LicenseLifecycleActive})
 }
 
 func (s *LicenseService) GetLicense(id uint) (*LicenseDetail, error) {
@@ -625,29 +613,19 @@ func (s *LicenseService) BulkReissueLicenses(productID uint, ids []uint, issuedB
 			continue
 		}
 
-		// Rebuild payload
-		var constraintMap map[string]any
-		if len(detail.ConstraintValues) > 0 {
-			_ = json.Unmarshal(detail.ConstraintValues.RawMessage(), &constraintMap)
-		}
-		if constraintMap == nil {
-			constraintMap = make(map[string]any)
-		}
-
-		payload := map[string]any{
-			"v":    1,
-			"pid":  detail.ProductCode,
-			"lic":  detail.LicenseeCode,
-			"licn": detail.LicenseeName,
-			"reg":  detail.RegistrationCode,
-			"con":  constraintMap,
-			"iat":  detail.CreatedAt.Unix(),
-			"nbf":  detail.ValidFrom.Unix(),
-			"exp":  nil,
-			"kv":   key.Version,
-		}
-		if detail.ValidUntil != nil {
-			payload["exp"] = detail.ValidUntil.Unix()
+		payload, err := buildLicensePayload(licensePayloadArgs{
+			ProductCode:      detail.ProductCode,
+			LicenseeCode:     detail.LicenseeCode,
+			LicenseeName:     detail.LicenseeName,
+			RegistrationCode: detail.RegistrationCode,
+			ConstraintValues: detail.ConstraintValues,
+			IssuedAt:         detail.CreatedAt,
+			ValidFrom:        detail.ValidFrom,
+			ValidUntil:       detail.ValidUntil,
+			KeyVersion:       key.Version,
+		})
+		if err != nil {
+			continue
 		}
 
 		sig, err := SignLicense(payload, key.EncryptedPrivateKey, encKey)

@@ -105,7 +105,7 @@ export function Component() {
     mutationFn: ({ id, action }: { id: number; action: string }) => {
       return api.post(`/api/v1/license/licenses/${id}/${action}`)
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
       setActionTarget(null)
       setActionType(null)
@@ -114,7 +114,7 @@ export function Component() {
         suspend: "suspendSuccess",
         reactivate: "reactivateSuccess",
       }
-      toast.success(t(`license:licenses.${keyMap[actionType!]}`))
+      toast.success(t(`license:licenses.${keyMap[variables.action]}`))
     },
     onError: (err) => toast.error(err.message),
   })
@@ -153,40 +153,40 @@ export function Component() {
   const actionTitle = actionType ? t(`license:licenses.${actionType}Title`) : ""
   const actionDesc = actionType ? t(`license:licenses.${actionType}Desc`) : ""
 
+  function isActionableLifecycle(status: string) {
+    return status === "active" || status === "pending" || status === "expired"
+  }
+
   function renderRowActions(item: LicenseItem) {
-    const actions: JSX.Element[] = []
+    const actionable = isActionableLifecycle(item.lifecycleStatus)
 
-    actions.push(
-      <Button
-        key="detail"
-        variant="ghost"
-        size="sm"
-        className="px-2.5"
-        onClick={() => navigate(`/license/licenses/${item.id}`)}
-      >
-        <Eye className="mr-1 h-3.5 w-3.5" />
-        {t("license:licenses.detail")}
-      </Button>
-    )
-
-    if (item.lifecycleStatus === "active" || item.lifecycleStatus === "pending" || item.lifecycleStatus === "expired") {
-      actions.push(
+    return (
+      <>
         <Button
-          key="export"
+          key="detail"
           variant="ghost"
           size="sm"
           className="px-2.5"
-          onClick={() => handleExport(item)}
+          onClick={() => navigate(`/license/licenses/${item.id}`)}
         >
-          <Download className="mr-1 h-3.5 w-3.5" />
-          {t("common:export")}
+          <Eye className="mr-1 h-3.5 w-3.5" />
+          {t("license:licenses.detail")}
         </Button>
-      )
-    }
 
-    if (item.lifecycleStatus === "active" || item.lifecycleStatus === "pending" || item.lifecycleStatus === "expired") {
-      if (canRenew) {
-        actions.push(
+        {actionable && (
+          <Button
+            key="export"
+            variant="ghost"
+            size="sm"
+            className="px-2.5"
+            onClick={() => handleExport(item)}
+          >
+            <Download className="mr-1 h-3.5 w-3.5" />
+            {t("common:export")}
+          </Button>
+        )}
+
+        {actionable && canRenew && (
           <Button
             key="renew"
             variant="ghost"
@@ -197,10 +197,9 @@ export function Component() {
             <Clock className="mr-1 h-3.5 w-3.5" />
             {t("license:licenses.renew")}
           </Button>
-        )
-      }
-      if (canUpgrade) {
-        actions.push(
+        )}
+
+        {actionable && canUpgrade && (
           <Button
             key="upgrade"
             variant="ghost"
@@ -211,10 +210,9 @@ export function Component() {
             <ArrowUpCircle className="mr-1 h-3.5 w-3.5" />
             {t("license:licenses.upgrade")}
           </Button>
-        )
-      }
-      if (canSuspend) {
-        actions.push(
+        )}
+
+        {actionable && canSuspend && (
           <Button
             key="suspend"
             variant="ghost"
@@ -225,10 +223,9 @@ export function Component() {
             <Pause className="mr-1 h-3.5 w-3.5" />
             {t("license:licenses.suspend")}
           </Button>
-        )
-      }
-      if (canRevoke) {
-        actions.push(
+        )}
+
+        {actionable && canRevoke && (
           <Button
             key="revoke"
             variant="ghost"
@@ -239,26 +236,22 @@ export function Component() {
             <Ban className="mr-1 h-3.5 w-3.5" />
             {t("license:licenses.revoke")}
           </Button>
-        )
-      }
-    }
+        )}
 
-    if (item.lifecycleStatus === "suspended" && canReactivate) {
-      actions.push(
-        <Button
-          key="reactivate"
-          variant="ghost"
-          size="sm"
-          className="px-2.5 text-green-600 hover:text-green-600"
-          onClick={() => openAction(item, "reactivate")}
-        >
-          <Play className="mr-1 h-3.5 w-3.5" />
-          {t("license:licenses.reactivate")}
-        </Button>
-      )
-    }
-
-    return actions
+        {item.lifecycleStatus === "suspended" && canReactivate && (
+          <Button
+            key="reactivate"
+            variant="ghost"
+            size="sm"
+            className="px-2.5 text-green-600 hover:text-green-600"
+            onClick={() => openAction(item, "reactivate")}
+          >
+            <Play className="mr-1 h-3.5 w-3.5" />
+            {t("license:licenses.reactivate")}
+          </Button>
+        )}
+      </>
+    )
   }
 
   return (
