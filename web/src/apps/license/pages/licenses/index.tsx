@@ -48,6 +48,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import { formatDateTime } from "@/lib/utils"
 import { IssueLicenseSheet } from "../../components/issue-license-sheet"
+import { UpgradeLicenseSheet } from "../../components/upgrade-license-sheet"
+import { RenewLicenseSheet } from "../../components/renew-license-sheet"
 
 export interface LicenseItem {
   id: number
@@ -80,6 +82,8 @@ export function Component() {
   const [statusFilter, setStatusFilter] = useState("")
   const [actionTarget, setActionTarget] = useState<LicenseItem | null>(null)
   const [actionType, setActionType] = useState<"revoke" | "suspend" | "reactivate" | null>(null)
+  const [upgradeTarget, setUpgradeTarget] = useState<LicenseItem | null>(null)
+  const [renewTarget, setRenewTarget] = useState<LicenseItem | null>(null)
 
   const canIssue = usePermission("license:license:issue")
   const canRevoke = usePermission("license:license:revoke")
@@ -188,7 +192,7 @@ export function Component() {
             variant="ghost"
             size="sm"
             className="px-2.5"
-            onClick={() => navigate(`/license/licenses/${item.id}`, { state: { openRenew: true } })}
+            onClick={() => setRenewTarget(item)}
           >
             <Clock className="mr-1 h-3.5 w-3.5" />
             {t("license:licenses.renew")}
@@ -202,7 +206,7 @@ export function Component() {
             variant="ghost"
             size="sm"
             className="px-2.5"
-            onClick={() => navigate(`/license/licenses/${item.id}`, { state: { openUpgrade: true } })}
+            onClick={() => setUpgradeTarget(item)}
           >
             <ArrowUpCircle className="mr-1 h-3.5 w-3.5" />
             {t("license:licenses.upgrade")}
@@ -369,6 +373,10 @@ export function Component() {
       />
 
       <IssueLicenseSheet open={formOpen} onOpenChange={setFormOpen} />
+
+      <UpgradeLicenseSheet license={upgradeTarget} open={!!upgradeTarget} onOpenChange={() => setUpgradeTarget(null)} />
+
+      <RenewLicenseSheet license={renewTarget} open={!!renewTarget} onOpenChange={() => setRenewTarget(null)} />
 
       <AlertDialog open={actionTarget !== null} onOpenChange={(open) => { if (!open) { setActionTarget(null); setActionType(null) } }}>
         <AlertDialogContent>

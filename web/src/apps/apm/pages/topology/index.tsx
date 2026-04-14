@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useQuery } from "@tanstack/react-query"
 import { Network } from "lucide-react"
 
-import { fetchTopology, fetchServices, type TopologyNode } from "../../api"
+import { fetchTopology, fetchServices } from "../../api"
 import { useTimeRange } from "../../hooks/use-time-range"
 import { TimeRangePicker } from "../../components/time-range-picker"
 import { ServiceMap } from "../../components/service-map"

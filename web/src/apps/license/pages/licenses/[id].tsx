@@ -1,15 +1,13 @@
-import { useMemo, useState, useEffect } from "react"
-import { useParams, useNavigate, useLocation } from "react-router"
+import { useMemo, useState } from "react"
+import { useParams, useNavigate } from "react-router"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Ban, Check, Copy, Download, Loader2, Clock, ArrowUpCircle, Pause, Play } from "lucide-react"
+import { ArrowLeft, Ban, Check, Copy, Download, Loader2, Clock, Pause, Play } from "lucide-react"
 import { api } from "@/lib/api"
 import { usePermission } from "@/hooks/use-permission"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,15 +19,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { formatDateTime } from "@/lib/utils"
+import { RenewLicenseSheet } from "../../components/renew-license-sheet"
 
 interface LicenseDetail {
   id: number
@@ -98,28 +89,13 @@ export function Component() {
   const { t } = useTranslation(["license", "common"])
   const { id } = useParams()
   const navigate = useNavigate()
-  const location = useLocation()
   const queryClient = useQueryClient()
   const canRevoke = usePermission("license:license:revoke")
   const canRenew = usePermission("license:license:renew")
-  const canUpgrade = usePermission("license:license:upgrade")
   const canSuspend = usePermission("license:license:suspend")
   const canReactivate = usePermission("license:license:reactivate")
   const [copied, setCopied] = useState(false)
   const [renewOpen, setRenewOpen] = useState(false)
-  const [upgradeOpen, setUpgradeOpen] = useState(false)
-  const [newValidUntil, setNewValidUntil] = useState("")
-
-  useEffect(() => {
-    const state = location.state as { openRenew?: boolean; openUpgrade?: boolean } | null
-    if (state?.openRenew || state?.openUpgrade) {
-      queueMicrotask(() => {
-        if (state?.openRenew) setRenewOpen(true)
-        if (state?.openUpgrade) setUpgradeOpen(true)
-        navigate(location.pathname, { replace: true, state: {} })
-      })
-    }
-  }, [location, navigate])
 
   const { data: license, isLoading } = useQuery({
     queryKey: ["license-license", id],
@@ -139,42 +115,6 @@ export function Component() {
       queryClient.invalidateQueries({ queryKey: ["license-license", id] })
       queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
       toast.success(t("license:licenses.revokeSuccess"))
-    },
-    onError: (err) => toast.error(err.message),
-  })
-
-  const renewMutation = useMutation({
-    mutationFn: () => api.post(`/api/v1/license/licenses/${id}/renew`, { validUntil: newValidUntil || null }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["license-license", id] })
-      queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
-      setRenewOpen(false)
-      toast.success(t("license:licenses.renewSuccess"))
-    },
-    onError: (err) => toast.error(err.message),
-  })
-
-  const upgradeMutation = useMutation({
-    mutationFn: () =>
-      api.post<LicenseDetail>(`/api/v1/license/licenses/${id}/upgrade`, {
-        productId: license?.productId ?? undefined,
-        licenseeId: license?.licenseeId ?? undefined,
-        planId: license?.planId ?? undefined,
-        planName: license?.planName ?? "",
-        registrationCode: license?.registrationCode ?? "",
-        validFrom: license?.validFrom ?? "",
-        validUntil: license?.validUntil ?? undefined,
-        constraintValues: license?.constraintValues ?? {},
-        notes: "",
-      }),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["license-license", id] })
-      queryClient.invalidateQueries({ queryKey: ["license-licenses"] })
-      setUpgradeOpen(false)
-      toast.success(t("license:licenses.upgradeSuccess"))
-      if (data?.id) {
-        navigate(`/license/licenses/${data.id}`)
-      }
     },
     onError: (err) => toast.error(err.message),
   })
@@ -314,12 +254,6 @@ export function Component() {
             <Button variant="outline" size="sm" onClick={() => setRenewOpen(true)}>
               <Clock className="mr-1.5 h-4 w-4" />
               {t("license:licenses.renew")}
-            </Button>
-          )}
-          {canLifecycleAction && canUpgrade && (
-            <Button variant="outline" size="sm" onClick={() => setUpgradeOpen(true)}>
-              <ArrowUpCircle className="mr-1.5 h-4 w-4" />
-              {t("license:licenses.upgrade")}
             </Button>
           )}
           {canLifecycleAction && canSuspend && (
@@ -491,45 +425,8 @@ export function Component() {
         </div>
       )}
 
-      {/* Renew Dialog */}
-      <Dialog open={renewOpen} onOpenChange={setRenewOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("license:licenses.renewTitle")}</DialogTitle>
-            <DialogDescription>{t("license:licenses.renewDesc")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <Label>{t("license:licenses.validUntilDate")}</Label>
-            <Input
-              type="date"
-              value={newValidUntil}
-              onChange={(e) => setNewValidUntil(e.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenewOpen(false)}>{t("common:cancel")}</Button>
-            <Button onClick={() => renewMutation.mutate()} disabled={renewMutation.isPending}>
-              {renewMutation.isPending ? t("common:processing") : t("common:confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <RenewLicenseSheet license={license} open={renewOpen} onOpenChange={setRenewOpen} />
 
-      {/* Upgrade Dialog */}
-      <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("license:licenses.upgradeTitle")}</DialogTitle>
-            <DialogDescription>{t("license:licenses.upgradeDesc")}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUpgradeOpen(false)}>{t("common:cancel")}</Button>
-            <Button onClick={() => upgradeMutation.mutate()} disabled={upgradeMutation.isPending}>
-              {upgradeMutation.isPending ? t("common:processing") : t("common:confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

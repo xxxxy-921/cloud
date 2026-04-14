@@ -4,8 +4,8 @@ import { useNavigate } from "react-router"
 import { useTranslation } from "react-i18next"
 import { X, ExternalLink, Activity, Clock, AlertTriangle, BarChart3 } from "lucide-react"
 
-import { fetchServiceDetail, type ServiceDetail, type OperationStats } from "../../api"
-import { getServiceIcon, getHealthLevel } from "./service-node"
+import { fetchServiceDetail, type OperationStats } from "../../api"
+import { ServiceIcon, getHealthLevel } from "./service-node"
 
 interface DetailPanelProps {
   serviceName: string
@@ -36,7 +36,6 @@ export function DetailPanel({ serviceName, timeStart, timeEnd, onClose }: Detail
     queryFn: () => fetchServiceDetail(serviceName, timeStart, timeEnd),
   })
 
-  const Icon = getServiceIcon(serviceName)
   const health = data ? getHealthLevel(data.errorRate) : "healthy"
 
   const healthBadge = {
@@ -72,7 +71,7 @@ export function DetailPanel({ serviceName, timeStart, timeEnd, onClose }: Detail
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b">
         <div className="flex items-center justify-center w-9 h-9 rounded-full bg-muted/60">
-          <Icon className="w-4.5 h-4.5 text-muted-foreground" strokeWidth={2} />
+          <ServiceIcon name={serviceName} className="w-4.5 h-4.5 text-muted-foreground" strokeWidth={2} />
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-semibold truncate">{serviceName}</h3>

@@ -107,7 +107,6 @@ export function ServiceMap({
   colorMode = "errorRate",
   p95Map = {},
   filteredNodes = new Set(),
-  selectedNode,
   onSelectNode,
 }: ServiceMapProps) {
   const { initialNodes, initialEdges } = useMemo(() => {

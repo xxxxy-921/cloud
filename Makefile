@@ -22,6 +22,9 @@ ifdef APPS
 	APPS= ./scripts/gen-registry.sh
 endif
 
+web-install:
+	cd ./web && bun install
+	
 web-dev:
 	cd ./web && \
 	bun run dev

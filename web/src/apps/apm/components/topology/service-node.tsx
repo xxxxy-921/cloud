@@ -10,20 +10,35 @@ export type ServiceNodeData = TopologyNode & {
 }
 
 // --- Icon mapping ---
-const ICON_RULES: [RegExp, typeof Server][] = [
-  [/gateway|api-gw|nginx|ingress|proxy|edge/i, Globe],
-  [/pay|billing|stripe|checkout/i, CreditCard],
-  [/inventory|stock|warehouse|product|catalog/i, Package],
-  [/notif|email|sms|alert|push|message/i, Bell],
-  [/db|database|redis|postgres|mysql|mongo|cache/i, Database],
-  [/worker|queue|consumer|scheduler|cron/i, Cpu],
+const ICON_RULES: [RegExp, string][] = [
+  [/gateway|api-gw|nginx|ingress|proxy|edge/i, "globe"],
+  [/pay|billing|stripe|checkout/i, "creditCard"],
+  [/inventory|stock|warehouse|product|catalog/i, "package"],
+  [/notif|email|sms|alert|push|message/i, "bell"],
+  [/db|database|redis|postgres|mysql|mongo|cache/i, "database"],
+  [/worker|queue|consumer|scheduler|cron/i, "cpu"],
 ]
 
-export function getServiceIcon(name: string) {
-  for (const [re, Icon] of ICON_RULES) {
-    if (re.test(name)) return Icon
+function resolveIconKey(name: string): string {
+  for (const [re, key] of ICON_RULES) {
+    if (re.test(name)) return key
   }
-  return Server
+  return "server"
+}
+
+/** Renders the correct icon for a service name — no dynamic component creation */
+export function ServiceIcon({ name, className, strokeWidth }: { name: string; className?: string; strokeWidth?: number }) {
+  const key = resolveIconKey(name)
+  const props = { className, strokeWidth }
+  switch (key) {
+    case "globe": return <Globe {...props} />
+    case "creditCard": return <CreditCard {...props} />
+    case "package": return <Package {...props} />
+    case "bell": return <Bell {...props} />
+    case "database": return <Database {...props} />
+    case "cpu": return <Cpu {...props} />
+    default: return <Server {...props} />
+  }
 }
 
 // --- Health ---
@@ -70,7 +85,6 @@ function getThroughputIconBg(requestCount: number): string {
 export const ServiceNode = memo(function ServiceNode({ data, selected }: NodeProps) {
   const node = data as ServiceNodeData
   const colorMode = node.colorMode ?? "errorRate"
-  const Icon = getServiceIcon(node.serviceName)
 
   // Determine ring + icon bg based on color mode
   let ringClass: string
@@ -116,7 +130,7 @@ export const ServiceNode = memo(function ServiceNode({ data, selected }: NodePro
         `}
       >
         <div className={`flex items-center justify-center w-8 h-8 rounded-full ${iconBgClass}`}>
-          <Icon className="w-4 h-4" strokeWidth={2} />
+          <ServiceIcon name={node.serviceName} className="w-4 h-4" strokeWidth={2} />
         </div>
       </div>
 

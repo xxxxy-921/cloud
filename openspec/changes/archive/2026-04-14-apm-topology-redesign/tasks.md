@@ -40,6 +40,6 @@
 
 ## 6. i18n + 清理
 
-- [ ] 6.1 更新 `locales/en.json` 和 `zh-CN.json`：新增 topology detail panel、color mode、search filter 相关翻译 key
-- [ ] 6.2 删除废弃的 `edge-tooltip.tsx`
-- [ ] 6.3 运行 `bun run lint` 确认 APM 文件无错误
+- [x] 6.1 更新 `locales/en.json` 和 `zh-CN.json`：新增 topology detail panel、color mode、search filter 相关翻译 key
+- [x] 6.2 删除废弃的 `edge-tooltip.tsx`
+- [x] 6.3 运行 `bun run lint` 确认 APM 文件无错误

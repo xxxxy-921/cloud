@@ -88,9 +88,9 @@ All dependencies are registered as `do.Provide()` providers in main.go and resol
 │         始终存在，不可拔除          │     代码在 internal/ 原位不动
 └──────────────┬───────────────────┘
                │
-     ┌─────────┼─────────┐
-     ▼         ▼         ▼
-  App: AI   App: Node  App: License  ...     ← 可选模块，build tag 控制
+  ┌────┬────┬──┴──┬────┬────┐
+  ▼    ▼    ▼     ▼    ▼    ▼
+ AI  Node  Org   APM  Obs  License   ← 可选模块，build tag 控制
 ```
 
 每个 App 实现 `app.App` 接口（`internal/app/app.go`）：
@@ -112,7 +112,7 @@ type App interface {
 1. 后端：`internal/app/<name>/app.go` — 实现 App 接口 + `func init() { app.Register(&XxxApp{}) }`
 2. Edition 文件：`cmd/server/edition_full.go` 加 `import _ "metis/internal/app/<name>"`
 3. 前端：`web/src/apps/<name>/module.ts` — 调用 `registerApp()` 注册路由
-4. 在 `web/src/apps/registry.ts` 底部加 `import './<name>/module'`
+4. 在 `web/src/apps/_bootstrap.ts` 加 `import './<name>/module'`（`gen-registry.sh` 在过滤构建时自动管理此文件）
 
 App 可通过 IOC 容器引用内核 service：`do.MustInvoke[*service.UserService](i)`
 
@@ -135,11 +135,12 @@ Makefile 通过 `-ldflags` 注入 `internal/version` 包的三个变量：`Versi
 认证路由的中间件链（顺序固定，在 `handler.Register()` 中配置）：
 
 ```
-JWTAuth → PasswordExpiry → CasbinAuth → Audit → Handler
+JWTAuth → PasswordExpiry → CasbinAuth → DataScope → Audit → Handler
 ```
 
 - **CasbinAuth 白名单**: `middleware/casbin.go` 中 `casbinWhitelist`（精确匹配）和 `casbinWhitelistPrefixes`（前缀匹配）定义了跳过权限检查的公开路由。新增需要公开访问的 API 需要加到白名单。
 - **Audit**: 仅 2xx 响应会记录审计日志。Handler 通过 `c.Set()` 设置审计字段：`audit_action`, `audit_resource`, `audit_resource_id`, `audit_summary`。
+- **DataScope**: 基于角色的数据可见性过滤（`middleware/data_scope.go`）。通过 `c.Get("deptScope")` 获取 `*[]uint`：nil=全部可见，`&[]uint{}`=仅自己，`&[]uint{1,2,3}`=指定部门。依赖 Org App 的 `OrgScopeResolver`，未安装 Org 时不过滤。
 
 ### Auth & RBAC
 
@@ -180,7 +181,7 @@ KnowledgeBase         → 知识库（compile status: idle/compiling/completed/e
 - `ai-knowledge-crawl`（cron `*/5 * * * *`）— 遍历开启爬取的 URL 来源，按 `CrawlSchedule` 决定是否重新爬取，内容变化时触发重新编译
 - `ai-knowledge-compile`（async）— 调用 LLM 将全部 `completed` 来源编译为知识图谱，编译后自动生成 `index` 节点并执行 lint
 
-**LLM 编译**（`KnowledgeCompileService`）：使用知识库配置的模型（未配置则取默认 LLM），构造 prompt → 调用 `internal/llm.Client` → 解析 JSON 输出（nodes + updated_nodes）→ 写入 node/edge。`internal/llm/` 是共享的 LLM 客户端包，通过 Provider 的 protocol（openai-compatible）+ BaseURL + 加密 API Key 构建客户端。
+**LLM 编译**（`KnowledgeCompileService`）：使用知识库配置的模型（未配置则取默认 LLM），构造 prompt → 调用 `internal/llm.Client` → 解析 JSON 输出（nodes + updated_nodes）→ 写入 node/edge。`internal/llm/` 是共享的 LLM 客户端包，支持 OpenAI-compatible 和 Anthropic 两种协议，通过 Provider 的 protocol + BaseURL + 加密 API Key 构建客户端。
 
 **URL 爬取**：支持 `crawlDepth`（递归抓取同域链接）和 `urlPattern`（前缀过滤子链接）。HTML 内容用简单正则转换为 Markdown，10MB 大小限制。
 
@@ -250,6 +251,45 @@ NodeProcessLog        → 进程日志收集
 /api/v1/ai/knowledge/*       → 知识查询（搜索、节点、图谱）
 /api/v1/ai/internal/skills/* → Skill 包下载
 ```
+
+### Org App: Organization Structure
+
+组织架构管理，为数据权限过滤提供基础：
+
+```
+Department        → 部门树（parent_id 自关联，支持树形查询）
+Position          → 职位定义
+UserPosition      → 用户-职位分配（多对多，支持主岗/兼岗）
+```
+
+- 提供 `OrgScopeResolver` 接口实现 — 供 `DataScopeMiddleware` 查询用户可见部门范围
+- API 前缀：`/api/v1/org/*`（部门 CRUD + 树、职位 CRUD、用户职位分配）
+
+### APM App: Application Performance Monitoring
+
+基于 ClickHouse 的 APM 应用，查询 OpenTelemetry trace/span 数据：
+
+- 无自有 Model（`Models()` 返回 nil），数据来自外部 ClickHouse
+- `NewClickHouseClient` 从 SystemConfig 读取 ClickHouse 连接配置
+- API 前缀：`/api/v1/apm/*`（traces、services、topology、timeseries、analytics、errors）
+
+### Observe App: Integration Token Authentication
+
+为外部可观测性工具（如 Grafana）提供 ForwardAuth 验证：
+
+- `IntegrationToken` — 集成令牌（name + hashed token + scopes）
+- `/api/v1/observe/auth/verify` — ForwardAuth 端点，绕过 JWT+Casbin，直接注册在 Gin Engine 上
+- API 前缀：`/api/v1/observe/*`（令牌 CRUD + 设置）
+
+### License App
+
+许可证管理模块（独立 edition `edition_license` 可单独编译）。
+
+### i18n 国际化
+
+**后端**：`internal/locales/` 使用 go-i18n，内核内嵌 `zh-CN.json` + `en.json`。App 可实现 `LocaleProvider` 接口提供额外翻译文件，main.go 在启动时自动加载。通过 `localeSvc.T(locale, messageID)` 获取翻译。
+
+**前端**：`web/src/` 使用 i18next + react-i18next。内核翻译在 `web/src/locales/`，各 App 翻译在 `web/src/apps/<name>/locales/`（en.json + zh-CN.json）。
 
 ### Frontend Stack (`web/src/`)
 

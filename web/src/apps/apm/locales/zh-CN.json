@@ -92,7 +92,24 @@
     "errorRate": "错误率",
     "avgLatency": "平均",
     "p95Latency": "P95",
-    "calls": "次调用"
+    "calls": "次调用",
+    "detail": {
+      "requestCount": "请求数",
+      "avgLatency": "平均延迟",
+      "p95": "P95 延迟",
+      "errorRate": "错误率",
+      "operations": "操作列表",
+      "viewFull": "查看完整详情"
+    },
+    "colorMode": {
+      "errorRate": "错误率",
+      "latency": "延迟 P95",
+      "throughput": "吞吐量"
+    },
+    "search": {
+      "placeholder": "搜索服务...",
+      "errorOnly": "仅错误"
+    }
   },
   "logs": {
     "tab": "日志",
