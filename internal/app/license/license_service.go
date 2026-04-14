@@ -53,16 +53,17 @@ func NewLicenseService(i do.Injector) (*LicenseService, error) {
 }
 
 type IssueLicenseParams struct {
-	ProductID        uint
-	LicenseeID       uint
-	PlanID           *uint
-	PlanName         string
-	RegistrationCode string
-	ConstraintValues json.RawMessage
-	ValidFrom        time.Time
-	ValidUntil       *time.Time
-	Notes            string
-	IssuedBy         uint
+	ProductID              uint
+	LicenseeID             uint
+	PlanID                 *uint
+	PlanName               string
+	RegistrationCode       string
+	AutoCreateRegistration bool
+	ConstraintValues       json.RawMessage
+	ValidFrom              time.Time
+	ValidUntil             *time.Time
+	Notes                  string
+	IssuedBy               uint
 }
 
 func deriveLifecycleStatus(validFrom time.Time, validUntil *time.Time) string {
@@ -163,9 +164,22 @@ func (s *LicenseService) IssueLicense(params IssueLicenseParams) (*License, erro
 		r, err := s.regRepo.FindByCode(params.RegistrationCode)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrRegistrationNotFound
+				if params.AutoCreateRegistration {
+					r = &LicenseRegistration{
+						ProductID:  &params.ProductID,
+						LicenseeID: &params.LicenseeID,
+						Code:       params.RegistrationCode,
+						Source:     "manual_input",
+					}
+					if err := s.regRepo.Create(r); err != nil {
+						return nil, err
+					}
+				} else {
+					return nil, ErrRegistrationNotFound
+				}
+			} else {
+				return nil, err
 			}
-			return nil, err
 		}
 		if r.BoundLicenseID != nil {
 			return nil, ErrRegistrationAlreadyBound

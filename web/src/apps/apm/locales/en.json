@@ -92,7 +92,24 @@
     "errorRate": "Error",
     "avgLatency": "Avg",
     "p95Latency": "P95",
-    "calls": "calls"
+    "calls": "calls",
+    "detail": {
+      "requestCount": "Requests",
+      "avgLatency": "Avg Latency",
+      "p95": "P95 Latency",
+      "errorRate": "Error Rate",
+      "operations": "Operations",
+      "viewFull": "View Full Details"
+    },
+    "colorMode": {
+      "errorRate": "Error Rate",
+      "latency": "Latency P95",
+      "throughput": "Throughput"
+    },
+    "search": {
+      "placeholder": "Search services...",
+      "errorOnly": "Errors Only"
+    }
   },
   "logs": {
     "tab": "Logs",

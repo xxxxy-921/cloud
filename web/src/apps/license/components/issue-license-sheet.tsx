@@ -263,6 +263,7 @@ export function IssueLicenseSheet({ open, onOpenChange }: IssueLicenseSheetProps
       planId: planId && planId !== "custom" ? Number(planId) : null,
       planName,
       registrationCode,
+      autoCreateRegistration: registrationMode === "manual",
       constraintValues,
       validFrom,
       validUntil: validUntil || null,

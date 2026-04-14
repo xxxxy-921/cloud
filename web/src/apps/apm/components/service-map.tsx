@@ -1,5 +1,4 @@
 import { useMemo, useCallback } from "react"
-import { useNavigate } from "react-router"
 import {
   ReactFlow,
   Controls,
@@ -14,8 +13,9 @@ import dagre from "@dagrejs/dagre"
 import "@xyflow/react/dist/style.css"
 
 import type { TopologyGraph } from "../api"
-import { ServiceNode } from "./topology/service-node"
-import { ServiceEdge } from "./topology/service-edge"
+import { ServiceNode, type ServiceNodeData } from "./topology/service-node"
+import { ServiceEdge, type ServiceEdgeData } from "./topology/service-edge"
+import type { ColorMode } from "./topology/color-mode-select"
 
 const nodeTypes = { service: ServiceNode }
 const edgeTypes = { service: ServiceEdge }
@@ -27,9 +27,19 @@ interface ServiceMapProps {
   graph: TopologyGraph
   timeStart?: string
   timeEnd?: string
+  colorMode?: ColorMode
+  p95Map?: Record<string, number>
+  filteredNodes?: Set<string>
+  selectedNode?: string | null
+  onSelectNode?: (name: string | null) => void
 }
 
-function layoutGraph(graph: TopologyGraph) {
+function layoutGraph(
+  graph: TopologyGraph,
+  colorMode: ColorMode,
+  p95Map: Record<string, number>,
+  filteredNodes: Set<string>,
+) {
   const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: "LR", nodesep: 60, ranksep: 180, marginx: 40, marginy: 40 })
   g.setDefaultEdgeLabel(() => ({}))
@@ -49,42 +59,77 @@ function layoutGraph(graph: TopologyGraph) {
       id: n.serviceName,
       type: "service",
       position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 },
-      data: n,
+      data: {
+        ...n,
+        colorMode,
+        p95Ms: p95Map[n.serviceName],
+        filtered: filteredNodes.has(n.serviceName),
+      } satisfies ServiceNodeData,
     }
   })
 
-  const edges: Edge[] = graph.edges.map((e) => ({
-    id: `${e.caller}-${e.callee}`,
-    source: e.caller,
-    target: e.callee,
-    type: "service",
-    data: e,
-  }))
+  const edges: Edge[] = graph.edges.map((e) => {
+    const bothFiltered = filteredNodes.has(e.caller) || filteredNodes.has(e.callee)
+    return {
+      id: `${e.caller}-${e.callee}`,
+      source: e.caller,
+      target: e.callee,
+      type: "service",
+      data: {
+        ...e,
+        colorMode,
+        filtered: bothFiltered,
+      } satisfies ServiceEdgeData,
+    }
+  })
 
   return { nodes, edges }
 }
 
-export function ServiceMap({ graph, timeStart, timeEnd }: ServiceMapProps) {
-  const navigate = useNavigate()
+const LEGEND_ERROR_RATE = [
+  { color: "bg-emerald-500", label: "Healthy" },
+  { color: "bg-amber-500", label: "> 1% err" },
+  { color: "bg-red-500", label: "> 5% err" },
+]
+const LEGEND_LATENCY = [
+  { color: "bg-emerald-500", label: "Low (<100ms)" },
+  { color: "bg-amber-500", label: "Med (100-500ms)" },
+  { color: "bg-red-500", label: "High (>500ms)" },
+]
+const LEGEND_THROUGHPUT = [
+  { color: "bg-sky-400", label: "Low" },
+  { color: "bg-blue-500", label: "Medium" },
+  { color: "bg-violet-500", label: "High" },
+]
 
+export function ServiceMap({
+  graph,
+  colorMode = "errorRate",
+  p95Map = {},
+  filteredNodes = new Set(),
+  selectedNode,
+  onSelectNode,
+}: ServiceMapProps) {
   const { initialNodes, initialEdges } = useMemo(() => {
-    const { nodes, edges } = layoutGraph(graph)
+    const { nodes, edges } = layoutGraph(graph, colorMode, p95Map, filteredNodes)
     return { initialNodes: nodes, initialEdges: edges }
-  }, [graph])
+  }, [graph, colorMode, p95Map, filteredNodes])
 
   const [nodes, , onNodesChange] = useNodesState(initialNodes)
   const [edges, , onEdgesChange] = useEdgesState(initialEdges)
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
-      const params = new URLSearchParams()
-      if (timeStart) params.set("start", timeStart)
-      if (timeEnd) params.set("end", timeEnd)
-      const qs = params.toString()
-      navigate(`/apm/services/${encodeURIComponent(node.id)}${qs ? `?${qs}` : ""}`)
+      onSelectNode?.(node.id)
     },
-    [navigate, timeStart, timeEnd],
+    [onSelectNode],
   )
+
+  const onPaneClick = useCallback(() => {
+    // Don't deselect when clicking pane — user might be panning
+  }, [])
+
+  const legendItems = colorMode === "latency" ? LEGEND_LATENCY : colorMode === "throughput" ? LEGEND_THROUGHPUT : LEGEND_ERROR_RATE
 
   return (
     <div className="relative h-[calc(100vh-10rem)] min-h-[500px] w-full">
@@ -96,6 +141,7 @@ export function ServiceMap({ graph, timeStart, timeEnd }: ServiceMapProps) {
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
         fitView
         fitViewOptions={{ padding: 0.35, maxZoom: 1.1 }}
         proOptions={{ hideAttribution: true }}
@@ -131,18 +177,12 @@ export function ServiceMap({ graph, timeStart, timeEnd }: ServiceMapProps) {
 
       {/* Legend */}
       <div className="absolute bottom-4 right-4 flex items-center gap-4 rounded-lg border bg-card/90 backdrop-blur-sm px-3 py-2 text-[10px] text-muted-foreground shadow-sm">
-        <div className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          <span>Healthy</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-amber-500" />
-          <span>{">"} 1% err</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-red-500" />
-          <span>{">"} 5% err</span>
-        </div>
+        {legendItems.map((item) => (
+          <div key={item.label} className="flex items-center gap-1.5">
+            <span className={`h-2 w-2 rounded-full ${item.color}`} />
+            <span>{item.label}</span>
+          </div>
+        ))}
         <div className="flex items-center gap-1.5 border-l pl-4 border-border/40">
           <span className="flex items-center gap-0.5">
             <span className="h-1.5 w-1.5 rounded-full bg-primary/50" />

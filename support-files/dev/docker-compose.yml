@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: docker.xuanyuan.run/clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:latest
     restart: always
     volumes:
       - clickhouse:/var/lib/clickhouse
@@ -17,7 +17,7 @@ services:
         hard: 262144
 
   traefik:
-    image: docker.xuanyuan.run/library/traefik:v3
+    image: library/traefik:v3
     restart: always
     command:
       - "--providers.docker=true"
@@ -31,7 +31,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   otel-collector:
-    image: docker.xuanyuan.run/otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:latest
     restart: always
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -50,7 +50,7 @@ services:
       - "traefik.http.services.otlp.loadbalancer.server.port=4318"
 
   postgres:
-    image: docker.xuanyuan.run/library/postgres:17
+    image: library/postgres:17
     restart: always
     volumes:
       - postgres:/var/lib/postgresql/data
@@ -62,7 +62,7 @@ services:
       POSTGRES_PASSWORD: metis
 
   falkordb:
-    image: docker.xuanyuan.run/falkordb/falkordb:latest
+    image: falkordb/falkordb:latest
     restart: always
     volumes:
       - falkordb:/data

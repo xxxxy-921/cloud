@@ -19,24 +19,24 @@
 - [x] 3.3 面板指标卡：4 个 metric cards（Request Count、Avg Latency、P95、Error Rate），数据来自 `fetchServiceDetail`
 - [x] 3.4 面板操作列表：表格（spanName、requestCount、avgDuration、errorRate），行可点击跳转到 traces
 - [x] 3.5 面板底部："查看完整详情"按钮，跳转 `/apm/services/:name?start=...&end=...`
-- [ ] 3.6 改造 `pages/topology/index.tsx`：flex 布局，左侧拓扑图（flex-1）+ 右侧面板（选中时显示），`selectedNode` state
-- [ ] 3.7 改造 `service-map.tsx`：`onNodeClick` 不再 navigate，改为调用 `onSelectNode` 回调
+- [x] 3.6 改造 `pages/topology/index.tsx`：flex 布局，左侧拓扑图（flex-1）+ 右侧面板（选中时显示），`selectedNode` state
+- [x] 3.7 改造 `service-map.tsx`：`onNodeClick` 不再 navigate，改为调用 `onSelectNode` 回调
 
 ## 4. Color by 切换器
 
-- [ ] 4.1 新建 `components/topology/color-mode-select.tsx`：下拉切换器组件（Error Rate / Latency P95 / Throughput）
-- [ ] 4.2 `pages/topology/index.tsx` 添加 `colorMode` state，传递给 ServiceMap → 节点/边
-- [ ] 4.3 节点组件根据 colorMode 切换颜色映射逻辑：errorRate 模式用阈值分级，latency 用动态 percentile，throughput 用渐变
-- [ ] 4.4 边组件同步根据 colorMode 调整颜色
-- [ ] 4.5 获取 latency 数据：topology page 额外 fetch services list 补充 avgDuration/p95 数据，合并到 node data
-- [ ] 4.6 底部 Legend 随 colorMode 切换更新标签和色阶
+- [x] 4.1 新建 `components/topology/color-mode-select.tsx`：下拉切换器组件（Error Rate / Latency P95 / Throughput）
+- [x] 4.2 `pages/topology/index.tsx` 添加 `colorMode` state，传递给 ServiceMap → 节点/边
+- [x] 4.3 节点组件根据 colorMode 切换颜色映射逻辑：errorRate 模式用阈值分级，latency 用动态 percentile，throughput 用渐变
+- [x] 4.4 边组件同步根据 colorMode 调整颜色
+- [x] 4.5 获取 latency 数据：topology page 额外 fetch services list 补充 avgDuration/p95 数据，合并到 node data
+- [x] 4.6 底部 Legend 随 colorMode 切换更新标签和色阶
 
 ## 5. 搜索过滤
 
-- [ ] 5.1 新建 `components/topology/topology-toolbar.tsx`：搜索框 + "仅错误" Switch，放在页面标题栏右侧
-- [ ] 5.2 `pages/topology/index.tsx` 添加 `searchQuery` 和 `errorOnly` state
-- [ ] 5.3 实现过滤逻辑：非匹配节点 `opacity: 0.15`，两端均不匹配的边同步降低 opacity
-- [ ] 5.4 将过滤状态传入 ServiceMap，通过 node/edge className 或 style 控制 opacity
+- [x] 5.1 新建 `components/topology/topology-toolbar.tsx`：搜索框 + "仅错误" Switch，放在页面标题栏右侧
+- [x] 5.2 `pages/topology/index.tsx` 添加 `searchQuery` 和 `errorOnly` state
+- [x] 5.3 实现过滤逻辑：非匹配节点 `opacity: 0.15`，两端均不匹配的边同步降低 opacity
+- [x] 5.4 将过滤状态传入 ServiceMap，通过 node/edge className 或 style 控制 opacity
 
 ## 6. i18n + 清理
 

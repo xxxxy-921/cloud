@@ -17,15 +17,16 @@ import (
 // --- License request types ---
 
 type IssueLicenseRequest struct {
-	ProductID        uint            `json:"productId" binding:"required"`
-	LicenseeID       uint            `json:"licenseeId" binding:"required"`
-	PlanID           *uint           `json:"planId"`
-	PlanName         string          `json:"planName" binding:"required"`
-	RegistrationCode string          `json:"registrationCode" binding:"required"`
-	ConstraintValues json.RawMessage `json:"constraintValues"`
-	ValidFrom        string          `json:"validFrom" binding:"required"`
-	ValidUntil       *string         `json:"validUntil"`
-	Notes            string          `json:"notes"`
+	ProductID              uint            `json:"productId" binding:"required"`
+	LicenseeID             uint            `json:"licenseeId" binding:"required"`
+	PlanID                 *uint           `json:"planId"`
+	PlanName               string          `json:"planName" binding:"required"`
+	RegistrationCode       string          `json:"registrationCode" binding:"required"`
+	AutoCreateRegistration bool            `json:"autoCreateRegistration"`
+	ConstraintValues       json.RawMessage `json:"constraintValues"`
+	ValidFrom              string          `json:"validFrom" binding:"required"`
+	ValidUntil             *string         `json:"validUntil"`
+	Notes                  string          `json:"notes"`
 }
 
 type RenewLicenseRequest struct {
@@ -33,15 +34,16 @@ type RenewLicenseRequest struct {
 }
 
 type UpgradeLicenseRequest struct {
-	ProductID        uint            `json:"productId" binding:"required"`
-	LicenseeID       uint            `json:"licenseeId" binding:"required"`
-	PlanID           *uint           `json:"planId"`
-	PlanName         string          `json:"planName" binding:"required"`
-	RegistrationCode string          `json:"registrationCode" binding:"required"`
-	ConstraintValues json.RawMessage `json:"constraintValues"`
-	ValidFrom        string          `json:"validFrom" binding:"required"`
-	ValidUntil       *string         `json:"validUntil"`
-	Notes            string          `json:"notes"`
+	ProductID              uint            `json:"productId" binding:"required"`
+	LicenseeID             uint            `json:"licenseeId" binding:"required"`
+	PlanID                 *uint           `json:"planId"`
+	PlanName               string          `json:"planName" binding:"required"`
+	RegistrationCode       string          `json:"registrationCode" binding:"required"`
+	AutoCreateRegistration bool            `json:"autoCreateRegistration"`
+	ConstraintValues       json.RawMessage `json:"constraintValues"`
+	ValidFrom              string          `json:"validFrom" binding:"required"`
+	ValidUntil             *string         `json:"validUntil"`
+	Notes                  string          `json:"notes"`
 }
 
 type CreateLicenseRegistrationRequest struct {
@@ -104,16 +106,17 @@ func (h *LicenseHandler) Issue(c *gin.Context) {
 	c.Set("audit_resource", "license")
 
 	license, err := h.licenseSvc.IssueLicense(IssueLicenseParams{
-		ProductID:        req.ProductID,
-		LicenseeID:       req.LicenseeID,
-		PlanID:           req.PlanID,
-		PlanName:         req.PlanName,
-		RegistrationCode: req.RegistrationCode,
-		ConstraintValues: req.ConstraintValues,
-		ValidFrom:        validFrom,
-		ValidUntil:       validUntil,
-		Notes:            req.Notes,
-		IssuedBy:         userID.(uint),
+		ProductID:              req.ProductID,
+		LicenseeID:             req.LicenseeID,
+		PlanID:                 req.PlanID,
+		PlanName:               req.PlanName,
+		RegistrationCode:       req.RegistrationCode,
+		AutoCreateRegistration: req.AutoCreateRegistration,
+		ConstraintValues:       req.ConstraintValues,
+		ValidFrom:              validFrom,
+		ValidUntil:             validUntil,
+		Notes:                  req.Notes,
+		IssuedBy:               userID.(uint),
 	})
 	if err != nil {
 		if errors.Is(err, ErrProductNotFound) || errors.Is(err, ErrProductNotPublished) ||
@@ -349,16 +352,17 @@ func (h *LicenseHandler) Upgrade(c *gin.Context) {
 	c.Set("audit_resource_id", c.Param("id"))
 
 	license, err := h.licenseSvc.UpgradeLicense(id, IssueLicenseParams{
-		ProductID:        req.ProductID,
-		LicenseeID:       req.LicenseeID,
-		PlanID:           req.PlanID,
-		PlanName:         req.PlanName,
-		RegistrationCode: req.RegistrationCode,
-		ConstraintValues: req.ConstraintValues,
-		ValidFrom:        validFrom,
-		ValidUntil:       validUntil,
-		Notes:            req.Notes,
-		IssuedBy:         userID.(uint),
+		ProductID:              req.ProductID,
+		LicenseeID:             req.LicenseeID,
+		PlanID:                 req.PlanID,
+		PlanName:               req.PlanName,
+		RegistrationCode:       req.RegistrationCode,
+		AutoCreateRegistration: req.AutoCreateRegistration,
+		ConstraintValues:       req.ConstraintValues,
+		ValidFrom:              validFrom,
+		ValidUntil:             validUntil,
+		Notes:                  req.Notes,
+		IssuedBy:               userID.(uint),
 	})
 	if err != nil {
 		if errors.Is(err, ErrLicenseNotFound) || errors.Is(err, ErrLicenseAlreadyRevoked) {
