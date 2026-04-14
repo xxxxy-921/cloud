@@ -1,0 +1,462 @@
+package itsm
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/samber/do/v2"
+
+	"metis/internal/app/itsm/engine"
+	"metis/internal/handler"
+)
+
+type TicketHandler struct {
+	svc         *TicketService
+	timelineSvc *TimelineService
+}
+
+func NewTicketHandler(i do.Injector) (*TicketHandler, error) {
+	svc := do.MustInvoke[*TicketService](i)
+	timelineSvc := do.MustInvoke[*TimelineService](i)
+	return &TicketHandler{svc: svc, timelineSvc: timelineSvc}, nil
+}
+
+type CreateTicketRequest struct {
+	Title       string    `json:"title" binding:"required,max=256"`
+	Description string    `json:"description"`
+	ServiceID   uint      `json:"serviceId" binding:"required"`
+	PriorityID  uint      `json:"priorityId" binding:"required"`
+	FormData    JSONField `json:"formData"`
+}
+
+func (h *TicketHandler) Create(c *gin.Context) {
+	var req CreateTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID, _ := c.Get("userId")
+	requesterID := userID.(uint)
+
+	c.Set("audit_action", "itsm.ticket.create")
+	c.Set("audit_resource", "ticket")
+
+	ticket, err := h.svc.Create(CreateTicketInput{
+		Title:       req.Title,
+		Description: req.Description,
+		ServiceID:   req.ServiceID,
+		PriorityID:  req.PriorityID,
+		FormData:    req.FormData,
+	}, requesterID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrServiceDefNotFound):
+			handler.Fail(c, http.StatusBadRequest, "service not found")
+		case errors.Is(err, ErrServiceNotActive):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrPriorityNotFound):
+			handler.Fail(c, http.StatusBadRequest, "priority not found")
+		default:
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	c.Set("audit_resource_id", strconv.Itoa(int(ticket.ID)))
+	c.Set("audit_summary", "created ticket: "+ticket.Code)
+	handler.OK(c, ticket.ToResponse())
+}
+
+func (h *TicketHandler) List(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+
+	params := TicketListParams{
+		Keyword:  c.Query("keyword"),
+		Status:   c.Query("status"),
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	if v := c.Query("priorityId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.PriorityID = &uid
+		}
+	}
+	if v := c.Query("serviceId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.ServiceID = &uid
+		}
+	}
+	if v := c.Query("assigneeId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.AssigneeID = &uid
+		}
+	}
+	if v := c.Query("requesterId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.RequesterID = &uid
+		}
+	}
+
+	items, total, err := h.svc.List(params)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]TicketResponse, len(items))
+	for i, t := range items {
+		result[i] = t.ToResponse()
+	}
+	handler.OK(c, gin.H{"items": result, "total": total})
+}
+
+func (h *TicketHandler) Get(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	ticket, err := h.svc.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrTicketNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handler.OK(c, ticket.ToResponse())
+}
+
+type AssignTicketRequest struct {
+	AssigneeID uint `json:"assigneeId" binding:"required"`
+}
+
+func (h *TicketHandler) Assign(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	var req AssignTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID, _ := c.Get("userId")
+	operatorID := userID.(uint)
+
+	c.Set("audit_action", "itsm.ticket.assign")
+	c.Set("audit_resource", "ticket")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	ticket, err := h.svc.Assign(id, req.AssigneeID, operatorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTicketNotFound):
+			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrTicketTerminal):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		default:
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	c.Set("audit_summary", "assigned ticket: "+ticket.Code)
+	handler.OK(c, ticket.ToResponse())
+}
+
+func (h *TicketHandler) Complete(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	userID, _ := c.Get("userId")
+	operatorID := userID.(uint)
+
+	c.Set("audit_action", "itsm.ticket.complete")
+	c.Set("audit_resource", "ticket")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	ticket, err := h.svc.Complete(id, operatorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTicketNotFound):
+			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrTicketTerminal):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		default:
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	c.Set("audit_summary", "completed ticket: "+ticket.Code)
+	handler.OK(c, ticket.ToResponse())
+}
+
+func (h *TicketHandler) Cancel(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	var req CancelTicketInput
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID, _ := c.Get("userId")
+	operatorID := userID.(uint)
+
+	c.Set("audit_action", "itsm.ticket.cancel")
+	c.Set("audit_resource", "ticket")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	ticket, err := h.svc.Cancel(id, req.Reason, operatorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTicketNotFound):
+			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrTicketTerminal):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		default:
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	c.Set("audit_summary", "cancelled ticket: "+ticket.Code)
+	handler.OK(c, ticket.ToResponse())
+}
+
+func (h *TicketHandler) Mine(c *gin.Context) {
+	userID, _ := c.Get("userId")
+	requesterID := userID.(uint)
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	status := c.Query("status")
+
+	items, total, err := h.svc.Mine(requesterID, status, page, pageSize)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]TicketResponse, len(items))
+	for i, t := range items {
+		result[i] = t.ToResponse()
+	}
+	handler.OK(c, gin.H{"items": result, "total": total})
+}
+
+func (h *TicketHandler) Todo(c *gin.Context) {
+	userID, _ := c.Get("userId")
+	assigneeID := userID.(uint)
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+
+	items, total, err := h.svc.Todo(assigneeID, page, pageSize)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]TicketResponse, len(items))
+	for i, t := range items {
+		result[i] = t.ToResponse()
+	}
+	handler.OK(c, gin.H{"items": result, "total": total})
+}
+
+func (h *TicketHandler) History(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+
+	params := HistoryListParams{
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	if v := c.Query("assigneeId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.AssigneeID = &uid
+		}
+	}
+	if v := c.Query("startDate"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			params.StartDate = &t
+		}
+	}
+	if v := c.Query("endDate"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			end := t.Add(24*time.Hour - time.Nanosecond)
+			params.EndDate = &end
+		}
+	}
+
+	items, total, err := h.svc.History(params)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]TicketResponse, len(items))
+	for i, t := range items {
+		result[i] = t.ToResponse()
+	}
+	handler.OK(c, gin.H{"items": result, "total": total})
+}
+
+func (h *TicketHandler) Timeline(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	items, err := h.timelineSvc.ListByTicket(id)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]TicketTimelineResponse, len(items))
+	for i, t := range items {
+		result[i] = t.ToResponse()
+	}
+	handler.OK(c, result)
+}
+
+type ProgressTicketRequest struct {
+	ActivityID uint              `json:"activityId" binding:"required"`
+	Outcome    string            `json:"outcome" binding:"required"`
+	Result     json.RawMessage   `json:"result"`
+}
+
+func (h *TicketHandler) Progress(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	var req ProgressTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID, _ := c.Get("userId")
+	operatorID := userID.(uint)
+
+	c.Set("audit_action", "itsm.ticket.progress")
+	c.Set("audit_resource", "ticket")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	ticket, err := h.svc.Progress(id, req.ActivityID, req.Outcome, req.Result, operatorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTicketNotFound):
+			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrTicketTerminal):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, engine.ErrActivityNotFound), errors.Is(err, engine.ErrActivityNotActive):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		default:
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	c.Set("audit_summary", "progressed ticket: "+ticket.Code+" outcome="+req.Outcome)
+	handler.OK(c, ticket.ToResponse())
+}
+
+type SignalTicketRequest struct {
+	ActivityID uint              `json:"activityId" binding:"required"`
+	Outcome    string            `json:"outcome" binding:"required"`
+	Data       json.RawMessage   `json:"data"`
+}
+
+func (h *TicketHandler) Signal(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	var req SignalTicketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID, _ := c.Get("userId")
+	operatorID := userID.(uint)
+
+	c.Set("audit_action", "itsm.ticket.signal")
+	c.Set("audit_resource", "ticket")
+	c.Set("audit_resource_id", c.Param("id"))
+
+	ticket, err := h.svc.Signal(id, req.ActivityID, req.Outcome, req.Data, operatorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTicketNotFound):
+			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrTicketTerminal):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrActivityNotWait), errors.Is(err, engine.ErrActivityNotActive):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		default:
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	c.Set("audit_summary", "signalled ticket: "+ticket.Code)
+	handler.OK(c, ticket.ToResponse())
+}
+
+func (h *TicketHandler) Activities(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	activities, err := h.svc.GetActivities(id)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	handler.OK(c, activities)
+}

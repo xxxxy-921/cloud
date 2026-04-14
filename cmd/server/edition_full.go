@@ -8,6 +8,7 @@ package main
 import (
 	_ "metis/internal/app/ai"
 	_ "metis/internal/app/apm"
+	_ "metis/internal/app/itsm"
 	_ "metis/internal/app/license"
 	_ "metis/internal/app/node"
 	_ "metis/internal/app/observe"

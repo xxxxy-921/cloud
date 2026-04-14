@@ -1,0 +1,437 @@
+import { api } from "@/lib/api"
+
+// ─── Catalog ────────────────────────────────────────────
+
+export interface CatalogItem {
+  id: number
+  parentId: number | null
+  name: string
+  description: string
+  sortOrder: number
+  isActive: boolean
+  children?: CatalogItem[]
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchCatalogTree() {
+  return api.get<CatalogItem[]>("/api/v1/itsm/catalogs/tree").then((r) => r ?? [])
+}
+
+export function createCatalog(data: {
+  name: string
+  parentId?: number | null
+  description?: string
+  sortOrder?: number
+}) {
+  return api.post<CatalogItem>("/api/v1/itsm/catalogs", data)
+}
+
+export function updateCatalog(
+  id: number,
+  data: Partial<{
+    name: string
+    parentId: number | null
+    description: string
+    sortOrder: number
+    isActive: boolean
+  }>,
+) {
+  return api.put<CatalogItem>(`/api/v1/itsm/catalogs/${id}`, data)
+}
+
+export function deleteCatalog(id: number) {
+  return api.delete(`/api/v1/itsm/catalogs/${id}`)
+}
+
+// ─── Service Definition ─────────────────────────────────
+
+export interface ServiceDefItem {
+  id: number
+  name: string
+  code: string
+  description: string
+  catalogId: number
+  engineType: string
+  slaId: number | null
+  formSchema: unknown
+  isActive: boolean
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ServiceDefListParams {
+  keyword?: string
+  catalogId?: number
+  isActive?: boolean
+  page?: number
+  pageSize?: number
+}
+
+export function fetchServiceDefs(params: ServiceDefListParams) {
+  const p = new URLSearchParams()
+  if (params.keyword) p.set("keyword", params.keyword)
+  if (params.catalogId) p.set("catalogId", String(params.catalogId))
+  if (params.isActive !== undefined) p.set("isActive", String(params.isActive))
+  p.set("page", String(params.page ?? 1))
+  p.set("pageSize", String(params.pageSize ?? 20))
+  return api.get<{ items: ServiceDefItem[]; total: number }>(
+    `/api/v1/itsm/services?${p}`,
+  )
+}
+
+export function fetchServiceDef(id: number) {
+  return api.get<ServiceDefItem>(`/api/v1/itsm/services/${id}`)
+}
+
+export function createServiceDef(data: {
+  name: string
+  code: string
+  catalogId: number
+  engineType?: string
+  description?: string
+  slaId?: number | null
+  formSchema?: unknown
+  sortOrder?: number
+}) {
+  return api.post<ServiceDefItem>("/api/v1/itsm/services", data)
+}
+
+export function updateServiceDef(id: number, data: Partial<ServiceDefItem>) {
+  return api.put<ServiceDefItem>(`/api/v1/itsm/services/${id}`, data)
+}
+
+export function deleteServiceDef(id: number) {
+  return api.delete(`/api/v1/itsm/services/${id}`)
+}
+
+// ─── Service Action ─────────────────────────────────────
+
+export interface ServiceActionItem {
+  id: number
+  serviceId: number
+  name: string
+  code: string
+  actionType: string
+  configJson: unknown
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchServiceActions(serviceId: number) {
+  return api.get<ServiceActionItem[]>(
+    `/api/v1/itsm/services/${serviceId}/actions`,
+  ).then((r) => r ?? [])
+}
+
+export function createServiceAction(
+  serviceId: number,
+  data: { name: string; code: string; actionType: string; configJson?: unknown },
+) {
+  return api.post<ServiceActionItem>(
+    `/api/v1/itsm/services/${serviceId}/actions`,
+    data,
+  )
+}
+
+export function updateServiceAction(
+  serviceId: number,
+  actionId: number,
+  data: Partial<ServiceActionItem>,
+) {
+  return api.put<ServiceActionItem>(
+    `/api/v1/itsm/services/${serviceId}/actions/${actionId}`,
+    data,
+  )
+}
+
+export function deleteServiceAction(serviceId: number, actionId: number) {
+  return api.delete(
+    `/api/v1/itsm/services/${serviceId}/actions/${actionId}`,
+  )
+}
+
+// ─── Priority ───────────────────────────────────────────
+
+export interface PriorityItem {
+  id: number
+  name: string
+  code: string
+  value: number
+  color: string
+  description: string
+  defaultResponseMinutes: number
+  defaultResolutionMinutes: number
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchPriorities() {
+  return api.get<PriorityItem[]>("/api/v1/itsm/priorities").then((r) => r ?? [])
+}
+
+export function createPriority(data: {
+  name: string
+  code: string
+  value: number
+  color: string
+  description?: string
+  defaultResponseMinutes?: number
+  defaultResolutionMinutes?: number
+}) {
+  return api.post<PriorityItem>("/api/v1/itsm/priorities", data)
+}
+
+export function updatePriority(id: number, data: Partial<PriorityItem>) {
+  return api.put<PriorityItem>(`/api/v1/itsm/priorities/${id}`, data)
+}
+
+export function deletePriority(id: number) {
+  return api.delete(`/api/v1/itsm/priorities/${id}`)
+}
+
+// ─── SLA Template ───────────────────────────────────────
+
+export interface SLATemplateItem {
+  id: number
+  name: string
+  code: string
+  description: string
+  responseMinutes: number
+  resolutionMinutes: number
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchSLATemplates() {
+  return api.get<SLATemplateItem[]>("/api/v1/itsm/sla").then((r) => r ?? [])
+}
+
+export function createSLATemplate(data: {
+  name: string
+  code: string
+  description?: string
+  responseMinutes: number
+  resolutionMinutes: number
+}) {
+  return api.post<SLATemplateItem>("/api/v1/itsm/sla", data)
+}
+
+export function updateSLATemplate(id: number, data: Partial<SLATemplateItem>) {
+  return api.put<SLATemplateItem>(`/api/v1/itsm/sla/${id}`, data)
+}
+
+export function deleteSLATemplate(id: number) {
+  return api.delete(`/api/v1/itsm/sla/${id}`)
+}
+
+// ─── Escalation Rule ────────────────────────────────────
+
+export interface EscalationRuleItem {
+  id: number
+  slaId: number
+  triggerType: string
+  level: number
+  waitMinutes: number
+  actionType: string
+  targetConfig: unknown
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchEscalationRules(slaId: number) {
+  return api.get<EscalationRuleItem[]>(`/api/v1/itsm/sla/${slaId}/escalations`).then((r) => r ?? [])
+}
+
+export function createEscalationRule(
+  slaId: number,
+  data: {
+    triggerType: string
+    level: number
+    waitMinutes: number
+    actionType: string
+    targetConfig?: unknown
+  },
+) {
+  return api.post<EscalationRuleItem>(
+    `/api/v1/itsm/sla/${slaId}/escalations`,
+    data,
+  )
+}
+
+export function updateEscalationRule(
+  slaId: number,
+  ruleId: number,
+  data: Partial<EscalationRuleItem>,
+) {
+  return api.put<EscalationRuleItem>(
+    `/api/v1/itsm/sla/${slaId}/escalations/${ruleId}`,
+    data,
+  )
+}
+
+export function deleteEscalationRule(slaId: number, ruleId: number) {
+  return api.delete(`/api/v1/itsm/sla/${slaId}/escalations/${ruleId}`)
+}
+
+// ─── Ticket ─────────────────────────────────────────────
+
+export interface TicketItem {
+  id: number
+  code: string
+  title: string
+  description: string
+  serviceId: number
+  serviceName: string
+  engineType: string
+  status: string
+  priorityId: number
+  priorityName: string
+  priorityColor: string
+  requesterId: number
+  requesterName: string
+  assigneeId: number | null
+  assigneeName: string
+  source: string
+  formData: unknown
+  slaStatus: string
+  slaResponseDeadline: string | null
+  slaResolutionDeadline: string | null
+  finishedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TicketListParams {
+  keyword?: string
+  status?: string
+  priorityId?: number
+  serviceId?: number
+  assigneeId?: number
+  requesterId?: number
+  page?: number
+  pageSize?: number
+}
+
+export function fetchTickets(params: TicketListParams) {
+  const p = new URLSearchParams()
+  if (params.keyword) p.set("keyword", params.keyword)
+  if (params.status) p.set("status", params.status)
+  if (params.priorityId) p.set("priorityId", String(params.priorityId))
+  if (params.serviceId) p.set("serviceId", String(params.serviceId))
+  if (params.assigneeId) p.set("assigneeId", String(params.assigneeId))
+  if (params.requesterId) p.set("requesterId", String(params.requesterId))
+  p.set("page", String(params.page ?? 1))
+  p.set("pageSize", String(params.pageSize ?? 20))
+  return api.get<{ items: TicketItem[]; total: number }>(
+    `/api/v1/itsm/tickets?${p}`,
+  )
+}
+
+export function fetchTicket(id: number) {
+  return api.get<TicketItem>(`/api/v1/itsm/tickets/${id}`)
+}
+
+export function createTicket(data: {
+  title: string
+  description?: string
+  serviceId: number
+  priorityId: number
+  formData?: unknown
+}) {
+  return api.post<TicketItem>("/api/v1/itsm/tickets", data)
+}
+
+export function assignTicket(id: number, assigneeId: number) {
+  return api.put<TicketItem>(`/api/v1/itsm/tickets/${id}/assign`, {
+    assigneeId,
+  })
+}
+
+export function completeTicket(id: number) {
+  return api.put<TicketItem>(`/api/v1/itsm/tickets/${id}/complete`, {})
+}
+
+export function cancelTicket(id: number, reason: string) {
+  return api.put<TicketItem>(`/api/v1/itsm/tickets/${id}/cancel`, { reason })
+}
+
+export function fetchMyTickets(params: {
+  status?: string
+  page?: number
+  pageSize?: number
+}) {
+  const p = new URLSearchParams()
+  if (params.status) p.set("status", params.status)
+  p.set("page", String(params.page ?? 1))
+  p.set("pageSize", String(params.pageSize ?? 20))
+  return api.get<{ items: TicketItem[]; total: number }>(
+    `/api/v1/itsm/tickets/mine?${p}`,
+  )
+}
+
+export function fetchTodoTickets(params: {
+  page?: number
+  pageSize?: number
+}) {
+  const p = new URLSearchParams()
+  p.set("page", String(params.page ?? 1))
+  p.set("pageSize", String(params.pageSize ?? 20))
+  return api.get<{ items: TicketItem[]; total: number }>(
+    `/api/v1/itsm/tickets/todo?${p}`,
+  )
+}
+
+export function fetchHistoryTickets(params: {
+  assigneeId?: number
+  startDate?: string
+  endDate?: string
+  page?: number
+  pageSize?: number
+}) {
+  const p = new URLSearchParams()
+  if (params.assigneeId) p.set("assigneeId", String(params.assigneeId))
+  if (params.startDate) p.set("startDate", params.startDate)
+  if (params.endDate) p.set("endDate", params.endDate)
+  p.set("page", String(params.page ?? 1))
+  p.set("pageSize", String(params.pageSize ?? 20))
+  return api.get<{ items: TicketItem[]; total: number }>(
+    `/api/v1/itsm/tickets/history?${p}`,
+  )
+}
+
+// ─── Timeline ───────────────────────────────────────────
+
+export interface TimelineItem {
+  id: number
+  ticketId: number
+  eventType: string
+  content: string
+  operatorId: number
+  operatorName: string
+  metadata: unknown
+  createdAt: string
+}
+
+export function fetchTicketTimeline(ticketId: number) {
+  return api.get<TimelineItem[]>(`/api/v1/itsm/tickets/${ticketId}/timeline`).then((r) => r ?? [])
+}
+
+// ─── Users (kernel API) ────────────────────────────────
+
+export interface SimpleUser {
+  id: number
+  username: string
+  email: string
+  avatar: string
+}
+
+export function fetchUsers(keyword?: string) {
+  const p = new URLSearchParams({ page: "1", pageSize: "50" })
+  if (keyword) p.set("keyword", keyword)
+  return api.get<{ items: SimpleUser[] }>(`/api/v1/users?${p}`).then((r) => r.items)
+}
