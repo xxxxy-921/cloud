@@ -76,12 +76,23 @@ release-sidecar:
 run: build
 	./server
 
+test:
+	go test ./...
+
+test-license:
+	go test ./internal/app/license/...
+
+test-fuzz:
+	go test ./internal/app/license -fuzz=FuzzCanonicalizeDeterminism -fuzztime=30s
+	go test ./internal/app/license -fuzz=FuzzEncryptDecryptRoundTrip -fuzztime=30s
+	go test ./internal/app/license -fuzz=FuzzValidateConstraintSchemaNoPanic -fuzztime=30s
+
 push:
 	git add .
 	git commit -m "Update"
 	git push
 
-.PHONY: web-build web-dev refer-clone dev build release release-license build-license build-sidecar release-sidecar run push
+.PHONY: web-build web-dev refer-clone dev build release release-license build-license build-sidecar release-sidecar run push test test-license test-fuzz
 
 # Backward-compat aliases
 license: build-license
