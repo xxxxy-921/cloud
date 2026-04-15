@@ -339,6 +339,7 @@
       "process": "Process",
       "action": "Action",
       "gateway": "Gateway",
+      "exclusive": "Exclusive Gateway",
       "notify": "Notify",
       "wait": "Wait"
     },

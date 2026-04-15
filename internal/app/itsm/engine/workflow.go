@@ -42,8 +42,9 @@ type NodeData struct {
 	ChannelID    uint              `json:"channel_id,omitempty"`
 	Template     string            `json:"template,omitempty"`
 	Recipients   []Participant     `json:"recipients,omitempty"`
-	WaitMode     string            `json:"wait_mode,omitempty"` // signal | timer
-	Duration     string            `json:"duration,omitempty"` // e.g. "2h", "30m"
+	WaitMode         string            `json:"wait_mode,omitempty"`         // signal | timer
+	Duration         string            `json:"duration,omitempty"`         // e.g. "2h", "30m"
+	GatewayDirection string            `json:"gateway_direction,omitempty"` // fork | join (parallel/inclusive only)
 }
 
 // Participant defines who should handle a node.

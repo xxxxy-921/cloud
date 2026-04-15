@@ -6,7 +6,7 @@ import { NODE_TYPES, NODE_COLORS, type NodeType } from "./types"
 
 const ICONS: Record<string, typeof Play> = {
   start: Play, end: Square, form: FileText, approve: ShieldCheck,
-  process: Wrench, action: Zap, gateway: GitBranch, notify: Bell, wait: Clock,
+  process: Wrench, action: Zap, exclusive: GitBranch, notify: Bell, wait: Clock,
 }
 
 export function NodePalette() {

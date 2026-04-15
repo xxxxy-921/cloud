@@ -339,6 +339,7 @@
       "process": "处理",
       "action": "动作",
       "gateway": "网关",
+      "exclusive": "排他网关",
       "notify": "通知",
       "wait": "等待"
     },

@@ -57,6 +57,12 @@ var (
 	ErrActivityNotFound  = errors.New("workflow: activity not found")
 	ErrActivityNotActive = errors.New("workflow: activity is not in an active state")
 	ErrNodeNotFound      = errors.New("workflow: referenced node not found in workflow")
+	ErrTokenNotFound     = errors.New("workflow: execution token not found")
+	ErrTokenNotActive    = errors.New("workflow: execution token is not in active state")
+	ErrNodeNotImplemented = errors.New("workflow: node type registered but execution logic not yet implemented")
+	ErrGatewayNoOutEdge   = errors.New("workflow: gateway node has no outgoing edges")
+	ErrGatewayJoinIncomplete = errors.New("workflow: not all sibling tokens have completed at join")
+	ErrGatewayMissingDirection = errors.New("workflow: parallel/inclusive node missing gateway_direction (fork or join)")
 )
 
 // Node types
@@ -67,20 +73,43 @@ const (
 	NodeApprove = "approve"
 	NodeProcess = "process"
 	NodeAction  = "action"
-	NodeGateway = "gateway"
 	NodeNotify  = "notify"
 	NodeWait    = "wait"
+
+	// Gateway types (③ itsm-execution-tokens: exclusive implemented; ④: parallel/inclusive)
+	NodeExclusive = "exclusive"
+	NodeParallel  = "parallel"  // registered only — execution logic in ④ itsm-gateway-parallel
+	NodeInclusive = "inclusive" // registered only — execution logic in ④ itsm-gateway-parallel
+
+	// Advanced node types — registered only, execution logic in ⑤ itsm-advanced-nodes
+	NodeScript     = "script"
+	NodeSubprocess = "subprocess"
+	NodeTimer      = "timer"  // intermediate timer event
+	NodeSignal     = "signal" // intermediate signal event
+	NodeBTimer     = "b_timer" // boundary timer event
+	NodeBError     = "b_error" // boundary error event
 )
 
 var ValidNodeTypes = map[string]bool{
 	NodeStart: true, NodeEnd: true, NodeForm: true,
 	NodeApprove: true, NodeProcess: true, NodeAction: true,
-	NodeGateway: true, NodeNotify: true, NodeWait: true,
+	NodeExclusive: true, NodeParallel: true, NodeInclusive: true,
+	NodeNotify: true, NodeWait: true,
+	NodeScript: true, NodeSubprocess: true,
+	NodeTimer: true, NodeSignal: true,
+	NodeBTimer: true, NodeBError: true,
+}
+
+// UnimplementedNodeTypes lists node types that are registered but not yet executable.
+var UnimplementedNodeTypes = map[string]bool{
+	NodeScript: true, NodeSubprocess: true,
+	NodeTimer: true, NodeSignal: true,
+	NodeBTimer: true, NodeBError: true,
 }
 
 // IsAutoNode returns true for node types that execute automatically without human intervention.
 func IsAutoNode(nodeType string) bool {
-	return nodeType == NodeGateway || nodeType == NodeAction || nodeType == NodeNotify
+	return nodeType == NodeExclusive || nodeType == NodeAction || nodeType == NodeNotify
 }
 
 // IsHumanNode returns true for node types that require human interaction.
@@ -88,8 +117,32 @@ func IsHumanNode(nodeType string) bool {
 	return nodeType == NodeForm || nodeType == NodeApprove || nodeType == NodeProcess || nodeType == NodeWait
 }
 
+// Token status constants
+const (
+	TokenActive    = "active"
+	TokenWaiting   = "waiting"   // fork: parent waits for children — ④ itsm-gateway-parallel
+	TokenCompleted = "completed"
+	TokenCancelled = "cancelled"
+	TokenSuspended = "suspended" // reserved for ⑤ itsm-advanced-nodes (boundary event suspend/resume)
+)
+
+// Token type constants
+const (
+	TokenMain          = "main"           // root token, one per ticket
+	TokenParallel      = "parallel"       // parallel gateway fork — ④ itsm-gateway-parallel
+	TokenSubprocess    = "subprocess"     // subprocess token — ⑤ itsm-advanced-nodes
+	TokenMultiInstance = "multi_instance" // multi-instance token — ⑤ itsm-advanced-nodes
+	TokenBoundary      = "boundary"       // boundary event token — ⑤ itsm-advanced-nodes
+)
+
 // MaxAutoDepth limits recursive automatic node processing to prevent infinite loops.
 const MaxAutoDepth = 50
+
+// Gateway direction constants (④ itsm-gateway-parallel)
+const (
+	GatewayFork = "fork"
+	GatewayJoin = "join"
+)
 
 // Activity status constants
 const (

@@ -12,7 +12,7 @@ const ICONS: Record<string, typeof Play> = {
   approve: ShieldCheck,
   process: Wrench,
   action: Zap,
-  gateway: GitBranch,
+  exclusive: GitBranch,
   notify: Bell,
   wait: Clock,
 }
@@ -23,7 +23,7 @@ function WorkflowNode({ data, selected }: NodeProps & { data: WFNodeData }) {
   const color = NODE_COLORS[nodeType] ?? "#6b7280"
   const isStart = nodeType === "start"
   const isEnd = nodeType === "end"
-  const isGateway = nodeType === "gateway"
+  const isGateway = nodeType === "exclusive"
 
   if (isGateway) {
     return (

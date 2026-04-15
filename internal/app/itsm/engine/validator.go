@@ -9,19 +9,23 @@ import (
 type ValidationError struct {
 	NodeID  string `json:"nodeId,omitempty"`
 	EdgeID  string `json:"edgeId,omitempty"`
+	Level   string `json:"level"` // "error" or "warning"; defaults to "error"
 	Message string `json:"message"`
 }
 
 func (e ValidationError) Error() string { return e.Message }
 
+// IsWarning returns true if this is a warning-level validation result, not a blocking error.
+func (e ValidationError) IsWarning() bool { return e.Level == "warning" }
+
 // ValidateWorkflow checks a workflow JSON for structural integrity.
-// Returns a list of validation errors. An empty list means the workflow is valid.
+// Returns a list of validation errors and warnings. Only errors block saving.
 func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 	var errs []ValidationError
 
 	def, err := ParseWorkflowDef(workflowJSON)
 	if err != nil {
-		return []ValidationError{{Message: fmt.Sprintf("JSON 解析失败: %v", err)}}
+		return []ValidationError{{Level: "error", Message: fmt.Sprintf("JSON 解析失败: %v", err)}}
 	}
 
 	nodeMap := make(map[string]*WFNode, len(def.Nodes))
@@ -38,7 +42,7 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		inEdges[e.Target] = append(inEdges[e.Target], e)
 	}
 
-	// 1. Validate node types
+	// 1. Validate node types + warn for unimplemented types
 	var startNodes []*WFNode
 	var endNodes []*WFNode
 	for i := range def.Nodes {
@@ -46,7 +50,14 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		if !ValidNodeTypes[n.Type] {
 			errs = append(errs, ValidationError{
 				NodeID:  n.ID,
+				Level:   "error",
 				Message: fmt.Sprintf("节点 %s 的类型 %q 不合法", n.ID, n.Type),
+			})
+		} else if UnimplementedNodeTypes[n.Type] {
+			errs = append(errs, ValidationError{
+				NodeID:  n.ID,
+				Level:   "warning",
+				Message: fmt.Sprintf("节点 %s 类型 %s 已注册但执行逻辑尚未实现，当前版本不支持运行", n.ID, n.Type),
 			})
 		}
 		if n.Type == NodeStart {
@@ -59,15 +70,16 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 
 	// 2. Exactly one start node
 	if len(startNodes) == 0 {
-		errs = append(errs, ValidationError{Message: "工作流必须包含一个开始节点"})
+		errs = append(errs, ValidationError{Level: "error", Message: "工作流必须包含一个开始节点"})
 	} else if len(startNodes) > 1 {
-		errs = append(errs, ValidationError{Message: "工作流只能包含一个开始节点"})
+		errs = append(errs, ValidationError{Level: "error", Message: "工作流只能包含一个开始节点"})
 	} else {
 		// Start node must have exactly one outgoing edge
 		start := startNodes[0]
 		if len(outEdges[start.ID]) != 1 {
 			errs = append(errs, ValidationError{
 				NodeID:  start.ID,
+				Level:   "error",
 				Message: "开始节点必须有且仅有一条出边",
 			})
 		}
@@ -75,6 +87,7 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		if len(inEdges[start.ID]) > 0 {
 			errs = append(errs, ValidationError{
 				NodeID:  start.ID,
+				Level:   "error",
 				Message: "开始节点不应有入边",
 			})
 		}
@@ -82,13 +95,14 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 
 	// 3. At least one end node
 	if len(endNodes) == 0 {
-		errs = append(errs, ValidationError{Message: "工作流必须包含至少一个结束节点"})
+		errs = append(errs, ValidationError{Level: "error", Message: "工作流必须包含至少一个结束节点"})
 	} else {
 		// End nodes must have no outgoing edges
 		for _, n := range endNodes {
 			if len(outEdges[n.ID]) > 0 {
 				errs = append(errs, ValidationError{
 					NodeID:  n.ID,
+					Level:   "error",
 					Message: fmt.Sprintf("结束节点 %s 不应有出边", n.ID),
 				})
 			}
@@ -101,12 +115,14 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		if _, ok := nodeMap[e.Source]; !ok {
 			errs = append(errs, ValidationError{
 				EdgeID:  e.ID,
+				Level:   "error",
 				Message: fmt.Sprintf("边 %s 引用了不存在的源节点 %s", e.ID, e.Source),
 			})
 		}
 		if _, ok := nodeMap[e.Target]; !ok {
 			errs = append(errs, ValidationError{
 				EdgeID:  e.ID,
+				Level:   "error",
 				Message: fmt.Sprintf("边 %s 引用了不存在的目标节点 %s", e.ID, e.Target),
 			})
 		}
@@ -121,22 +137,24 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		if len(inEdges[n.ID]) == 0 {
 			errs = append(errs, ValidationError{
 				NodeID:  n.ID,
+				Level:   "error",
 				Message: fmt.Sprintf("节点 %s 没有入边，无法到达", n.ID),
 			})
 		}
 	}
 
-	// 6. Gateway constraints
+	// 6. Exclusive gateway constraints
 	for i := range def.Nodes {
 		n := &def.Nodes[i]
-		if n.Type != NodeGateway {
+		if n.Type != NodeExclusive {
 			continue
 		}
 		edges := outEdges[n.ID]
 		if len(edges) < 2 {
 			errs = append(errs, ValidationError{
 				NodeID:  n.ID,
-				Message: fmt.Sprintf("网关节点 %s 至少需要两条出边", n.ID),
+				Level:   "error",
+				Message: fmt.Sprintf("排他网关节点 %s 至少需要两条出边", n.ID),
 			})
 			continue
 		}
@@ -145,7 +163,8 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 				errs = append(errs, ValidationError{
 					NodeID:  n.ID,
 					EdgeID:  e.ID,
-					Message: fmt.Sprintf("网关节点 %s 的出边 %s 缺少条件配置", n.ID, e.ID),
+					Level:   "error",
+					Message: fmt.Sprintf("排他网关节点 %s 的出边 %s 缺少条件配置", n.ID, e.ID),
 				})
 			}
 		}

@@ -130,7 +130,7 @@ export function EdgePropertyPanel({ edge, sourceNodeType, onClose }: EdgePanelPr
         <Label className="text-xs">{t("workflow.prop.defaultEdge")}</Label>
       </div>
 
-      {sourceNodeType === "gateway" && !data.isDefault && (
+      {sourceNodeType === "exclusive" && !data.isDefault && (
         <div className="space-y-2 rounded-md border p-2">
           <Label className="text-xs font-medium">{t("workflow.prop.condition")}</Label>
           <div className="space-y-1">

@@ -25,7 +25,7 @@ func NewClassicEngine(resolver *ParticipantResolver, scheduler TaskSubmitter) *C
 	return &ClassicEngine{resolver: resolver, scheduler: scheduler}
 }
 
-// Start parses the workflow, finds the start node, and creates the first Activity.
+// Start parses the workflow, finds the start node, creates the root token, and processes the first node.
 func (e *ClassicEngine) Start(ctx context.Context, tx *gorm.DB, params StartParams) error {
 	def, err := ParseWorkflowDef(params.WorkflowJSON)
 	if err != nil {
@@ -57,9 +57,21 @@ func (e *ClassicEngine) Start(ctx context.Context, tx *gorm.DB, params StartPara
 		return err
 	}
 
+	// Create root execution token
+	token := &executionTokenModel{
+		TicketID:  params.TicketID,
+		NodeID:    startNode.ID,
+		Status:    TokenActive,
+		TokenType: TokenMain,
+		ScopeID:   "root",
+	}
+	if err := tx.Create(token).Error; err != nil {
+		return fmt.Errorf("failed to create root token: %w", err)
+	}
+
 	// Write start form bindings as process variables
 	if params.StartFormSchema != "" && params.StartFormData != "" {
-		if err := writeFormBindings(tx, params.TicketID, "root", params.StartFormSchema, params.StartFormData, "form:start"); err != nil {
+		if err := writeFormBindings(tx, params.TicketID, token.ScopeID, params.StartFormSchema, params.StartFormData, "form:start"); err != nil {
 			slog.Warn("failed to write start form bindings", "ticketID", params.TicketID, "error", err)
 		}
 	}
@@ -70,10 +82,10 @@ func (e *ClassicEngine) Start(ctx context.Context, tx *gorm.DB, params StartPara
 	}
 
 	// Process the first real node
-	return e.processNode(ctx, tx, def, nodeMap, outEdges, params.TicketID, params.RequesterID, targetNode, 0)
+	return e.processNode(ctx, tx, def, nodeMap, outEdges, token, params.RequesterID, targetNode, 0)
 }
 
-// Progress completes the current activity and advances the workflow.
+// Progress completes the current activity and advances the workflow via its token.
 func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params ProgressParams) error {
 	// Load the activity
 	var activity activityModel
@@ -82,6 +94,18 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 	}
 	if activity.Status != ActivityPending && activity.Status != ActivityInProgress {
 		return ErrActivityNotActive
+	}
+
+	// Load the execution token for this activity
+	if activity.TokenID == nil {
+		return fmt.Errorf("activity %d has no associated execution token", params.ActivityID)
+	}
+	var token executionTokenModel
+	if err := tx.First(&token, *activity.TokenID).Error; err != nil {
+		return ErrTokenNotFound
+	}
+	if token.Status != TokenActive {
+		return ErrTokenNotActive
 	}
 
 	// Load the ticket to get workflow_json
@@ -119,7 +143,7 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 	// Write form bindings as process variables (if activity had a form with bindings)
 	if activity.FormSchema != "" && len(params.Result) > 0 {
 		source := fmt.Sprintf("form:%d", params.ActivityID)
-		if err := writeFormBindings(tx, params.TicketID, "root", activity.FormSchema, string(params.Result), source); err != nil {
+		if err := writeFormBindings(tx, params.TicketID, token.ScopeID, activity.FormSchema, string(params.Result), source); err != nil {
 			slog.Warn("failed to write form bindings on progress", "ticketID", params.TicketID, "activityID", params.ActivityID, "error", err)
 		}
 	}
@@ -139,11 +163,18 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 		return fmt.Errorf("edge target %q not found", edge.Target)
 	}
 
-	return e.processNode(ctx, tx, def, nodeMap, outEdges, params.TicketID, params.OperatorID, targetNode, 0)
+	return e.processNode(ctx, tx, def, nodeMap, outEdges, &token, params.OperatorID, targetNode, 0)
 }
 
-// Cancel terminates all active activities and marks the ticket cancelled.
+// Cancel terminates all active tokens, activities, and marks the ticket cancelled.
 func (e *ClassicEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelParams) error {
+	// Cancel all active execution tokens
+	if err := tx.Model(&executionTokenModel{}).
+		Where("ticket_id = ? AND status IN ?", params.TicketID, []string{TokenActive, TokenWaiting}).
+		Update("status", TokenCancelled).Error; err != nil {
+		return err
+	}
+
 	// Cancel all active activities
 	if err := tx.Model(&activityModel{}).
 		Where("ticket_id = ? AND status IN ?", params.TicketID, []string{ActivityPending, ActivityInProgress}).
@@ -177,19 +208,25 @@ func (e *ClassicEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPa
 	return e.recordTimeline(tx, params.TicketID, nil, params.OperatorID, "ticket_cancelled", msg)
 }
 
-// processNode handles a node based on its type. Auto nodes recurse; human nodes create pending activities.
+// processNode handles a node based on its type, driven by an execution token.
+// Auto nodes recurse; human nodes create pending activities.
 func (e *ClassicEngine) processNode(
 	ctx context.Context, tx *gorm.DB,
 	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
-	ticketID uint, operatorID uint,
+	token *executionTokenModel, operatorID uint,
 	node *WFNode, depth int,
 ) error {
 	if depth > MaxAutoDepth {
-		// Mark ticket as failed
-		tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("status", "failed")
-		e.recordTimeline(tx, ticketID, nil, 0, "error", "流程自动步进超过最大深度(50)")
+		// Mark token as cancelled and ticket as failed
+		tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("status", TokenCancelled)
+		tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("status", "failed")
+		e.recordTimeline(tx, token.TicketID, nil, 0, "error", "流程自动步进超过最大深度(50)")
 		return ErrMaxDepthExceeded
 	}
+
+	// Update token's current node
+	tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("node_id", node.ID)
+	token.NodeID = node.ID
 
 	nodeData, err := ParseNodeData(node.Data)
 	if err != nil {
@@ -198,41 +235,48 @@ func (e *ClassicEngine) processNode(
 
 	switch node.Type {
 	case NodeEnd:
-		return e.handleEnd(tx, ticketID, operatorID, node, nodeData)
+		return e.handleEnd(tx, token, operatorID, node, nodeData)
 
 	case NodeForm:
-		return e.handleForm(tx, ticketID, operatorID, node, nodeData)
+		return e.handleForm(tx, token, operatorID, node, nodeData)
 
 	case NodeApprove:
-		return e.handleApprove(tx, ticketID, operatorID, node, nodeData)
+		return e.handleApprove(tx, token, operatorID, node, nodeData)
 
 	case NodeProcess:
-		return e.handleProcess(tx, ticketID, operatorID, node, nodeData)
+		return e.handleProcess(tx, token, operatorID, node, nodeData)
 
 	case NodeAction:
-		return e.handleAction(tx, ticketID, operatorID, node, nodeData)
+		return e.handleAction(tx, token, operatorID, node, nodeData)
 
-	case NodeGateway:
-		return e.handleGateway(ctx, tx, def, nodeMap, outEdges, ticketID, operatorID, node, nodeData, depth)
+	case NodeExclusive:
+		return e.handleExclusive(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, nodeData, depth)
 
 	case NodeNotify:
-		return e.handleNotify(ctx, tx, def, nodeMap, outEdges, ticketID, operatorID, node, nodeData, depth)
+		return e.handleNotify(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, nodeData, depth)
 
 	case NodeWait:
-		return e.handleWait(tx, ticketID, operatorID, node, nodeData)
+		return e.handleWait(tx, token, operatorID, node, nodeData)
+
+	case NodeParallel, NodeInclusive:
+		return fmt.Errorf("%w: %s (将在 ④ itsm-gateway-parallel 中实现)", ErrNodeNotImplemented, node.Type)
 
 	default:
+		if UnimplementedNodeTypes[node.Type] {
+			return fmt.Errorf("%w: %s", ErrNodeNotImplemented, node.Type)
+		}
 		return fmt.Errorf("%w: %s", ErrInvalidNodeType, node.Type)
 	}
 }
 
 // --- Node handlers ---
 
-func (e *ClassicEngine) handleEnd(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
+func (e *ClassicEngine) handleEnd(tx *gorm.DB, token *executionTokenModel, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
 	// Create completed activity for the end node
 	act := &activityModel{
-		TicketID:          ticketID,
+		TicketID:          token.TicketID,
+		TokenID:           &token.ID,
 		Name:              labelOrDefault(data, "结束"),
 		ActivityType:      NodeEnd,
 		Status:            ActivityCompleted,
@@ -245,8 +289,11 @@ func (e *ClassicEngine) handleEnd(tx *gorm.DB, ticketID, operatorID uint, node *
 		return err
 	}
 
+	// Complete the token
+	tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("status", TokenCompleted)
+
 	// Complete the ticket
-	if err := tx.Model(&ticketModel{}).Where("id = ?", ticketID).Updates(map[string]any{
+	if err := tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Updates(map[string]any{
 		"status":              "completed",
 		"finished_at":         now,
 		"current_activity_id": act.ID,
@@ -254,17 +301,18 @@ func (e *ClassicEngine) handleEnd(tx *gorm.DB, ticketID, operatorID uint, node *
 		return err
 	}
 
-	return e.recordTimeline(tx, ticketID, &act.ID, operatorID, "workflow_completed", "流程已完结")
+	return e.recordTimeline(tx, token.TicketID, &act.ID, operatorID, "workflow_completed", "流程已完结")
 }
 
-func (e *ClassicEngine) handleForm(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
+func (e *ClassicEngine) handleForm(tx *gorm.DB, token *executionTokenModel, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
 
 	// Resolve formId to schema snapshot
 	formSchema := resolveFormSchema(tx, data.FormID)
 
 	act := &activityModel{
-		TicketID:      ticketID,
+		TicketID:      token.TicketID,
+		TokenID:       &token.ID,
 		Name:          labelOrDefault(data, "表单填写"),
 		ActivityType:  NodeForm,
 		Status:        ActivityPending,
@@ -277,19 +325,20 @@ func (e *ClassicEngine) handleForm(tx *gorm.DB, ticketID, operatorID uint, node 
 		return err
 	}
 
-	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("current_activity_id", act.ID)
+	tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("current_activity_id", act.ID)
 
-	return e.assignParticipants(tx, ticketID, act.ID, operatorID, data.Participants)
+	return e.assignParticipants(tx, token.TicketID, act.ID, operatorID, data.Participants)
 }
 
-func (e *ClassicEngine) handleApprove(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
+func (e *ClassicEngine) handleApprove(tx *gorm.DB, token *executionTokenModel, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
 	mode := data.ApproveMode
 	if mode == "" {
 		mode = "single"
 	}
 	act := &activityModel{
-		TicketID:      ticketID,
+		TicketID:      token.TicketID,
+		TokenID:       &token.ID,
 		Name:          labelOrDefault(data, "审批"),
 		ActivityType:  NodeApprove,
 		Status:        ActivityPending,
@@ -301,19 +350,20 @@ func (e *ClassicEngine) handleApprove(tx *gorm.DB, ticketID, operatorID uint, no
 		return err
 	}
 
-	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("current_activity_id", act.ID)
+	tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("current_activity_id", act.ID)
 
-	return e.assignParticipants(tx, ticketID, act.ID, operatorID, data.Participants)
+	return e.assignParticipants(tx, token.TicketID, act.ID, operatorID, data.Participants)
 }
 
-func (e *ClassicEngine) handleProcess(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
+func (e *ClassicEngine) handleProcess(tx *gorm.DB, token *executionTokenModel, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
 
 	// Resolve formId to schema snapshot
 	formSchema := resolveFormSchema(tx, data.FormID)
 
 	act := &activityModel{
-		TicketID:      ticketID,
+		TicketID:      token.TicketID,
+		TokenID:       &token.ID,
 		Name:          labelOrDefault(data, "处理"),
 		ActivityType:  NodeProcess,
 		Status:        ActivityPending,
@@ -326,15 +376,16 @@ func (e *ClassicEngine) handleProcess(tx *gorm.DB, ticketID, operatorID uint, no
 		return err
 	}
 
-	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("current_activity_id", act.ID)
+	tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("current_activity_id", act.ID)
 
-	return e.assignParticipants(tx, ticketID, act.ID, operatorID, data.Participants)
+	return e.assignParticipants(tx, token.TicketID, act.ID, operatorID, data.Participants)
 }
 
-func (e *ClassicEngine) handleAction(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
+func (e *ClassicEngine) handleAction(tx *gorm.DB, token *executionTokenModel, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
 	act := &activityModel{
-		TicketID:     ticketID,
+		TicketID:     token.TicketID,
+		TokenID:      &token.ID,
 		Name:         labelOrDefault(data, "动作执行"),
 		ActivityType: NodeAction,
 		Status:       ActivityInProgress,
@@ -345,41 +396,41 @@ func (e *ClassicEngine) handleAction(tx *gorm.DB, ticketID, operatorID uint, nod
 		return err
 	}
 
-	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("current_activity_id", act.ID)
+	tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("current_activity_id", act.ID)
 
 	// Submit async task
 	if e.scheduler != nil && data.ActionID != 0 {
 		payload, _ := json.Marshal(map[string]any{
-			"ticket_id":   ticketID,
+			"ticket_id":   token.TicketID,
 			"activity_id": act.ID,
 			"action_id":   data.ActionID,
 		})
 		if err := e.scheduler.SubmitTask("itsm-action-execute", payload); err != nil {
-			slog.Error("failed to submit action task", "error", err, "ticketID", ticketID)
+			slog.Error("failed to submit action task", "error", err, "ticketID", token.TicketID)
 			// Record timeline but don't fail the workflow
-			e.recordTimeline(tx, ticketID, &act.ID, 0, "warning", "动作任务提交失败: "+err.Error())
+			e.recordTimeline(tx, token.TicketID, &act.ID, 0, "warning", "动作任务提交失败: "+err.Error())
 		}
 	}
 
-	e.recordTimeline(tx, ticketID, &act.ID, operatorID, "action_started", "动作节点开始执行")
+	e.recordTimeline(tx, token.TicketID, &act.ID, operatorID, "action_started", "动作节点开始执行")
 	return nil
 }
 
-func (e *ClassicEngine) handleGateway(
+func (e *ClassicEngine) handleExclusive(
 	ctx context.Context, tx *gorm.DB,
 	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
-	ticketID, operatorID uint,
+	token *executionTokenModel, operatorID uint,
 	node *WFNode, data *NodeData, depth int,
 ) error {
 	// Load ticket for field evaluation
 	var ticket ticketModel
-	if err := tx.First(&ticket, ticketID).Error; err != nil {
+	if err := tx.First(&ticket, token.TicketID).Error; err != nil {
 		return err
 	}
 
 	// Load latest completed activity's form data for condition evaluation
 	var latestActivity activityModel
-	tx.Where("ticket_id = ? AND status = ? AND form_data IS NOT NULL AND form_data != ''", ticketID, ActivityCompleted).
+	tx.Where("ticket_id = ? AND status = ? AND form_data IS NOT NULL AND form_data != ''", token.TicketID, ActivityCompleted).
 		Order("id DESC").First(&latestActivity)
 
 	evalCtx := buildEvalContext(tx, &ticket, &latestActivity)
@@ -423,27 +474,27 @@ func (e *ClassicEngine) handleGateway(
 
 	if matchedEdge == nil {
 		// No matching edge — mark ticket as failed
-		tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("status", "failed")
-		e.recordTimeline(tx, ticketID, nil, 0, "error", fmt.Sprintf("网关节点 %s 无匹配条件且无默认边", node.ID))
-		return fmt.Errorf("gateway %s: no matching condition and no default edge", node.ID)
+		tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("status", "failed")
+		e.recordTimeline(tx, token.TicketID, nil, 0, "error", fmt.Sprintf("排他网关节点 %s 无匹配条件且无默认边", node.ID))
+		return fmt.Errorf("exclusive gateway %s: no matching condition and no default edge", node.ID)
 	}
 
 	targetNode, ok := nodeMap[matchedEdge.Target]
 	if !ok {
-		return fmt.Errorf("gateway target %q not found", matchedEdge.Target)
+		return fmt.Errorf("exclusive gateway target %q not found", matchedEdge.Target)
 	}
 
-	return e.processNode(ctx, tx, def, nodeMap, outEdges, ticketID, operatorID, targetNode, depth+1)
+	return e.processNode(ctx, tx, def, nodeMap, outEdges, token, operatorID, targetNode, depth+1)
 }
 
 func (e *ClassicEngine) handleNotify(
 	ctx context.Context, tx *gorm.DB,
 	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
-	ticketID, operatorID uint,
+	token *executionTokenModel, operatorID uint,
 	node *WFNode, data *NodeData, depth int,
 ) error {
 	// Non-blocking notification — record timeline and continue
-	e.recordTimeline(tx, ticketID, nil, operatorID, "notification_sent", fmt.Sprintf("通知已发送: %s", data.Label))
+	e.recordTimeline(tx, token.TicketID, nil, operatorID, "notification_sent", fmt.Sprintf("通知已发送: %s", data.Label))
 
 	// TODO: integrate with Kernel Channel for actual notification delivery
 
@@ -458,10 +509,10 @@ func (e *ClassicEngine) handleNotify(
 		return fmt.Errorf("notify target %q not found", edges[0].Target)
 	}
 
-	return e.processNode(ctx, tx, def, nodeMap, outEdges, ticketID, operatorID, targetNode, depth+1)
+	return e.processNode(ctx, tx, def, nodeMap, outEdges, token, operatorID, targetNode, depth+1)
 }
 
-func (e *ClassicEngine) handleWait(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
+func (e *ClassicEngine) handleWait(tx *gorm.DB, token *executionTokenModel, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
 	status := ActivityPending // signal mode
 	if data.WaitMode == "timer" {
@@ -469,7 +520,8 @@ func (e *ClassicEngine) handleWait(tx *gorm.DB, ticketID, operatorID uint, node 
 	}
 
 	act := &activityModel{
-		TicketID:     ticketID,
+		TicketID:     token.TicketID,
+		TokenID:      &token.ID,
 		Name:         labelOrDefault(data, "等待"),
 		ActivityType: NodeWait,
 		Status:       status,
@@ -480,25 +532,226 @@ func (e *ClassicEngine) handleWait(tx *gorm.DB, ticketID, operatorID uint, node 
 		return err
 	}
 
-	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("current_activity_id", act.ID)
+	tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("current_activity_id", act.ID)
 
 	if data.WaitMode == "timer" && e.scheduler != nil {
 		dur := parseDuration(data.Duration)
 		executeAfter := now.Add(dur)
 		payload, _ := json.Marshal(map[string]any{
-			"ticket_id":     ticketID,
+			"ticket_id":     token.TicketID,
 			"activity_id":   act.ID,
 			"execute_after": executeAfter.Format(time.RFC3339),
 		})
 		if err := e.scheduler.SubmitTask("itsm-wait-timer", payload); err != nil {
-			slog.Error("failed to submit wait timer task", "error", err, "ticketID", ticketID)
+			slog.Error("failed to submit wait timer task", "error", err, "ticketID", token.TicketID)
 		}
-		e.recordTimeline(tx, ticketID, &act.ID, operatorID, "wait_timer_started", fmt.Sprintf("等待定时器已设置: %s", data.Duration))
+		e.recordTimeline(tx, token.TicketID, &act.ID, operatorID, "wait_timer_started", fmt.Sprintf("等待定时器已设置: %s", data.Duration))
 	} else {
-		e.recordTimeline(tx, ticketID, &act.ID, operatorID, "wait_signal", "等待外部信号")
+		e.recordTimeline(tx, token.TicketID, &act.ID, operatorID, "wait_signal", "等待外部信号")
 	}
 
 	return nil
+}
+
+// --- Parallel / Inclusive Gateway Handlers (④ itsm-gateway-parallel) ---
+
+func (e *ClassicEngine) handleParallelFork(
+	ctx context.Context, tx *gorm.DB,
+	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
+	token *executionTokenModel, operatorID uint,
+	node *WFNode, data *NodeData, depth int,
+) error {
+	edges := outEdges[node.ID]
+	if len(edges) < 2 {
+		return fmt.Errorf("%w: parallel fork %s 至少需要两条出边", ErrGatewayNoOutEdge, node.ID)
+	}
+
+	// Parent token enters waiting state
+	tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("status", TokenWaiting)
+	token.Status = TokenWaiting
+
+	e.recordTimeline(tx, token.TicketID, nil, operatorID, "parallel_fork",
+		fmt.Sprintf("并行网关分裂: %d 条分支", len(edges)))
+
+	// Create child tokens and process each branch
+	for _, edge := range edges {
+		targetNode, ok := nodeMap[edge.Target]
+		if !ok {
+			return fmt.Errorf("parallel fork target %q not found", edge.Target)
+		}
+
+		childToken := &executionTokenModel{
+			TicketID:      token.TicketID,
+			ParentTokenID: &token.ID,
+			NodeID:        node.ID,
+			Status:        TokenActive,
+			TokenType:     TokenParallel,
+			ScopeID:       token.ScopeID,
+		}
+		if err := tx.Create(childToken).Error; err != nil {
+			return fmt.Errorf("failed to create child token for parallel fork: %w", err)
+		}
+
+		if err := e.processNode(ctx, tx, def, nodeMap, outEdges, childToken, operatorID, targetNode, depth+1); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (e *ClassicEngine) handleParallelJoin(
+	ctx context.Context, tx *gorm.DB,
+	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
+	token *executionTokenModel, operatorID uint,
+	node *WFNode, data *NodeData, depth int,
+) error {
+	return e.tryCompleteJoin(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, depth)
+}
+
+func (e *ClassicEngine) handleInclusiveFork(
+	ctx context.Context, tx *gorm.DB,
+	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
+	token *executionTokenModel, operatorID uint,
+	node *WFNode, data *NodeData, depth int,
+) error {
+	edges := outEdges[node.ID]
+	if len(edges) < 2 {
+		return fmt.Errorf("%w: inclusive fork %s 至少需要两条出边", ErrGatewayNoOutEdge, node.ID)
+	}
+
+	// Load context for condition evaluation
+	var ticket ticketModel
+	if err := tx.First(&ticket, token.TicketID).Error; err != nil {
+		return err
+	}
+	var latestActivity activityModel
+	tx.Where("ticket_id = ? AND status = ? AND form_data IS NOT NULL AND form_data != ''", token.TicketID, ActivityCompleted).
+		Order("id DESC").First(&latestActivity)
+	evalCtx := buildEvalContext(tx, &ticket, &latestActivity)
+
+	// Evaluate conditions — collect matching edges
+	var matchedEdges []*WFEdge
+	var defaultEdge *WFEdge
+	for _, edge := range edges {
+		if edge.Data.Default {
+			defaultEdge = edge
+			continue
+		}
+		if edge.Data.Condition != nil && evaluateCondition(*edge.Data.Condition, evalCtx) {
+			matchedEdges = append(matchedEdges, edge)
+		}
+	}
+
+	// If no conditions matched, fall back to default edge
+	if len(matchedEdges) == 0 {
+		if defaultEdge == nil {
+			tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Update("status", "failed")
+			e.recordTimeline(tx, token.TicketID, nil, 0, "error",
+				fmt.Sprintf("包含网关 fork 节点 %s 无匹配条件且无默认边", node.ID))
+			return fmt.Errorf("inclusive fork %s: no matching condition and no default edge", node.ID)
+		}
+		matchedEdges = append(matchedEdges, defaultEdge)
+	} else if defaultEdge != nil {
+		// Default edge is also activated when other conditions match (inclusive semantics)
+		matchedEdges = append(matchedEdges, defaultEdge)
+	}
+
+	// Parent token enters waiting state
+	tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("status", TokenWaiting)
+	token.Status = TokenWaiting
+
+	e.recordTimeline(tx, token.TicketID, nil, operatorID, "inclusive_fork",
+		fmt.Sprintf("包含网关分裂: %d/%d 条分支激活", len(matchedEdges), len(edges)))
+
+	// Create child tokens for matched edges
+	for _, edge := range matchedEdges {
+		targetNode, ok := nodeMap[edge.Target]
+		if !ok {
+			return fmt.Errorf("inclusive fork target %q not found", edge.Target)
+		}
+
+		childToken := &executionTokenModel{
+			TicketID:      token.TicketID,
+			ParentTokenID: &token.ID,
+			NodeID:        node.ID,
+			Status:        TokenActive,
+			TokenType:     TokenParallel,
+			ScopeID:       token.ScopeID,
+		}
+		if err := tx.Create(childToken).Error; err != nil {
+			return fmt.Errorf("failed to create child token for inclusive fork: %w", err)
+		}
+
+		if err := e.processNode(ctx, tx, def, nodeMap, outEdges, childToken, operatorID, targetNode, depth+1); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (e *ClassicEngine) handleInclusiveJoin(
+	ctx context.Context, tx *gorm.DB,
+	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
+	token *executionTokenModel, operatorID uint,
+	node *WFNode, data *NodeData, depth int,
+) error {
+	return e.tryCompleteJoin(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, depth)
+}
+
+// tryCompleteJoin completes the current child token and checks if all siblings are done.
+// If all siblings completed, it reactivates the parent token and continues past the join node.
+func (e *ClassicEngine) tryCompleteJoin(
+	ctx context.Context, tx *gorm.DB,
+	def *WorkflowDef, nodeMap map[string]*WFNode, outEdges map[string][]*WFEdge,
+	token *executionTokenModel, operatorID uint,
+	joinNode *WFNode, depth int,
+) error {
+	// Complete this child token
+	tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("status", TokenCompleted)
+	token.Status = TokenCompleted
+
+	if token.ParentTokenID == nil {
+		// Should not happen — join node reached by root token
+		return fmt.Errorf("join node %s reached by root token (no parent)", joinNode.ID)
+	}
+
+	// Count remaining active/waiting siblings
+	var remaining int64
+	tx.Model(&executionTokenModel{}).
+		Where("parent_token_id = ? AND status IN ?", *token.ParentTokenID, []string{TokenActive, TokenWaiting}).
+		Count(&remaining)
+
+	if remaining > 0 {
+		// Other branches still running — stop here
+		return nil
+	}
+
+	// All siblings completed — reactivate parent token
+	var parentToken executionTokenModel
+	if err := tx.First(&parentToken, *token.ParentTokenID).Error; err != nil {
+		return fmt.Errorf("parent token %d not found: %w", *token.ParentTokenID, err)
+	}
+
+	tx.Model(&executionTokenModel{}).Where("id = ?", parentToken.ID).Update("status", TokenActive)
+	parentToken.Status = TokenActive
+
+	e.recordTimeline(tx, token.TicketID, nil, operatorID, "gateway_join",
+		fmt.Sprintf("网关合并完成，所有分支已汇聚于节点 %s", joinNode.ID))
+
+	// Continue past the join node
+	edges := outEdges[joinNode.ID]
+	if len(edges) == 0 {
+		return fmt.Errorf("join node %s has no outgoing edge", joinNode.ID)
+	}
+
+	targetNode, ok := nodeMap[edges[0].Target]
+	if !ok {
+		return fmt.Errorf("join node target %q not found", edges[0].Target)
+	}
+
+	return e.processNode(ctx, tx, def, nodeMap, outEdges, &parentToken, operatorID, targetNode, depth+1)
 }
 
 // --- Helpers ---
@@ -623,6 +876,7 @@ func (ticketModel) TableName() string { return "itsm_tickets" }
 type activityModel struct {
 	ID                uint       `gorm:"primaryKey;autoIncrement"`
 	TicketID          uint       `gorm:"column:ticket_id;not null"`
+	TokenID           *uint      `gorm:"column:token_id;index"`
 	Name              string     `gorm:"column:name;size:128"`
 	ActivityType      string     `gorm:"column:activity_type;size:16"`
 	Status            string     `gorm:"column:status;size:16;default:pending"`
@@ -672,6 +926,21 @@ type timelineModel struct {
 }
 
 func (timelineModel) TableName() string { return "itsm_ticket_timelines" }
+
+// executionTokenModel is a lightweight model for direct DB operations on tokens.
+type executionTokenModel struct {
+	ID            uint       `gorm:"primaryKey;autoIncrement"`
+	TicketID      uint       `gorm:"column:ticket_id;not null;index:idx_token_ticket_status"`
+	ParentTokenID *uint      `gorm:"column:parent_token_id"`
+	NodeID        string     `gorm:"column:node_id;size:64"`
+	Status        string     `gorm:"column:status;size:16;not null;index:idx_token_ticket_status"`
+	TokenType     string     `gorm:"column:token_type;size:16;not null"`
+	ScopeID       string     `gorm:"column:scope_id;size:64;not null;default:root"`
+	CreatedAt     time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (executionTokenModel) TableName() string { return "itsm_execution_tokens" }
 
 // formDefModel is a lightweight read-only model for resolving form schema by code.
 type formDefModel struct {

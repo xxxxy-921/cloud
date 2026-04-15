@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// evalContext holds field values for gateway condition evaluation.
+// evalContext holds field values for exclusive gateway condition evaluation.
 type evalContext map[string]any
 
 // buildEvalContext creates the evaluation context from process variables and ticket data.
@@ -91,7 +91,7 @@ func deserializeVarValue(raw string, valueType string) any {
 	}
 }
 
-// evaluateCondition checks a single gateway condition against the context.
+// evaluateCondition checks a single exclusive gateway condition against the context.
 func evaluateCondition(cond GatewayCondition, ctx evalContext) bool {
 	fieldVal, exists := ctx[cond.Field]
 	if !exists {

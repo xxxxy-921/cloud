@@ -50,6 +50,8 @@ func (a *ITSMApp) Models() []any {
 		&PostMortem{},
 		// Process variables
 		&ProcessVariable{},
+		// Execution tokens
+		&ExecutionToken{},
 		// Knowledge documents
 		&ServiceKnowledgeDocument{},
 	}

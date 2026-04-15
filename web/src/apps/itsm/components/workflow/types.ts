@@ -1,6 +1,6 @@
 // Shared types for workflow editor and viewer
 export const NODE_TYPES = [
-  "start", "end", "form", "approve", "process", "action", "gateway", "notify", "wait",
+  "start", "end", "form", "approve", "process", "action", "exclusive", "notify", "wait",
 ] as const
 
 export type NodeType = (typeof NODE_TYPES)[number]
@@ -31,7 +31,7 @@ export interface WFNodeData {
   executionMode?: "single" | "parallel" | "sequential"
   // action
   actionId?: number
-  // gateway
+  // exclusive gateway
   // (conditions are on edges)
   // notify
   channelType?: string
@@ -54,7 +54,7 @@ export const NODE_COLORS: Record<NodeType, string> = {
   approve: "#f59e0b",
   process: "#8b5cf6",
   action: "#06b6d4",
-  gateway: "#f97316",
+  exclusive: "#f97316",
   notify: "#ec4899",
   wait: "#6366f1",
 }
