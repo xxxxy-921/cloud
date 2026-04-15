@@ -125,6 +125,10 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewTimelineService)
 	do.Provide(i, NewKnowledgeDocRepo)
 	do.Provide(i, NewKnowledgeDocService)
+	// Engine config
+	do.Provide(i, NewEngineConfigService)
+	// Workflow generate
+	do.Provide(i, NewWorkflowGenerateService)
 	// Handlers
 	do.Provide(i, NewCatalogHandler)
 	do.Provide(i, NewServiceDefHandler)
@@ -134,6 +138,8 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewEscalationRuleHandler)
 	do.Provide(i, NewTicketHandler)
 	do.Provide(i, NewKnowledgeDocHandler)
+	do.Provide(i, NewEngineConfigHandler)
+	do.Provide(i, NewWorkflowGenerateHandler)
 }
 
 func (a *ITSMApp) Routes(api *gin.RouterGroup) {
@@ -145,6 +151,8 @@ func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 	escalationH := do.MustInvoke[*EscalationRuleHandler](a.injector)
 	ticketH := do.MustInvoke[*TicketHandler](a.injector)
 	knowledgeDocH := do.MustInvoke[*KnowledgeDocHandler](a.injector)
+	engineConfigH := do.MustInvoke[*EngineConfigHandler](a.injector)
+	workflowGenH := do.MustInvoke[*WorkflowGenerateHandler](a.injector)
 
 	g := api.Group("/itsm")
 	{
@@ -171,6 +179,13 @@ func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 		g.POST("/services/:id/knowledge-documents", knowledgeDocH.Upload)
 		g.GET("/services/:id/knowledge-documents", knowledgeDocH.List)
 		g.DELETE("/services/:id/knowledge-documents/:docId", knowledgeDocH.Delete)
+
+		// Engine Config
+		g.GET("/engine/config", engineConfigH.Get)
+		g.PUT("/engine/config", engineConfigH.Update)
+
+		// Workflow Generate
+		g.POST("/workflows/generate", workflowGenH.Generate)
 
 		// Priorities
 		g.POST("/priorities", priorityH.Create)

@@ -276,12 +276,14 @@ func (h *TicketHandler) Mine(c *gin.Context) {
 
 func (h *TicketHandler) Todo(c *gin.Context) {
 	userID, _ := c.Get("userId")
-	assigneeID := userID.(uint)
+	uid := userID.(uint)
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	keyword := c.Query("keyword")
+	status := c.Query("status")
 
-	items, total, err := h.svc.Todo(assigneeID, page, pageSize)
+	items, total, err := h.svc.Todo(uid, keyword, status, page, pageSize)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -295,10 +297,14 @@ func (h *TicketHandler) Todo(c *gin.Context) {
 }
 
 func (h *TicketHandler) History(c *gin.Context) {
+	userID, _ := c.Get("userId")
+	uid := userID.(uint)
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
 
 	params := HistoryListParams{
+		UserID:   &uid,
 		Page:     page,
 		PageSize: pageSize,
 	}

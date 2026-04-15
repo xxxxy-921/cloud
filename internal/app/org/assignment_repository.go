@@ -222,6 +222,17 @@ func (r *AssignmentRepo) GetUserDepartmentIDs(userID uint) ([]uint, error) {
 	return ids, nil
 }
 
+func (r *AssignmentRepo) GetUserPositionIDs(userID uint) ([]uint, error) {
+	var ids []uint
+	if err := r.db.Model(&UserPosition{}).
+		Where("user_id = ?", userID).
+		Distinct().
+		Pluck("position_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (r *AssignmentRepo) GetSubDepartmentIDs(parentIDs []uint, activeOnly bool) ([]uint, error) {
 	if len(parentIDs) == 0 {
 		return nil, nil

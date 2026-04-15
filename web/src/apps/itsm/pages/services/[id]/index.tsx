@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Plus, Pencil, Trash2, Zap, Save, Loader2 } from "lucide-react"
+import { ArrowLeft, Plus, Pencil, Trash2, Zap, Save, Loader2, Sparkles } from "lucide-react"
 import { usePermission } from "@/hooks/use-permission"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -37,11 +37,12 @@ import {
   Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
 } from "@/components/ui/form"
 import {
-  type ServiceDefItem, type CatalogItem, type ServiceActionItem, type SmartAgentConfig,
+  type ServiceDefItem, type CatalogItem, type ServiceActionItem,
   type SLATemplateItem,
   fetchServiceDef, updateServiceDef,
   fetchCatalogTree, fetchSLATemplates,
   fetchServiceActions, createServiceAction, updateServiceAction, deleteServiceAction,
+  generateWorkflow,
 } from "../../../api"
 import { SmartServiceConfig } from "../../../components/smart-service-config"
 import { ServiceKnowledgeCard } from "../../../components/service-knowledge-card"
@@ -59,9 +60,6 @@ function useBasicInfoSchema() {
     slaId: z.number().nullable(),
     isActive: z.boolean().default(true),
     collaborationSpec: z.string().default(""),
-    agentId: z.number().nullable().default(null),
-    confidenceThreshold: z.number().default(0.8),
-    decisionTimeout: z.number().default(30),
   })
 }
 
@@ -271,6 +269,55 @@ function ActionsSection({ serviceId }: { serviceId: number }) {
   )
 }
 
+// ─── Generate Workflow Button ─────────────────────────
+
+function GenerateWorkflowButton({ serviceId, collaborationSpec }: {
+  serviceId: number
+  collaborationSpec: string
+}) {
+  const { t } = useTranslation(["itsm", "common"])
+  const queryClient = useQueryClient()
+
+  const generateMut = useMutation({
+    mutationFn: () => generateWorkflow({ serviceId, collaborationSpec }),
+    onSuccess: (resp) => {
+      if (resp.errors && resp.errors.length > 0) {
+        toast.warning(t("itsm:generate.partialSuccess", { count: resp.errors.length }))
+      } else {
+        toast.success(t("itsm:generate.success"))
+      }
+      // Update service with generated workflow
+      updateServiceDef(serviceId, { workflowJson: resp.workflowJson } as Partial<ServiceDefItem>).then(() => {
+        queryClient.invalidateQueries({ queryKey: ["itsm-service", serviceId] })
+      })
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
+  const specEmpty = !collaborationSpec?.trim()
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => generateMut.mutate()}
+        disabled={specEmpty || generateMut.isPending}
+      >
+        {generateMut.isPending ? (
+          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+        ) : (
+          <Sparkles className="mr-1.5 h-4 w-4" />
+        )}
+        {generateMut.isPending ? t("itsm:generate.generating") : t("itsm:generate.button")}
+      </Button>
+      {specEmpty && (
+        <span className="text-xs text-muted-foreground">{t("itsm:generate.specRequired")}</span>
+      )}
+    </>
+  )
+}
+
 // ─── Basic Info Form ──────────────────────────────────
 // Mounted only when service + catalogs + slaTemplates are all loaded,
 // so useForm defaultValues and SelectItem options are guaranteed in sync.
@@ -284,7 +331,6 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
   const queryClient = useQueryClient()
   const canUpdate = usePermission("itsm:service:update")
   const schema = useBasicInfoSchema()
-  const agentCfg = service.agentConfig as SmartAgentConfig | null
 
   const form = useForm<BasicFormValues>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -296,9 +342,6 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
       slaId: service.slaId,
       isActive: service.isActive,
       collaborationSpec: service.collaborationSpec ?? "",
-      agentId: service.agentId ?? null,
-      confidenceThreshold: agentCfg?.confidence_threshold ?? 0.8,
-      decisionTimeout: agentCfg?.decision_timeout_seconds ?? 30,
     },
   })
 
@@ -310,11 +353,6 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
       slaId: v.slaId,
       isActive: v.isActive,
       collaborationSpec: service.engineType === "smart" ? v.collaborationSpec : undefined,
-      agentId: service.engineType === "smart" ? v.agentId : undefined,
-      agentConfig: service.engineType === "smart" ? JSON.stringify({
-        confidence_threshold: v.confidenceThreshold,
-        decision_timeout_seconds: v.decisionTimeout,
-      }) : undefined,
     } as Partial<ServiceDefItem>),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["itsm-service", service.id] })
@@ -421,21 +459,24 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
           <SmartServiceConfig
             collaborationSpec={form.watch("collaborationSpec")}
             onCollaborationSpecChange={(v) => form.setValue("collaborationSpec", v)}
-            agentId={form.watch("agentId")}
-            onAgentIdChange={(v) => form.setValue("agentId", v)}
-            confidenceThreshold={form.watch("confidenceThreshold")}
-            onConfidenceThresholdChange={(v) => form.setValue("confidenceThreshold", v)}
-            decisionTimeout={form.watch("decisionTimeout")}
-            onDecisionTimeoutChange={(v) => form.setValue("decisionTimeout", v)}
           />
         )}
 
-        {canUpdate && (
-          <Button type="submit" disabled={updateMut.isPending}>
-            <Save className="mr-1.5 h-4 w-4" />
-            {updateMut.isPending ? t("common:saving") : t("common:save")}
-          </Button>
-        )}
+        {/* Action buttons: Save + Generate on same line */}
+        <div className="flex items-center gap-3">
+          {canUpdate && (
+            <Button type="submit" disabled={updateMut.isPending}>
+              <Save className="mr-1.5 h-4 w-4" />
+              {updateMut.isPending ? t("common:saving") : t("common:save")}
+            </Button>
+          )}
+          {service.engineType === "smart" && (
+            <GenerateWorkflowButton
+              serviceId={service.id}
+              collaborationSpec={form.watch("collaborationSpec")}
+            />
+          )}
+        </div>
       </form>
     </Form>
   )
@@ -506,7 +547,11 @@ export function Component() {
         {!service.workflowJson ? (
           <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed text-muted-foreground">
             <p className="text-sm">{t("itsm:services.workflowEmpty")}</p>
-            <p className="text-xs">{t("itsm:services.workflowEmptyHint")}</p>
+            <p className="text-xs">
+              {service.engineType === "smart"
+                ? t("itsm:generate.workflowEmptySmartHint")
+                : t("itsm:services.workflowEmptyHint")}
+            </p>
           </div>
         ) : (
           <Suspense fallback={<div className="flex h-96 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>

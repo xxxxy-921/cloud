@@ -10,16 +10,19 @@ import (
 var (
 	ErrAgentNotFound     = errors.New("agent not found")
 	ErrAgentNameConflict = errors.New("agent name already exists")
+	ErrAgentCodeConflict = errors.New("agent code already exists")
 	ErrAgentHasRunningSessions = errors.New("agent has running sessions")
 	ErrInvalidAgentType  = errors.New("invalid agent type")
 	ErrNodeRequired      = errors.New("node_id is required for remote exec mode")
 	ErrModelRequired     = errors.New("model_id is required for assistant agent")
 	ErrRuntimeRequired   = errors.New("runtime is required for coding agent")
+	ErrCodeRequired      = errors.New("code is required for internal agent")
 )
 
 var ValidAgentTypes = map[string]bool{
 	AgentTypeAssistant: true,
 	AgentTypeCoding:    true,
+	AgentTypeInternal:  true,
 }
 
 var ValidStrategies = map[string]bool{
@@ -57,11 +60,29 @@ func (s *AgentService) Create(a *Agent) error {
 		return ErrAgentNameConflict
 	}
 
+	// Check code uniqueness for internal agents
+	if a.Code != nil && *a.Code != "" {
+		if _, err := s.repo.FindByCode(*a.Code); err == nil {
+			return ErrAgentCodeConflict
+		}
+	}
+
 	return s.repo.Create(a)
 }
 
 func (s *AgentService) Get(id uint) (*Agent, error) {
 	a, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAgentNotFound
+		}
+		return nil, err
+	}
+	return a, nil
+}
+
+func (s *AgentService) GetByCode(code string) (*Agent, error) {
+	a, err := s.repo.FindByCode(code)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrAgentNotFound
@@ -117,6 +138,10 @@ func (s *AgentService) validateByType(a *Agent) error {
 		}
 		if a.ExecMode == AgentExecModeRemote && a.NodeID == nil {
 			return ErrNodeRequired
+		}
+	case AgentTypeInternal:
+		if a.Code == nil || *a.Code == "" {
+			return ErrCodeRequired
 		}
 	}
 	return nil

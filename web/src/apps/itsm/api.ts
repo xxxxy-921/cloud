@@ -598,3 +598,75 @@ export function uploadKnowledgeDoc(serviceId: number, file: File) {
 export function deleteKnowledgeDoc(serviceId: number, docId: number) {
   return api.delete(`/api/v1/itsm/services/${serviceId}/knowledge-documents/${docId}`)
 }
+
+// ─── Engine Config ──────────────────────────────────────
+
+export interface EngineAgentConfig {
+  modelId: number
+  providerId: number
+  providerName: string
+  modelName: string
+  temperature: number
+}
+
+export interface EngineConfig {
+  generator: EngineAgentConfig
+  runtime: EngineAgentConfig & { decisionMode: string }
+  general: {
+    maxRetries: number
+    timeoutSeconds: number
+    reasoningLog: string
+  }
+}
+
+export interface EngineConfigUpdate {
+  generator: { modelId: number; temperature: number }
+  runtime: { modelId: number; temperature: number; decisionMode: string }
+  general: { maxRetries: number; timeoutSeconds: number; reasoningLog: string }
+}
+
+export function fetchEngineConfig() {
+  return api.get<EngineConfig>("/api/v1/itsm/engine/config")
+}
+
+export function updateEngineConfig(data: EngineConfigUpdate) {
+  return api.put("/api/v1/itsm/engine/config", data)
+}
+
+// ─── AI Provider / Model APIs (for engine config) ───────
+
+export interface ProviderItem {
+  id: number
+  name: string
+  type: string
+  status: string
+}
+
+export interface ModelItem {
+  id: number
+  modelId: string
+  displayName: string
+  providerId: number
+  type: string
+  status: string
+}
+
+export function fetchProviders() {
+  return api.get<{ items: ProviderItem[] }>("/api/v1/ai/providers?pageSize=100").then((r) => r?.items ?? [])
+}
+
+export function fetchModels(providerId: number) {
+  return api.get<{ items: ModelItem[] }>(`/api/v1/ai/models?providerId=${providerId}&type=llm&pageSize=100`).then((r) => r?.items ?? [])
+}
+
+// ─── Workflow Generate ──────────────────────────────────
+
+export interface WorkflowGenerateResponse {
+  workflowJson: unknown
+  retries: number
+  errors?: { nodeId?: string; edgeId?: string; message: string }[]
+}
+
+export function generateWorkflow(data: { serviceId: number; collaborationSpec: string }) {
+  return api.post<WorkflowGenerateResponse>("/api/v1/itsm/workflows/generate", data)
+}

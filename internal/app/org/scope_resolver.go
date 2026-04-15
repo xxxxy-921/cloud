@@ -13,3 +13,16 @@ func (r *OrgScopeResolverImpl) GetUserDeptScope(userID uint, includeSubDepts boo
 	}
 	return r.svc.GetUserDepartmentIDs(userID)
 }
+
+// OrgUserResolverImpl implements app.OrgUserResolver backed by AssignmentRepo.
+type OrgUserResolverImpl struct {
+	repo *AssignmentRepo
+}
+
+func (r *OrgUserResolverImpl) GetUserPositionIDs(userID uint) ([]uint, error) {
+	return r.repo.GetUserPositionIDs(userID)
+}
+
+func (r *OrgUserResolverImpl) GetUserDepartmentIDs(userID uint) ([]uint, error) {
+	return r.repo.GetUserDepartmentIDs(userID)
+}

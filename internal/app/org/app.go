@@ -46,6 +46,10 @@ func (a *OrgApp) Providers(i do.Injector) {
 	do.ProvideValue[app.OrgScopeResolver](i, &OrgScopeResolverImpl{
 		svc: do.MustInvoke[*AssignmentService](i),
 	})
+	// OrgUserResolver — satisfies app.OrgUserResolver for multi-dimensional participant matching
+	do.ProvideValue[app.OrgUserResolver](i, &OrgUserResolverImpl{
+		repo: do.MustInvoke[*AssignmentRepo](i),
+	})
 }
 
 func (a *OrgApp) Routes(api *gin.RouterGroup) {

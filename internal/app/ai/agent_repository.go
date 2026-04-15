@@ -35,6 +35,14 @@ func (r *AgentRepo) FindByName(name string) (*Agent, error) {
 	return &a, nil
 }
 
+func (r *AgentRepo) FindByCode(code string) (*Agent, error) {
+	var a Agent
+	if err := r.db.Where("code = ?", code).First(&a).Error; err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 type AgentListParams struct {
 	Keyword    string
 	Type       string
@@ -60,6 +68,9 @@ func (r *AgentRepo) List(params AgentListParams) ([]Agent, int64, error) {
 	}
 	if params.Type != "" {
 		query = query.Where("type = ?", params.Type)
+	} else {
+		// By default, exclude internal agents from listings
+		query = query.Where("type != ?", AgentTypeInternal)
 	}
 
 	// Visibility filter: user sees team + public + own private

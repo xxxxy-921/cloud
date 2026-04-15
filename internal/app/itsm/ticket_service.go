@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	"metis/internal/app"
 	"metis/internal/app/itsm/engine"
 )
 
@@ -23,17 +25,18 @@ var (
 )
 
 type TicketService struct {
-	ticketRepo    *TicketRepo
-	timelineRepo  *TimelineRepo
-	serviceRepo   *ServiceDefRepo
-	slaRepo       *SLATemplateRepo
-	priorityRepo  *PriorityRepo
-	classicEngine *engine.ClassicEngine
-	smartEngine   *engine.SmartEngine
+	ticketRepo      *TicketRepo
+	timelineRepo    *TimelineRepo
+	serviceRepo     *ServiceDefRepo
+	slaRepo         *SLATemplateRepo
+	priorityRepo    *PriorityRepo
+	classicEngine   *engine.ClassicEngine
+	smartEngine     *engine.SmartEngine
+	orgUserResolver app.OrgUserResolver // nil when Org App not installed
 }
 
 func NewTicketService(i do.Injector) (*TicketService, error) {
-	return &TicketService{
+	svc := &TicketService{
 		ticketRepo:    do.MustInvoke[*TicketRepo](i),
 		timelineRepo:  do.MustInvoke[*TimelineRepo](i),
 		serviceRepo:   do.MustInvoke[*ServiceDefRepo](i),
@@ -41,7 +44,14 @@ func NewTicketService(i do.Injector) (*TicketService, error) {
 		priorityRepo:  do.MustInvoke[*PriorityRepo](i),
 		classicEngine: do.MustInvoke[*engine.ClassicEngine](i),
 		smartEngine:   do.MustInvoke[*engine.SmartEngine](i),
-	}, nil
+	}
+	// Optional: resolve OrgUserResolver if Org App is installed
+	resolver, err := do.InvokeAs[app.OrgUserResolver](i)
+	if err == nil && resolver != nil {
+		svc.orgUserResolver = resolver
+		slog.Info("ITSM TicketService: OrgUserResolver available for multi-dimensional participant matching")
+	}
+	return svc, nil
 }
 
 type CreateTicketInput struct {
@@ -261,8 +271,23 @@ func (s *TicketService) Mine(requesterID uint, status string, page, pageSize int
 	return s.ticketRepo.List(params)
 }
 
-func (s *TicketService) Todo(assigneeID uint, page, pageSize int) ([]Ticket, int64, error) {
-	return s.ticketRepo.ListTodo(assigneeID, page, pageSize)
+func (s *TicketService) Todo(userID uint, keyword, status string, page, pageSize int) ([]Ticket, int64, error) {
+	params := TodoListParams{
+		UserID:   userID,
+		Keyword:  keyword,
+		Status:   status,
+		Page:     page,
+		PageSize: pageSize,
+	}
+	if s.orgUserResolver != nil {
+		if posIDs, err := s.orgUserResolver.GetUserPositionIDs(userID); err == nil {
+			params.PositionIDs = posIDs
+		}
+		if deptIDs, err := s.orgUserResolver.GetUserDepartmentIDs(userID); err == nil {
+			params.DeptIDs = deptIDs
+		}
+	}
+	return s.ticketRepo.ListTodo(params)
 }
 
 func (s *TicketService) History(params HistoryListParams) ([]Ticket, int64, error) {
@@ -676,13 +701,27 @@ func (s *TicketService) RetryAI(ticketID uint, operatorID uint) (*Ticket, error)
 
 // Approvals returns pending approval activities assigned to the given user.
 func (s *TicketService) Approvals(userID uint, page, pageSize int) ([]ApprovalItem, int64, error) {
-	// For now, only match by direct userID. Org App integration (positionIDs, deptIDs) can be added later.
-	return s.ticketRepo.ListApprovals(userID, nil, nil, page, pageSize)
+	posIDs, deptIDs := s.resolveUserOrg(userID)
+	return s.ticketRepo.ListApprovals(userID, posIDs, deptIDs, page, pageSize)
 }
 
 // ApprovalCount returns the count of pending approval activities for the given user.
 func (s *TicketService) ApprovalCount(userID uint) (int64, error) {
-	return s.ticketRepo.CountApprovals(userID, nil, nil)
+	posIDs, deptIDs := s.resolveUserOrg(userID)
+	return s.ticketRepo.CountApprovals(userID, posIDs, deptIDs)
+}
+
+// resolveUserOrg returns the user's position and department IDs if Org App is available.
+func (s *TicketService) resolveUserOrg(userID uint) (positionIDs []uint, deptIDs []uint) {
+	if s.orgUserResolver != nil {
+		if ids, err := s.orgUserResolver.GetUserPositionIDs(userID); err == nil {
+			positionIDs = ids
+		}
+		if ids, err := s.orgUserResolver.GetUserDepartmentIDs(userID); err == nil {
+			deptIDs = ids
+		}
+	}
+	return
 }
 
 // ApproveActivity approves a pending approval activity and advances the workflow.

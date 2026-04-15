@@ -112,38 +112,81 @@ func (r *TicketRepo) List(params TicketListParams) ([]Ticket, int64, error) {
 	return items, total, nil
 }
 
-// ListTodo returns active tickets assigned to a user, ordered by priority value then creation time.
-func (r *TicketRepo) ListTodo(assigneeID uint, page, pageSize int) ([]Ticket, int64, error) {
-	activeStatuses := []string{TicketStatusPending, TicketStatusInProgress, TicketStatusWaitingApproval}
-	query := r.db.Model(&Ticket{}).
-		Where("assignee_id = ? AND status IN ?", assigneeID, activeStatuses)
+// TodoListParams holds query parameters for the todo list.
+type TodoListParams struct {
+	UserID      uint
+	PositionIDs []uint
+	DeptIDs     []uint
+	Keyword     string
+	Status      string
+	Page        int
+	PageSize    int
+}
 
+// ListTodo returns active tickets where the user has an assignment on an active activity.
+// Matches by userID, positionIDs, or deptIDs on TicketAssignment.
+func (r *TicketRepo) ListTodo(params TodoListParams) ([]Ticket, int64, error) {
+	activeStatuses := []string{TicketStatusPending, TicketStatusInProgress, TicketStatusWaitingApproval}
+
+	buildQuery := func(q *gorm.DB) *gorm.DB {
+		q = q.
+			Joins("JOIN itsm_ticket_assignments AS a ON a.ticket_id = itsm_tickets.id").
+			Joins("JOIN itsm_ticket_activities AS act ON act.id = a.activity_id").
+			Where("itsm_tickets.deleted_at IS NULL AND act.deleted_at IS NULL").
+			Where("act.status IN ?", []string{"pending", "in_progress"})
+
+		if params.Status != "" {
+			q = q.Where("itsm_tickets.status = ?", params.Status)
+		} else {
+			q = q.Where("itsm_tickets.status IN ?", activeStatuses)
+		}
+
+		// Multi-dimensional participant matching
+		conditions := r.db.Where("a.user_id = ?", params.UserID)
+		if len(params.PositionIDs) > 0 {
+			conditions = conditions.Or("a.position_id IN ?", params.PositionIDs)
+		}
+		if len(params.DeptIDs) > 0 {
+			conditions = conditions.Or("a.department_id IN ?", params.DeptIDs)
+		}
+		q = q.Where(conditions)
+
+		if params.Keyword != "" {
+			like := "%" + params.Keyword + "%"
+			q = q.Where("(itsm_tickets.code LIKE ? OR itsm_tickets.title LIKE ?)", like, like)
+		}
+		return q
+	}
+
+	// Count distinct tickets
+	countQuery := buildQuery(r.db.Model(&Ticket{})).Select("DISTINCT itsm_tickets.id")
 	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	if err := r.db.Table("(?) AS sub", countQuery).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	if page < 1 {
-		page = 1
+	if params.Page < 1 {
+		params.Page = 1
 	}
-	if pageSize < 1 {
-		pageSize = 20
+	if params.PageSize < 1 {
+		params.PageSize = 20
 	}
 
 	var items []Ticket
-	offset := (page - 1) * pageSize
-	if err := r.db.
+	offset := (params.Page - 1) * params.PageSize
+	dataQuery := buildQuery(r.db.Model(&Ticket{})).
 		Joins("LEFT JOIN itsm_priorities ON itsm_priorities.id = itsm_tickets.priority_id").
-		Where("itsm_tickets.assignee_id = ? AND itsm_tickets.status IN ?", assigneeID, activeStatuses).
+		Select("DISTINCT itsm_tickets.*").
 		Order("itsm_priorities.value ASC, itsm_tickets.created_at ASC").
-		Offset(offset).Limit(pageSize).
-		Find(&items).Error; err != nil {
+		Offset(offset).Limit(params.PageSize)
+	if err := dataQuery.Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil
 }
 
 type HistoryListParams struct {
+	UserID     *uint
 	AssigneeID *uint
 	StartDate  *time.Time
 	EndDate    *time.Time
@@ -152,10 +195,14 @@ type HistoryListParams struct {
 }
 
 // ListHistory returns terminal-state tickets with optional filters.
+// When UserID is set, restricts to tickets where the user is requester or assignee.
 func (r *TicketRepo) ListHistory(params HistoryListParams) ([]Ticket, int64, error) {
 	terminalStatuses := []string{TicketStatusCompleted, TicketStatusFailed, TicketStatusCancelled}
 	query := r.db.Model(&Ticket{}).Where("status IN ?", terminalStatuses)
 
+	if params.UserID != nil {
+		query = query.Where("(requester_id = ? OR assignee_id = ?)", *params.UserID, *params.UserID)
+	}
 	if params.AssigneeID != nil {
 		query = query.Where("assignee_id = ?", *params.AssigneeID)
 	}
@@ -199,35 +246,49 @@ type ApprovalItem struct {
 	SLAResponseDeadline   *time.Time `json:"slaResponseDeadline"`
 	SLAResolutionDeadline *time.Time `json:"slaResolutionDeadline"`
 	// Activity fields
-	ActivityID   uint       `json:"activityId"`
-	ActivityName string     `json:"activityName"`
-	ActivityType string     `json:"activityType"`
-	FormSchema   JSONField  `json:"formSchema"`
-	StartedAt    *time.Time `json:"startedAt"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	// Assignment fields
+	ActivityID     uint       `json:"activityId"`
+	ActivityName   string     `json:"activityName"`
+	ActivityType   string     `json:"activityType"`
+	ActivityStatus string     `json:"activityStatus"`
+	FormSchema     JSONField  `json:"formSchema"`
+	AIConfidence   float64    `json:"aiConfidence"`
+	AIReasoning    string     `json:"aiReasoning"`
+	StartedAt      *time.Time `json:"startedAt"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	// Assignment fields (zero for ai_confirm items)
 	AssignmentID    uint   `json:"assignmentId"`
 	ParticipantType string `json:"participantType"`
+	// Discriminator
+	ApprovalKind string `json:"approvalKind"`
 }
 
-// ListApprovals returns pending approval activities assigned to the given user (by userID, positionIDs, or deptIDs).
+// ListApprovals returns pending approval items: workflow approvals (via assignment) and AI decision confirmations (pending_approval status).
 func (r *TicketRepo) ListApprovals(userID uint, positionIDs []uint, deptIDs []uint, page, pageSize int) ([]ApprovalItem, int64, error) {
-	baseQuery := r.db.Table("itsm_ticket_assignments AS a").
-		Joins("JOIN itsm_ticket_activities AS act ON act.id = a.activity_id").
-		Joins("JOIN itsm_tickets AS t ON t.id = a.ticket_id").
-		Joins("LEFT JOIN itsm_priorities AS p ON p.id = t.priority_id").
-		Where("act.activity_type = ? AND act.status IN ?", "approve", []string{"pending", "in_progress"}).
-		Where("t.deleted_at IS NULL AND act.deleted_at IS NULL")
-
-	// Build user condition: direct user_id OR matching position/department
-	conditions := r.db.Where("a.user_id = ?", userID)
+	// Build user matching condition for workflow approvals
+	userCond := r.db.Where("a.user_id = ?", userID)
 	if len(positionIDs) > 0 {
-		conditions = conditions.Or("a.position_id IN ?", positionIDs)
+		userCond = userCond.Or("a.position_id IN ?", positionIDs)
 	}
 	if len(deptIDs) > 0 {
-		conditions = conditions.Or("a.department_id IN ?", deptIDs)
+		userCond = userCond.Or("a.department_id IN ?", deptIDs)
 	}
-	baseQuery = baseQuery.Where(conditions)
+
+	// Single query with OR: workflow approvals via assignment OR AI confirmations via status
+	baseQuery := r.db.Table("itsm_ticket_activities AS act").
+		Joins("JOIN itsm_tickets AS t ON t.id = act.ticket_id").
+		Joins("LEFT JOIN itsm_ticket_assignments AS a ON a.activity_id = act.id").
+		Joins("LEFT JOIN itsm_priorities AS p ON p.id = t.priority_id").
+		Where("t.deleted_at IS NULL AND act.deleted_at IS NULL").
+		Where(
+			r.db.Where(
+				// Workflow approvals: approve activity + active status + user match
+				r.db.Where("act.activity_type = ? AND act.status IN ?", "approve", []string{"pending", "in_progress"}).
+					Where(userCond),
+			).Or(
+				// AI confirmations: pending_approval status (no assignment needed)
+				"act.status = ?", "pending_approval",
+			),
+		)
 
 	var total int64
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -246,8 +307,10 @@ func (r *TicketRepo) ListApprovals(userID uint, positionIDs []uint, deptIDs []ui
 	if err := baseQuery.
 		Select(`t.id AS ticket_id, t.code AS ticket_code, t.title AS ticket_title, t.status AS ticket_status,
 			t.service_id, t.priority_id, t.sla_status, t.sla_response_deadline, t.sla_resolution_deadline,
-			act.id AS activity_id, act.name AS activity_name, act.activity_type, act.form_schema, act.started_at, act.created_at,
-			a.id AS assignment_id, a.participant_type`).
+			act.id AS activity_id, act.name AS activity_name, act.activity_type, act.status AS activity_status,
+			act.form_schema, act.ai_confidence, act.ai_reasoning, act.started_at, act.created_at,
+			COALESCE(a.id, 0) AS assignment_id, COALESCE(a.participant_type, '') AS participant_type,
+			CASE WHEN act.status = 'pending_approval' THEN 'ai_confirm' ELSE 'workflow' END AS approval_kind`).
 		Order("p.value ASC, act.created_at ASC").
 		Offset(offset).Limit(pageSize).
 		Scan(&items).Error; err != nil {
@@ -256,22 +319,28 @@ func (r *TicketRepo) ListApprovals(userID uint, positionIDs []uint, deptIDs []ui
 	return items, total, nil
 }
 
-// CountApprovals returns the count of pending approval activities for the given user.
+// CountApprovals returns the combined count of pending workflow approvals and AI decision confirmations.
 func (r *TicketRepo) CountApprovals(userID uint, positionIDs []uint, deptIDs []uint) (int64, error) {
-	query := r.db.Table("itsm_ticket_assignments AS a").
-		Joins("JOIN itsm_ticket_activities AS act ON act.id = a.activity_id").
-		Joins("JOIN itsm_tickets AS t ON t.id = a.ticket_id").
-		Where("act.activity_type = ? AND act.status IN ?", "approve", []string{"pending", "in_progress"}).
-		Where("t.deleted_at IS NULL AND act.deleted_at IS NULL")
-
-	conditions := r.db.Where("a.user_id = ?", userID)
+	userCond := r.db.Where("a.user_id = ?", userID)
 	if len(positionIDs) > 0 {
-		conditions = conditions.Or("a.position_id IN ?", positionIDs)
+		userCond = userCond.Or("a.position_id IN ?", positionIDs)
 	}
 	if len(deptIDs) > 0 {
-		conditions = conditions.Or("a.department_id IN ?", deptIDs)
+		userCond = userCond.Or("a.department_id IN ?", deptIDs)
 	}
-	query = query.Where(conditions)
+
+	query := r.db.Table("itsm_ticket_activities AS act").
+		Joins("JOIN itsm_tickets AS t ON t.id = act.ticket_id").
+		Joins("LEFT JOIN itsm_ticket_assignments AS a ON a.activity_id = act.id").
+		Where("t.deleted_at IS NULL AND act.deleted_at IS NULL").
+		Where(
+			r.db.Where(
+				r.db.Where("act.activity_type = ? AND act.status IN ?", "approve", []string{"pending", "in_progress"}).
+					Where(userCond),
+			).Or(
+				"act.status = ?", "pending_approval",
+			),
+		)
 
 	var count int64
 	if err := query.Count(&count).Error; err != nil {

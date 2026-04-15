@@ -32,6 +32,9 @@ func seedITSM(db *gorm.DB, enforcer *casbin.Enforcer) error {
 	if err := tools.SeedAgents(db); err != nil {
 		return err
 	}
+	if err := seedEngineConfig(db); err != nil {
+		return err
+	}
 	return seedServiceDefinitions(db)
 }
 
@@ -166,25 +169,8 @@ func seedMenus(db *gorm.DB) error {
 		{Name: "删除服务", Type: model.MenuTypeButton, Permission: "itsm:service:delete", Sort: 2},
 	})
 
-	// 工单管理 子目录
-	var ticketDir model.Menu
-	if err := db.Where("permission = ?", "itsm:ticket").First(&ticketDir).Error; err != nil {
-		ticketDir = model.Menu{
-			ParentID:   &itsmDir.ID,
-			Name:       "工单管理",
-			Type:       model.MenuTypeDirectory,
-			Icon:       "ClipboardList",
-			Permission: "itsm:ticket",
-			Sort:       2,
-		}
-		if err := db.Create(&ticketDir).Error; err != nil {
-			return err
-		}
-		slog.Info("seed: created menu", "name", ticketDir.Name, "permission", ticketDir.Permission)
-	}
-
 	// 全部工单
-	allTicketMenu := seedMenu(db, &ticketDir.ID, "全部工单", model.MenuTypeMenu, "/itsm/tickets", "List", "itsm:ticket:list", 0)
+	allTicketMenu := seedMenu(db, &itsmDir.ID, "全部工单", model.MenuTypeMenu, "/itsm/tickets", "List", "itsm:ticket:list", 2)
 	seedButtons(db, allTicketMenu, []model.Menu{
 		{Name: "创建工单", Type: model.MenuTypeButton, Permission: "itsm:ticket:create", Sort: 0},
 		{Name: "指派工单", Type: model.MenuTypeButton, Permission: "itsm:ticket:assign", Sort: 1},
@@ -193,17 +179,17 @@ func seedMenus(db *gorm.DB) error {
 	})
 
 	// 我的工单
-	seedMenu(db, &ticketDir.ID, "我的工单", model.MenuTypeMenu, "/itsm/tickets/mine", "User", "itsm:ticket:mine", 1)
+	seedMenu(db, &itsmDir.ID, "我的工单", model.MenuTypeMenu, "/itsm/tickets/mine", "User", "itsm:ticket:mine", 3)
 	// 我的待办
-	seedMenu(db, &ticketDir.ID, "我的待办", model.MenuTypeMenu, "/itsm/tickets/todo", "Clock", "itsm:ticket:todo", 2)
+	seedMenu(db, &itsmDir.ID, "我的待办", model.MenuTypeMenu, "/itsm/tickets/todo", "Clock", "itsm:ticket:todo", 4)
 	// 历史工单
-	seedMenu(db, &ticketDir.ID, "历史工单", model.MenuTypeMenu, "/itsm/tickets/history", "Archive", "itsm:ticket:history", 3)
+	seedMenu(db, &itsmDir.ID, "历史工单", model.MenuTypeMenu, "/itsm/tickets/history", "Archive", "itsm:ticket:history", 5)
 
 	// 我的审批
-	seedMenu(db, &ticketDir.ID, "我的审批", model.MenuTypeMenu, "/itsm/tickets/approvals", "CheckCircle", "itsm:ticket:approvals", 4)
+	seedMenu(db, &itsmDir.ID, "我的审批", model.MenuTypeMenu, "/itsm/tickets/approvals", "CheckCircle", "itsm:ticket:approvals", 6)
 
 	// 优先级管理
-	priorityMenu := seedMenu(db, &itsmDir.ID, "优先级管理", model.MenuTypeMenu, "/itsm/priorities", "Flag", "itsm:priority:list", 3)
+	priorityMenu := seedMenu(db, &itsmDir.ID, "优先级管理", model.MenuTypeMenu, "/itsm/priorities", "Flag", "itsm:priority:list", 7)
 	seedButtons(db, priorityMenu, []model.Menu{
 		{Name: "新增优先级", Type: model.MenuTypeButton, Permission: "itsm:priority:create", Sort: 0},
 		{Name: "编辑优先级", Type: model.MenuTypeButton, Permission: "itsm:priority:update", Sort: 1},
@@ -211,12 +197,15 @@ func seedMenus(db *gorm.DB) error {
 	})
 
 	// SLA 管理
-	slaMenu := seedMenu(db, &itsmDir.ID, "SLA 管理", model.MenuTypeMenu, "/itsm/sla", "Timer", "itsm:sla:list", 4)
+	slaMenu := seedMenu(db, &itsmDir.ID, "SLA 管理", model.MenuTypeMenu, "/itsm/sla", "Timer", "itsm:sla:list", 8)
 	seedButtons(db, slaMenu, []model.Menu{
 		{Name: "新增SLA", Type: model.MenuTypeButton, Permission: "itsm:sla:create", Sort: 0},
 		{Name: "编辑SLA", Type: model.MenuTypeButton, Permission: "itsm:sla:update", Sort: 1},
 		{Name: "删除SLA", Type: model.MenuTypeButton, Permission: "itsm:sla:delete", Sort: 2},
 	})
+
+	// 引擎配置
+	seedMenu(db, &itsmDir.ID, "引擎配置", model.MenuTypeMenu, "/itsm/engine-config", "Settings", "itsm:engine:config", 9)
 
 	return nil
 }
@@ -281,6 +270,11 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/itsm/services/:id/knowledge-documents", "POST"},
 		{"admin", "/api/v1/itsm/services/:id/knowledge-documents", "GET"},
 		{"admin", "/api/v1/itsm/services/:id/knowledge-documents/:docId", "DELETE"},
+		// Engine Config
+		{"admin", "/api/v1/itsm/engine/config", "GET"},
+		{"admin", "/api/v1/itsm/engine/config", "PUT"},
+		// Workflow Generate
+		{"admin", "/api/v1/itsm/workflows/generate", "POST"},
 		// Priorities
 		{"admin", "/api/v1/itsm/priorities", "POST"},
 		{"admin", "/api/v1/itsm/priorities", "GET"},
@@ -352,6 +346,7 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "itsm:sla:create", "read"},
 		{"admin", "itsm:sla:update", "read"},
 		{"admin", "itsm:sla:delete", "read"},
+		{"admin", "itsm:engine:config", "read"},
 	}
 
 	allPolicies := append(policies, menuPerms...)
@@ -550,3 +545,155 @@ func seedServiceDefinitions(db *gorm.DB) error {
 
 	return nil
 }
+
+// seedEngineConfig creates internal agents and default SystemConfig for ITSM engine.
+func seedEngineConfig(db *gorm.DB) error {
+	type agentSeed struct {
+		Name         string
+		Code         string
+		SystemPrompt string
+		Temperature  float64
+	}
+
+	agents := []agentSeed{
+		{
+			Name:         "ITSM 工作流解析",
+			Code:         "itsm.generator",
+			Temperature:  0.3,
+			SystemPrompt: itsmGeneratorSystemPrompt,
+		},
+		{
+			Name:         "ITSM 运行时决策",
+			Code:         "itsm.runtime",
+			Temperature:  0.1,
+			SystemPrompt: itsmRuntimeSystemPrompt,
+		},
+	}
+
+	for _, a := range agents {
+		var existing struct{ ID uint }
+		if err := db.Table("ai_agents").Where("code = ?", a.Code).Select("id").First(&existing).Error; err == nil {
+			continue
+		}
+		if err := db.Table("ai_agents").Create(map[string]any{
+			"name":          a.Name,
+			"code":          a.Code,
+			"type":          "internal",
+			"system_prompt": a.SystemPrompt,
+			"temperature":   a.Temperature,
+			"is_active":     true,
+			"visibility":    "team",
+			"created_by":    0,
+		}).Error; err != nil {
+			slog.Error("seed: failed to create internal agent", "code", a.Code, "error", err)
+			continue
+		}
+		slog.Info("seed: created internal agent", "code", a.Code, "name", a.Name)
+	}
+
+	defaults := map[string]string{
+		"itsm.engine.runtime.decision_mode":   "direct_first",
+		"itsm.engine.general.max_retries":     "3",
+		"itsm.engine.general.timeout_seconds": "30",
+		"itsm.engine.general.reasoning_log":   "full",
+	}
+
+	for key, value := range defaults {
+		var existing model.SystemConfig
+		if err := db.Where("\"key\" = ?", key).First(&existing).Error; err == nil {
+			continue
+		}
+		cfg := model.SystemConfig{Key: key, Value: value}
+		if err := db.Create(&cfg).Error; err != nil {
+			slog.Error("seed: failed to create system config", "key", key, "error", err)
+			continue
+		}
+		slog.Info("seed: created system config", "key", key, "value", value)
+	}
+
+	return nil
+}
+
+const itsmGeneratorSystemPrompt = `你是 ITSM 工作流解析引擎。根据用户的协作规范（Collaboration Spec）生成工作流 JSON。
+
+## 输出格式
+
+输出必须是合法 JSON，包含 nodes 和 edges 两个数组：
+
+{
+  "nodes": [
+    {
+      "id": "string (唯一标识，如 node_1)",
+      "type": "string (节点类型，见下方枚举)",
+      "position": {"x": number, "y": number},
+      "data": { ... (节点配置，见下方说明) }
+    }
+  ],
+  "edges": [
+    {
+      "id": "string (唯一标识，如 edge_1)",
+      "source": "string (源节点 id)",
+      "target": "string (目标节点 id)",
+      "data": {
+        "outcome": "string (可选，如 approved/rejected)",
+        "default": boolean (可选，网关默认路径)
+      }
+    }
+  ]
+}
+
+## 节点类型（type）枚举
+
+| 类型 | 说明 | data 必需字段 |
+|------|------|--------------|
+| start | 起始节点（有且仅有一个） | label |
+| end | 结束节点（至少一个） | label |
+| form | 表单填写节点 | label, participants |
+| approve | 审批节点 | label, participants, approve_mode(single/parallel/sequential) |
+| process | 人工处理节点 | label, participants |
+| action | 自动动作节点（webhook/脚本） | label, action_id (关联可用动作) |
+| gateway | 条件分支网关 | label, conditions (至少两条出边) |
+| notify | 通知节点 | label |
+| wait | 等待节点（定时/信号） | label, wait_mode(signal/timer), duration(如 "2h") |
+
+## 参与人（participants）格式
+
+participants 是数组，每个元素：
+- type: "user" | "position" | "department" | "requester_manager"
+- value: 对应的标识字符串（如岗位名、部门名）
+
+当协作规范中提到"提交人的直属上级"或"发起人经理"时，使用 requester_manager 类型。
+当提到具体岗位（如"IT主管"）时，使用 position 类型。
+当提到部门（如"IT部门"）时，使用 department 类型。
+
+## 网关（gateway）条件格式
+
+网关节点的 data.conditions 数组定义各出边的路由条件：
+- field: 条件字段路径（如 "form.urgency", "ticket.priority"）
+- operator: equals | not_equals | contains_any | gt | lt | gte | lte
+- value: 比较值
+- edge_id: 对应出边 id
+
+网关必须有至少两条出边，其中一条应标记 data.default = true 作为兜底。
+
+## 布局规则
+
+- 起始节点 position 从 {x: 400, y: 50} 开始
+- 纵向排列，每层间距约 150px
+- 并行分支横向展开，间距约 250px
+
+## 约束
+
+1. 严格基于协作规范描述，不发明未提及的角色、部门或步骤
+2. 每条从 start 到 end 的路径必须连通，不能有孤立节点
+3. 开始节点有且仅有一条出边，无入边
+4. 结束节点无出边
+5. 仅输出 JSON，不要包含任何解释文字或 markdown 标记`
+
+const itsmRuntimeSystemPrompt = `你是一个 ITSM 运行时决策引擎。根据工单当前状态（TicketCase 快照）和策略约束（TicketPolicySnapshot），决定工单的下一步操作。
+
+决策输出格式：
+- next_step_type: "activity" 或 "complete"
+- 如果是 activity，必须指定 work_items（包含 work_type、参与人、表单等）
+- 协作规范是主规则源，workflow_json 仅作参考
+- 优先走确定路径（workflow_hints），无法确定时使用 AI 推理`

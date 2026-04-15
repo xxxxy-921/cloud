@@ -11,6 +11,7 @@ import (
 const (
 	AgentTypeAssistant = "assistant"
 	AgentTypeCoding    = "coding"
+	AgentTypeInternal  = "internal"
 )
 
 // Agent strategies (assistant type)
@@ -67,13 +68,14 @@ const (
 
 type Agent struct {
 	model.BaseModel
-	Name        string `json:"name" gorm:"size:128;uniqueIndex;not null"`
-	Description string `json:"description" gorm:"type:text"`
-	Avatar      string `json:"avatar" gorm:"size:256"`
-	Type        string `json:"type" gorm:"size:16;not null"`
-	IsActive    bool   `json:"isActive" gorm:"not null;default:true"`
-	Visibility  string `json:"visibility" gorm:"size:16;not null;default:team"`
-	CreatedBy   uint   `json:"createdBy" gorm:"not null;index"`
+	Name        string  `json:"name" gorm:"size:128;uniqueIndex;not null"`
+	Code        *string `json:"code" gorm:"size:128;uniqueIndex"`
+	Description string  `json:"description" gorm:"type:text"`
+	Avatar      string  `json:"avatar" gorm:"size:256"`
+	Type        string  `json:"type" gorm:"size:16;not null"`
+	IsActive    bool    `json:"isActive" gorm:"not null;default:true"`
+	Visibility  string  `json:"visibility" gorm:"size:16;not null;default:team"`
+	CreatedBy   uint    `json:"createdBy" gorm:"not null;index"`
 
 	// assistant type fields
 	Strategy     string  `json:"strategy" gorm:"size:32"`
@@ -100,6 +102,7 @@ func (Agent) TableName() string { return "ai_agents" }
 type AgentResponse struct {
 	ID           uint            `json:"id"`
 	Name         string          `json:"name"`
+	Code         *string         `json:"code,omitempty"`
 	Description  string          `json:"description"`
 	Avatar       string          `json:"avatar"`
 	Type         string          `json:"type"`
@@ -127,6 +130,7 @@ func (a *Agent) ToResponse() AgentResponse {
 	return AgentResponse{
 		ID:            a.ID,
 		Name:          a.Name,
+		Code:          a.Code,
 		Description:   a.Description,
 		Avatar:        a.Avatar,
 		Type:          a.Type,

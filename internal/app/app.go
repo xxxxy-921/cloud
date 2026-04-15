@@ -39,6 +39,14 @@ type OrgScopeResolver interface {
 	GetUserDeptScope(userID uint, includeSubDepts bool) ([]uint, error)
 }
 
+// OrgUserResolver is an optional interface implemented by the Org App.
+// It resolves the user's position and department IDs for multi-dimensional
+// participant matching (e.g. ITSM ticket assignment resolution).
+type OrgUserResolver interface {
+	GetUserPositionIDs(userID uint) ([]uint, error)
+	GetUserDepartmentIDs(userID uint) ([]uint, error)
+}
+
 var apps []App
 
 func Register(a App) { apps = append(apps, a) }

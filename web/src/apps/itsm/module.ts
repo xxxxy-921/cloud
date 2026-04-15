@@ -113,5 +113,14 @@ registerApp({
         },
       ],
     },
+    {
+      path: "itsm/engine-config",
+      children: [
+        {
+          index: true,
+          lazy: () => import("./pages/engine-config/index"),
+        },
+      ],
+    },
   ],
 })

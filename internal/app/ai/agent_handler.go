@@ -27,6 +27,7 @@ func NewAgentHandler(i do.Injector) (*AgentHandler, error) {
 
 type createAgentReq struct {
 	Name         string          `json:"name" binding:"required"`
+	Code         *string         `json:"code"`
 	Description  string          `json:"description"`
 	Avatar       string          `json:"avatar"`
 	Type         string          `json:"type" binding:"required"`
@@ -65,6 +66,7 @@ func (h *AgentHandler) Create(c *gin.Context) {
 
 	a := &Agent{
 		Name:          req.Name,
+		Code:          req.Code,
 		Description:   req.Description,
 		Avatar:        req.Avatar,
 		Type:          req.Type,
@@ -89,12 +91,13 @@ func (h *AgentHandler) Create(c *gin.Context) {
 	}
 
 	if err := h.svc.Create(a); err != nil {
-		if errors.Is(err, ErrAgentNameConflict) {
+		if errors.Is(err, ErrAgentNameConflict) || errors.Is(err, ErrAgentCodeConflict) {
 			handler.Fail(c, http.StatusConflict, err.Error())
 			return
 		}
 		if errors.Is(err, ErrInvalidAgentType) || errors.Is(err, ErrModelRequired) ||
-			errors.Is(err, ErrRuntimeRequired) || errors.Is(err, ErrNodeRequired) {
+			errors.Is(err, ErrRuntimeRequired) || errors.Is(err, ErrNodeRequired) ||
+			errors.Is(err, ErrCodeRequired) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}

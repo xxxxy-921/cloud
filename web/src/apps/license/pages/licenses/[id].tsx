@@ -354,10 +354,10 @@ export function Component() {
         </Alert>
       )}
 
-      {/* Main Grid */}
+      {/* Main Grid — 2:1 layout */}
       <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
         {/* Left: Main Content */}
-        <div className="space-y-5 lg:col-span-7">
+        <div className="space-y-5 lg:col-span-8">
           {/* Basic Info */}
           <Card>
             <CardHeader className="pb-3">
@@ -482,10 +482,6 @@ export function Component() {
             </Card>
           )}
 
-        </div>
-
-        {/* Right: Constraints + Developer Delivery */}
-        <aside className="space-y-4 lg:col-span-5 lg:sticky lg:top-6">
           {/* Constraint Values */}
           {modules.length > 0 && (
             <Card>
@@ -529,7 +525,10 @@ export function Component() {
               </CardContent>
             </Card>
           )}
+        </div>
 
+        {/* Right: Developer Delivery */}
+        <aside className="space-y-4 lg:col-span-4 lg:sticky lg:top-6">
           <Card className="border-primary/10 bg-gradient-to-b from-primary/5 to-card shadow-sm">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
