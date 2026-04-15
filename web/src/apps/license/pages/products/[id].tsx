@@ -82,6 +82,7 @@ interface ProductDetail {
   code: string
   description: string
   status: string
+  licenseKey: string
   constraintSchema: ConstraintModule[] | null
   planCount: number
   plans: Array<{
@@ -120,6 +121,8 @@ export function Component() {
   const [editOpen, setEditOpen] = useState(false)
   const [impactOpen, setImpactOpen] = useState(false)
   const [bulkReissueOpen, setBulkReissueOpen] = useState(false)
+  const [showLicenseKey, setShowLicenseKey] = useState(false)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
 
   const canUpdate = usePermission("license:product:update")
   const canManagePlan = usePermission("license:plan:manage")
@@ -200,6 +203,18 @@ export function Component() {
     const nextParams = new URLSearchParams(searchParams)
     nextParams.set("tab", value)
     setSearchParams(nextParams, { replace: true })
+  }
+
+  async function handleCopy(text: string, field: string) {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedField(field)
+      toast.success(t("common:copied"))
+      window.setTimeout(() => setCopiedField((prev) => (prev === field ? null : prev)), 1500)
+    } catch {
+      toast.error(t("license:licenses.copyFailed"))
+    }
   }
 
   function handleRotateKeyClick() {
@@ -348,6 +363,26 @@ export function Component() {
         </TabsContent>
 
         <TabsContent value="keys" className="space-y-4">
+          {/* License Key */}
+          {product.licenseKey && (
+            <div className="rounded-lg border p-4 space-y-2">
+              <p className="text-sm font-medium">{t("license:licenses.licenseKey")}</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
+                  {showLicenseKey ? product.licenseKey : "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"}
+                </code>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setShowLicenseKey((v) => !v)}>
+                  {showLicenseKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+                <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" onClick={() => handleCopy(product.licenseKey, "licenseKey")}>
+                  {copiedField === "licenseKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span className="ml-1">{copiedField === "licenseKey" ? t("common:copied") : t("common:copy")}</span>
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Signing Key */}
           <div className="rounded-lg border p-4">
             {publicKey ? (
               <div className="space-y-4 text-sm">

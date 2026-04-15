@@ -2,7 +2,31 @@ import { useMemo, useState } from "react"
 import { useParams, useNavigate } from "react-router"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Ban, Check, Copy, Download, Loader2, Clock, Pause, Play, Eye, EyeOff, AlertTriangle, Code } from "lucide-react"
+import {
+  ArrowLeft,
+  Ban,
+  Check,
+  Copy,
+  Download,
+  Loader2,
+  Clock,
+  Pause,
+  Play,
+  Eye,
+  EyeOff,
+  AlertTriangle,
+  Code,
+  Package,
+  User,
+  Calendar,
+  FileKey,
+  KeyRound,
+  Shield,
+  Fingerprint,
+  Layers,
+  Terminal,
+  AlertCircle,
+} from "lucide-react"
 import { api } from "@/lib/api"
 import { usePermission } from "@/hooks/use-permission"
 import { toast } from "sonner"
@@ -10,6 +34,14 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Separator } from "@/components/ui/separator"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Sheet,
   SheetContent,
@@ -245,8 +277,13 @@ export function Component() {
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate("/license/licenses")}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <h2 className="text-lg font-semibold">{t("license:licenses.licenseDetail")}</h2>
-          <Badge variant={variant}>{t(`license:lifecycleStatus.${statusKey}`, license.lifecycleStatus)}</Badge>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold">{t("license:licenses.licenseDetail")}</h2>
+              <Badge variant={variant}>{t(`license:lifecycleStatus.${statusKey}`, license.lifecycleStatus)}</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground font-mono">{license.productCode} #{license.id}</p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {canLifecycleAction && canRenew && (
@@ -318,103 +355,168 @@ export function Component() {
       )}
 
       {/* Main Grid */}
-      <div className="grid gap-6 md:grid-cols-12 md:items-start">
+      <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
         {/* Left: Main Content */}
-        <div className="space-y-6 md:col-span-8">
-          <div className="grid gap-4 sm:grid-cols-2">
-            {/* Basic Info */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="text-sm font-medium text-muted-foreground">{t("license:licenses.basicInfo")}</h3>
-              <dl className="space-y-2 text-sm">
-                <InfoRow label={t("license:licenses.product")} value={license.productName ? `${license.productName} (${license.productCode})` : "-"} />
-                <InfoRow label={t("license:licenses.licensee")} value={license.licenseeName ? `${license.licenseeName} (${license.licenseeCode})` : "-"} />
-                <InfoRow label={t("license:licenses.plan")} value={license.planName} />
-                <div className="flex items-start justify-between gap-4">
-                  <dt className="text-muted-foreground shrink-0">{t("license:licenses.registrationCode")}</dt>
-                  <dd className="flex items-center gap-2">
-                    <span className="text-right break-all font-mono text-xs">{license.registrationCode}</span>
+        <div className="space-y-5 lg:col-span-7">
+          {/* Basic Info */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <Package className="h-4 w-4" />
+                {t("license:licenses.basicInfo")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Package className="h-3.5 w-3.5" />
+                    {t("license:licenses.product")}
+                  </div>
+                  <div className="font-medium">
+                    {license.productName ? `${license.productName}` : "-"}
+                  </div>
+                  <div className="text-xs font-mono text-muted-foreground">{license.productCode}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <User className="h-3.5 w-3.5" />
+                    {t("license:licenses.licensee")}
+                  </div>
+                  <div className="font-medium">
+                    {license.licenseeName ? `${license.licenseeName}` : "-"}
+                  </div>
+                  <div className="text-xs font-mono text-muted-foreground">{license.licenseeCode}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Layers className="h-3.5 w-3.5" />
+                    {t("license:licenses.plan")}
+                  </div>
+                  <div className="font-medium">{license.planName}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <KeyRound className="h-3.5 w-3.5" />
+                    {t("license:licenses.registrationCode")}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="rounded bg-muted px-2 py-1 text-xs font-mono">{license.registrationCode}</code>
                     <Button
                       type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2"
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
                       onClick={() => handleCopy(license.registrationCode, "registrationCode")}
                     >
                       {copiedField === "registrationCode" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                      <span className="ml-1">{copiedField === "registrationCode" ? t("common:copied") : t("common:copy")}</span>
                     </Button>
-                  </dd>
-                </div>
-                {license.originalLicenseId && (
-                  <div className="flex items-start justify-between gap-4">
-                    <dt className="text-muted-foreground shrink-0">{t("license:licenses.originalLicense")}</dt>
-                    <dd>
-                      <Button variant="link" size="sm" className="h-auto p-0" onClick={() => navigate(`/license/licenses/${license.originalLicenseId}`)}>
-                        #{license.originalLicenseId}
-                      </Button>
-                    </dd>
                   </div>
-                )}
-              </dl>
-            </div>
+                </div>
+              </div>
+              {license.originalLicenseId && (
+                <div className="pt-2 border-t">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    {t("license:licenses.originalLicense")}
+                  </div>
+                  <Button variant="link" size="sm" className="h-auto p-0" onClick={() => navigate(`/license/licenses/${license.originalLicenseId}`)}>
+                    #{license.originalLicenseId}
+                  </Button>
+                </div>
+              )}
+              {license.notes && (
+                <div className="pt-2 border-t">
+                  <div className="text-xs text-muted-foreground mb-1">{t("license:licenses.notes")}</div>
+                  <p className="text-sm leading-relaxed">{license.notes}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-            {/* Validity */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="text-sm font-medium text-muted-foreground">{t("license:licenses.validity")}</h3>
-              <dl className="space-y-2 text-sm">
+          {/* Validity + Issuance */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Calendar className="h-4 w-4" />
+                  {t("license:licenses.validity")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
                 <InfoRow label={t("license:licenses.validFrom")} value={formatDateTime(license.validFrom)} />
                 <InfoRow
                   label={t("license:licenses.validUntil")}
                   value={license.validUntil ? formatDateTime(license.validUntil) : t("license:licenses.permanentValid")}
                 />
-              </dl>
-            </div>
-
-            {/* Issuance Info */}
-            <div className="rounded-lg border p-4 space-y-3">
-              <h3 className="text-sm font-medium text-muted-foreground">{t("license:licenses.issuanceInfo")}</h3>
-              <dl className="space-y-2 text-sm">
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  {t("license:licenses.issuanceInfo")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
                 <InfoRow label={t("license:licenses.issuedAt")} value={formatDateTime(license.createdAt)} />
                 <InfoRow label={t("license:licenses.keyVersion")} value={`v${license.keyVersion}`} />
-                {license.notes && <InfoRow label={t("license:licenses.notes")} value={license.notes} />}
-              </dl>
-            </div>
-
-            {signedClaims && (
-              <div className="rounded-lg border p-4 space-y-3">
-                <h3 className="text-sm font-medium text-muted-foreground">{t("license:licenses.activationClaims")}</h3>
-                <dl className="space-y-2 text-sm">
-                  <InfoRow label={t("license:licenses.productCode")} value={signedClaims.pid || license.productCode || "-"} mono />
-                  <InfoRow label={t("license:licenses.licensee")} value={signedClaims.licn || license.licenseeName || "-"} />
-                  <InfoRow label={t("license:licenses.licenseeCode")} value={signedClaims.lic || license.licenseeCode || "-"} mono />
-                </dl>
-              </div>
-            )}
+              </CardContent>
+            </Card>
           </div>
 
+          {/* Activation Claims */}
+          {signedClaims && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Fingerprint className="h-4 w-4" />
+                  {t("license:licenses.activationClaims")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <InfoRow label={t("license:licenses.productCode")} value={signedClaims.pid || license.productCode || "-"} mono />
+                <InfoRow label={t("license:licenses.licensee")} value={signedClaims.licn || license.licenseeName || "-"} />
+                <InfoRow label={t("license:licenses.licenseeCode")} value={signedClaims.lic || license.licenseeCode || "-"} mono />
+              </CardContent>
+            </Card>
+          )}
+
+        </div>
+
+        {/* Right: Constraints + Developer Delivery */}
+        <aside className="space-y-4 lg:col-span-5 lg:sticky lg:top-6">
           {/* Constraint Values */}
           {modules.length > 0 && (
-            <div className="rounded-lg border p-4 space-y-2.5">
-              <h3 className="text-sm font-medium text-muted-foreground">{t("license:licenses.constraintValues")}</h3>
-              <div className="space-y-2">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Layers className="h-4 w-4" />
+                  {t("license:licenses.constraintValues")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
                 {modules.map((module) => {
                   return (
-                    <div key={module.key} className="rounded-md border bg-muted/10 p-2.5">
-                      <div className="mb-1.5 flex items-center gap-2">
-                        <span className="text-sm font-medium leading-5">{module.label}</span>
+                    <div
+                      key={module.key}
+                      className={`rounded-lg border p-3 transition-colors ${module.isEnabled ? "bg-card" : "bg-muted/30"}`}
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{module.label}</span>
                         <Badge variant={module.isEnabled ? "default" : "outline"} className="text-[11px]">
                           {module.isEnabled ? t("license:licenses.moduleEnabled") : t("license:licenses.moduleDisabled")}
                         </Badge>
                       </div>
                       {module.isEnabled && module.features.length > 0 && (
-                        <div className="grid gap-1 text-sm">
+                        <div className="grid gap-1.5">
                           {module.features.map((feature) => (
                             <div
                               key={feature.key}
-                              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md bg-background/65 px-2 py-1"
+                              className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-1.5 text-sm"
                             >
-                              <span className="truncate text-muted-foreground">{feature.label}</span>
-                              <span className="min-w-16 pr-1 text-right font-mono tabular-nums text-foreground">
+                              <span className="text-muted-foreground">{feature.label}</span>
+                              <span className="font-mono tabular-nums text-foreground">
                                 {formatConstraintValue(feature.value, t)}
                               </span>
                             </div>
@@ -424,135 +526,154 @@ export function Component() {
                     </div>
                   )
                 })}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           )}
-        </div>
 
-        {/* Right: Sticky Sidebar */}
-        <aside className="space-y-4 md:col-span-4 md:sticky md:top-6">
-          <div className="rounded-lg border p-4 space-y-4">
-            <h3 className="text-sm font-medium text-muted-foreground">{t("license:licenses.developerDelivery")}</h3>
-
-            {/* License Key */}
-            <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">{t("license:licenses.licenseKey")}</div>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
-                  {showKey ? (license.licenseKey || "-") : (license.licenseKey ? "••••••••••••••••••••••••••••••••" : "-")}
-                </code>
-                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setShowKey((v) => !v)} disabled={!license.licenseKey}>
-                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-                <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" onClick={() => handleCopy(license.licenseKey, "licenseKey")} disabled={!license.licenseKey}>
-                  {copiedField === "licenseKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span className="ml-1">{copiedField === "licenseKey" ? t("common:copied") : t("common:copy")}</span>
-                </Button>
-              </div>
-            </div>
-
-            {/* Registration Code */}
-            <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">{t("license:licenses.registrationCode")}</div>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{license.registrationCode}</code>
-                <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" onClick={() => handleCopy(license.registrationCode, "registrationCode")}>
-                  {copiedField === "registrationCode" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span className="ml-1">{copiedField === "registrationCode" ? t("common:copied") : t("common:copy")}</span>
-                </Button>
-              </div>
-            </div>
-
-            {/* Public Key */}
-            <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">{t("license:licenses.publicKey")}</div>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
-                  {publicKeyData?.publicKey || "-"}
-                </code>
-                <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" disabled={!publicKeyData?.publicKey} onClick={() => handleCopy(publicKeyData?.publicKey || "", "publicKey")}>
-                  {copiedField === "publicKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span className="ml-1">{copiedField === "publicKey" ? t("common:copied") : t("common:copy")}</span>
-                </Button>
-              </div>
-            </div>
-
-            <div className="pt-1 space-y-2">
-              <Button variant="default" size="sm" className="w-full" onClick={handleExport} disabled={!canExport}>
-                <Download className="mr-1.5 h-4 w-4" />
-                {t("license:licenses.downloadLic")}
-              </Button>
-              <Sheet open={exampleOpen} onOpenChange={setExampleOpen}>
-                <SheetTrigger asChild>
-                  <Button variant="outline" size="sm" className="w-full">
-                    <Code className="mr-1.5 h-4 w-4" />
-                    {t("license:licenses.verifyExample")}
-                  </Button>
-                </SheetTrigger>
-                <SheetContent className="sm:max-w-xl overflow-y-auto">
-                  <SheetHeader>
-                    <SheetTitle>{t("license:licenses.verifyExample")}</SheetTitle>
-                  </SheetHeader>
-                  <div className="mt-2 space-y-4 px-6 pb-6">
-                    <div className="space-y-3">
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">{t("license:licenses.licenseKey")}</div>
-                        <div className="flex items-center gap-2">
-                          <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{license.licenseKey || "-"}</code>
-                          <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" disabled={!license.licenseKey} onClick={() => handleCopy(license.licenseKey, "licenseKey")}>
-                            {copiedField === "licenseKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                            <span className="ml-1">{copiedField === "licenseKey" ? t("common:copied") : t("common:copy")}</span>
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">{t("license:licenses.registrationCode")}</div>
-                        <div className="flex items-center gap-2">
-                          <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{license.registrationCode}</code>
-                          <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" onClick={() => handleCopy(license.registrationCode, "registrationCode")}>
-                            {copiedField === "registrationCode" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                            <span className="ml-1">{copiedField === "registrationCode" ? t("common:copied") : t("common:copy")}</span>
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">{t("license:licenses.publicKey")}</div>
-                        <div className="flex items-center gap-2">
-                          <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{publicKeyData?.publicKey || "-"}</code>
-                          <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" disabled={!publicKeyData?.publicKey} onClick={() => handleCopy(publicKeyData?.publicKey || "", "publicKey")}>
-                            {copiedField === "publicKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                            <span className="ml-1">{copiedField === "publicKey" ? t("common:copied") : t("common:copy")}</span>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Button variant="default" size="sm" className="w-full" onClick={handleExport} disabled={!canExport}>
-                      <Download className="mr-1.5 h-4 w-4" />
-                      {t("license:licenses.downloadLic")}
-                    </Button>
-
-                    <Tabs defaultValue="go" className="w-full">
-                      <TabsList className="h-8">
-                        <TabsTrigger value="go" className="text-xs px-3">Go</TabsTrigger>
-                        <TabsTrigger value="js" className="text-xs px-3">JavaScript</TabsTrigger>
-                        <TabsTrigger value="py" className="text-xs px-3">Python</TabsTrigger>
-                      </TabsList>
-                      <TabsContent value="go">
-                        <pre className="rounded bg-muted p-3 text-xs overflow-x-auto font-mono">{goVerifyExample}</pre>
-                      </TabsContent>
-                      <TabsContent value="js">
-                        <pre className="rounded bg-muted p-3 text-xs overflow-x-auto font-mono">{jsVerifyExample}</pre>
-                      </TabsContent>
-                      <TabsContent value="py">
-                        <pre className="rounded bg-muted p-3 text-xs overflow-x-auto font-mono">{pyVerifyExample}</pre>
-                      </TabsContent>
-                    </Tabs>
+          <Card className="border-primary/10 bg-gradient-to-b from-primary/5 to-card shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Terminal className="h-4 w-4" />
+                {t("license:licenses.developerDelivery")}
+              </CardTitle>
+              <CardDescription>集成验证所需的密钥与凭证</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {/* License Key */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <FileKey className="h-3.5 w-3.5" />
+                  {t("license:licenses.licenseKey")}
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0 rounded-md border bg-background px-3 py-2 text-xs font-mono shadow-sm">
+                    <span className="block truncate">
+                      {showKey ? (license.licenseKey || "-") : (license.licenseKey ? "••••••••••••••••••••••••••••••••" : "-")}
+                    </span>
                   </div>
-                </SheetContent>
-              </Sheet>
-            </div>
-          </div>
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setShowKey((v) => !v)} disabled={!license.licenseKey}>
+                    {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0" onClick={() => handleCopy(license.licenseKey, "licenseKey")} disabled={!license.licenseKey}>
+                    {copiedField === "licenseKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    <span className="ml-1 hidden sm:inline">{copiedField === "licenseKey" ? t("common:copied") : t("common:copy")}</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* Registration Code */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <KeyRound className="h-3.5 w-3.5" />
+                  {t("license:licenses.registrationCode")}
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0 rounded-md border bg-background px-3 py-2 text-xs font-mono shadow-sm">
+                    <span className="block truncate">{license.registrationCode}</span>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0" onClick={() => handleCopy(license.registrationCode, "registrationCode")}>
+                    {copiedField === "registrationCode" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    <span className="ml-1 hidden sm:inline">{copiedField === "registrationCode" ? t("common:copied") : t("common:copy")}</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* Public Key */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <Shield className="h-3.5 w-3.5" />
+                  {t("license:licenses.publicKey")}
+                </div>
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0 rounded-md border bg-background px-3 py-2 text-xs font-mono shadow-sm">
+                    <span className="block truncate">{publicKeyData?.publicKey || "-"}</span>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0" disabled={!publicKeyData?.publicKey} onClick={() => handleCopy(publicKeyData?.publicKey || "", "publicKey")}>
+                    {copiedField === "publicKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    <span className="ml-1 hidden sm:inline">{copiedField === "publicKey" ? t("common:copied") : t("common:copy")}</span>
+                  </Button>
+                </div>
+              </div>
+
+              <Separator className="bg-primary/10" />
+
+              <div className="grid gap-2">
+                <Button variant="default" size="sm" className="w-full" onClick={handleExport} disabled={!canExport}>
+                  <Download className="mr-1.5 h-4 w-4" />
+                  {t("license:licenses.downloadLic")}
+                </Button>
+                <Sheet open={exampleOpen} onOpenChange={setExampleOpen}>
+                  <SheetTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full">
+                      <Code className="mr-1.5 h-4 w-4" />
+                      {t("license:licenses.verifyExample")}
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent className="sm:max-w-xl overflow-y-auto">
+                    <SheetHeader>
+                      <SheetTitle>{t("license:licenses.verifyExample")}</SheetTitle>
+                    </SheetHeader>
+                    <div className="mt-2 space-y-4 px-6 pb-6">
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <div className="text-xs text-muted-foreground">{t("license:licenses.licenseKey")}</div>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{license.licenseKey || "-"}</code>
+                            <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" disabled={!license.licenseKey} onClick={() => handleCopy(license.licenseKey, "licenseKey")}>
+                              {copiedField === "licenseKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                              <span className="ml-1">{copiedField === "licenseKey" ? t("common:copied") : t("common:copy")}</span>
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-xs text-muted-foreground">{t("license:licenses.registrationCode")}</div>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{license.registrationCode}</code>
+                            <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" onClick={() => handleCopy(license.registrationCode, "registrationCode")}>
+                              {copiedField === "registrationCode" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                              <span className="ml-1">{copiedField === "registrationCode" ? t("common:copied") : t("common:copy")}</span>
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-xs text-muted-foreground">{t("license:licenses.publicKey")}</div>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">{publicKeyData?.publicKey || "-"}</code>
+                            <Button type="button" variant="outline" size="sm" className="h-7 px-2 shrink-0" disabled={!publicKeyData?.publicKey} onClick={() => handleCopy(publicKeyData?.publicKey || "", "publicKey")}>
+                              {copiedField === "publicKey" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                              <span className="ml-1">{copiedField === "publicKey" ? t("common:copied") : t("common:copy")}</span>
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button variant="default" size="sm" className="w-full" onClick={handleExport} disabled={!canExport}>
+                        <Download className="mr-1.5 h-4 w-4" />
+                        {t("license:licenses.downloadLic")}
+                      </Button>
+
+                      <Tabs defaultValue="go" className="w-full">
+                        <TabsList className="h-8">
+                          <TabsTrigger value="go" className="text-xs px-3">Go</TabsTrigger>
+                          <TabsTrigger value="js" className="text-xs px-3">JavaScript</TabsTrigger>
+                          <TabsTrigger value="py" className="text-xs px-3">Python</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="go">
+                          <pre className="rounded bg-muted p-3 text-xs overflow-x-auto font-mono">{goVerifyExample}</pre>
+                        </TabsContent>
+                        <TabsContent value="js">
+                          <pre className="rounded bg-muted p-3 text-xs overflow-x-auto font-mono">{jsVerifyExample}</pre>
+                        </TabsContent>
+                        <TabsContent value="py">
+                          <pre className="rounded bg-muted p-3 text-xs overflow-x-auto font-mono">{pyVerifyExample}</pre>
+                        </TabsContent>
+                      </Tabs>
+                    </div>
+                  </SheetContent>
+                </Sheet>
+              </div>
+            </CardContent>
+          </Card>
         </aside>
       </div>
 
@@ -659,21 +780,6 @@ def verify_license(lic, license_key, reg_code):
     print('claims:', claims, 'publicKey:', public_key)
     return claims, public_key`
 
-function DeliveryRow({ label, value, copied, onCopy, copyLabel, copiedLabel }: { label: string; value: string; copied: boolean; onCopy: () => void; copyLabel: string; copiedLabel: string }) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <dt className="text-muted-foreground shrink-0">{label}</dt>
-      <dd className="flex items-center gap-2">
-        <span className="text-right break-all font-mono text-xs">{value}</span>
-        <Button type="button" variant="outline" size="sm" className="h-7 px-2" onClick={onCopy}>
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          <span className="ml-1">{copied ? copiedLabel : copyLabel}</span>
-        </Button>
-      </dd>
-    </div>
-  )
-}
-
 function decodeActivationClaims(activationCode?: string): SignedActivationClaims | null {
   if (!activationCode) {
     return null
@@ -707,8 +813,8 @@ function formatConstraintValue(value: unknown, t: (key: string) => string): stri
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <dt className="text-muted-foreground shrink-0">{label}</dt>
-      <dd className={`text-right break-all ${mono ? "font-mono text-xs" : ""}`}>{value}</dd>
+      <dt className="text-muted-foreground shrink-0 text-sm">{label}</dt>
+      <dd className={`text-right break-all text-sm ${mono ? "font-mono text-xs" : "font-medium"}`}>{value}</dd>
     </div>
   )
 }
