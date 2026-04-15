@@ -212,6 +212,7 @@ func (h *LicenseHandler) Get(c *gin.Context) {
 	resp.ProductCode = detail.ProductCode
 	resp.LicenseeName = detail.LicenseeName
 	resp.LicenseeCode = detail.LicenseeCode
+	resp.LicenseKey = detail.ProductLicenseKey
 	handler.OK(c, resp)
 }
 

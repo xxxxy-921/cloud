@@ -24,10 +24,11 @@ func (r *LicenseRepo) CreateInTx(tx *gorm.DB, l *License) error {
 
 type LicenseDetail struct {
 	License
-	ProductName  string `gorm:"column:product_name"`
-	ProductCode  string `gorm:"column:product_code"`
-	LicenseeName string `gorm:"column:licensee_name"`
-	LicenseeCode string `gorm:"column:licensee_code"`
+	ProductName       string `gorm:"column:product_name"`
+	ProductCode       string `gorm:"column:product_code"`
+	ProductLicenseKey string `gorm:"column:product_license_key"`
+	LicenseeName      string `gorm:"column:licensee_name"`
+	LicenseeCode      string `gorm:"column:licensee_code"`
 }
 
 func (r *LicenseRepo) FindByID(id uint) (*LicenseDetail, error) {
@@ -36,6 +37,7 @@ func (r *LicenseRepo) FindByID(id uint) (*LicenseDetail, error) {
 		Select("license_licenses.*, "+
 			"license_products.name as product_name, "+
 			"license_products.code as product_code, "+
+			"license_products.license_key as product_license_key, "+
 			"license_licensees.name as licensee_name, "+
 			"license_licensees.code as licensee_code").
 		Joins("LEFT JOIN license_products ON license_products.id = license_licenses.product_id AND license_products.deleted_at IS NULL").
