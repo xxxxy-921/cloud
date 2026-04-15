@@ -20,7 +20,7 @@ lint.out
 .vscode/
 *.swp
 *.swo
-
+uploads/
 # OS
 .DS_Store
 Thumbs.db
