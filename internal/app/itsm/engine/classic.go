@@ -258,8 +258,25 @@ func (e *ClassicEngine) processNode(
 	case NodeWait:
 		return e.handleWait(tx, token, operatorID, node, nodeData)
 
-	case NodeParallel, NodeInclusive:
-		return fmt.Errorf("%w: %s (将在 ④ itsm-gateway-parallel 中实现)", ErrNodeNotImplemented, node.Type)
+	case NodeParallel:
+		switch nodeData.GatewayDirection {
+		case GatewayFork:
+			return e.handleParallelFork(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, nodeData, depth)
+		case GatewayJoin:
+			return e.handleParallelJoin(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, nodeData, depth)
+		default:
+			return fmt.Errorf("%w: parallel node %s has gateway_direction=%q", ErrGatewayMissingDirection, node.ID, nodeData.GatewayDirection)
+		}
+
+	case NodeInclusive:
+		switch nodeData.GatewayDirection {
+		case GatewayFork:
+			return e.handleInclusiveFork(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, nodeData, depth)
+		case GatewayJoin:
+			return e.handleInclusiveJoin(ctx, tx, def, nodeMap, outEdges, token, operatorID, node, nodeData, depth)
+		default:
+			return fmt.Errorf("%w: inclusive node %s has gateway_direction=%q", ErrGatewayMissingDirection, node.ID, nodeData.GatewayDirection)
+		}
 
 	default:
 		if UnimplementedNodeTypes[node.Type] {
@@ -292,7 +309,41 @@ func (e *ClassicEngine) handleEnd(tx *gorm.DB, token *executionTokenModel, opera
 	// Complete the token
 	tx.Model(&executionTokenModel{}).Where("id = ?", token.ID).Update("status", TokenCompleted)
 
-	// Complete the ticket
+	// Child token (parallel branch) — only complete this branch, check join
+	if token.ParentTokenID != nil {
+		// Check if all siblings are done → reactivate parent
+		var remaining int64
+		tx.Model(&executionTokenModel{}).
+			Where("parent_token_id = ? AND status IN ?", *token.ParentTokenID, []string{TokenActive, TokenWaiting}).
+			Count(&remaining)
+
+		if remaining == 0 {
+			// All siblings done — reactivate parent token
+			var parentToken executionTokenModel
+			if err := tx.First(&parentToken, *token.ParentTokenID).Error; err != nil {
+				return fmt.Errorf("parent token %d not found: %w", *token.ParentTokenID, err)
+			}
+			tx.Model(&executionTokenModel{}).Where("id = ?", parentToken.ID).Update("status", TokenCompleted)
+			// If the parent is also a child, recurse upwards
+			if parentToken.ParentTokenID != nil {
+				return e.handleEnd(tx, &parentToken, operatorID, node, data)
+			}
+			// Parent is root — complete ticket
+			if err := tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Updates(map[string]any{
+				"status":              "completed",
+				"finished_at":         now,
+				"current_activity_id": act.ID,
+			}).Error; err != nil {
+				return err
+			}
+			return e.recordTimeline(tx, token.TicketID, &act.ID, operatorID, "workflow_completed", "流程已完结")
+		}
+
+		// Other branches still running
+		return nil
+	}
+
+	// Root token — complete the ticket
 	if err := tx.Model(&ticketModel{}).Where("id = ?", token.TicketID).Updates(map[string]any{
 		"status":              "completed",
 		"finished_at":         now,

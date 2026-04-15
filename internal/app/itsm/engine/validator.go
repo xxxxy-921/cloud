@@ -170,5 +170,83 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		}
 	}
 
+	// 7. Parallel / Inclusive gateway constraints (④ itsm-gateway-parallel)
+	for i := range def.Nodes {
+		n := &def.Nodes[i]
+		if n.Type != NodeParallel && n.Type != NodeInclusive {
+			continue
+		}
+
+		// Parse node data to get gateway_direction
+		nd, err := ParseNodeData(n.Data)
+		if err != nil {
+			errs = append(errs, ValidationError{
+				NodeID:  n.ID,
+				Level:   "error",
+				Message: fmt.Sprintf("节点 %s 数据解析失败: %v", n.ID, err),
+			})
+			continue
+		}
+
+		typeName := "并行"
+		if n.Type == NodeInclusive {
+			typeName = "包含"
+		}
+
+		// gateway_direction is required
+		if nd.GatewayDirection != GatewayFork && nd.GatewayDirection != GatewayJoin {
+			errs = append(errs, ValidationError{
+				NodeID:  n.ID,
+				Level:   "error",
+				Message: fmt.Sprintf("节点 %s 类型 %s 必须配置 gateway_direction（fork 或 join）", n.ID, n.Type),
+			})
+			continue
+		}
+
+		if nd.GatewayDirection == GatewayFork {
+			// Fork: at least 2 outgoing edges
+			nodeOutEdges := outEdges[n.ID]
+			if len(nodeOutEdges) < 2 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("%s网关 fork 节点 %s 至少需要两条出边", typeName, n.ID),
+				})
+			}
+
+			// Inclusive fork: non-default edges must have conditions
+			if n.Type == NodeInclusive {
+				for _, e := range nodeOutEdges {
+					if !e.Data.Default && e.Data.Condition == nil {
+						errs = append(errs, ValidationError{
+							NodeID:  n.ID,
+							EdgeID:  e.ID,
+							Level:   "error",
+							Message: fmt.Sprintf("包含网关 fork 节点 %s 的出边 %s 缺少条件配置", n.ID, e.ID),
+						})
+					}
+				}
+			}
+		} else {
+			// Join: at least 2 incoming edges, exactly 1 outgoing edge
+			nodeInEdges := inEdges[n.ID]
+			if len(nodeInEdges) < 2 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("%s网关 join 节点 %s 至少需要两条入边", typeName, n.ID),
+				})
+			}
+			nodeOutEdges := outEdges[n.ID]
+			if len(nodeOutEdges) != 1 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("%s网关 join 节点 %s 必须有且仅有一条出边", typeName, n.ID),
+				})
+			}
+		}
+	}
+
 	return errs
 }
