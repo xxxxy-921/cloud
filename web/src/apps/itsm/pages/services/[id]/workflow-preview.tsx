@@ -11,10 +11,37 @@ import { X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { nodeTypes } from "../../../components/workflow/custom-nodes"
-import { type WFNodeData, NODE_COLORS } from "../../../components/workflow/types"
+import { type WFNodeData, type NodeType, type Participant, NODE_COLORS } from "../../../components/workflow/types"
 
 interface WorkflowPreviewProps {
   workflowJson: unknown
+}
+
+/** Format a participant for display */
+function formatParticipant(p: Participant): string {
+  if (p.type === "position_department") {
+    const parts = [
+      (p as Record<string, unknown>).department_code,
+      (p as Record<string, unknown>).position_code,
+    ].filter(Boolean)
+    if (parts.length > 0) return parts.join(" / ")
+  }
+  if (p.name) return p.name
+  if (p.value) return String(p.value)
+  if (p.id) return String(p.id)
+  return "-"
+}
+
+/** Get translated label for participant type */
+function participantTypeLabel(type: string, t: (k: string) => string): string {
+  const map: Record<string, string> = {
+    user: t("workflow.participant.user"),
+    position: t("workflow.participant.position"),
+    department: t("workflow.participant.department"),
+    position_department: t("workflow.participant.positionDepartment"),
+    requester_manager: t("workflow.participant.requesterManager"),
+  }
+  return map[type] ?? type
 }
 
 export default function WorkflowPreview({ workflowJson }: WorkflowPreviewProps) {
@@ -38,24 +65,34 @@ export default function WorkflowPreview({ workflowJson }: WorkflowPreviewProps) 
       id: string; source: string; target: string; data?: Record<string, unknown>
     }>
 
-    const nodes = rawNodes.map((n) => ({
-      id: n.id,
-      type: "workflow" as const,
-      position: n.position,
-      data: (n.data ?? {}) as unknown as WFNodeData,
-      selectable: true as const,
-      draggable: false as const,
-    })) as unknown as Node[]
+    const nodes = rawNodes.map((n) => {
+      // LLM puts node type at top-level `type`, bridge it to `data.nodeType` for our custom node
+      const rawData = (n.data ?? {}) as Record<string, unknown>
+      const nodeType = (rawData.nodeType ?? n.type ?? "process") as NodeType
+      return {
+        id: n.id,
+        type: "workflow" as const,
+        position: n.position,
+        data: { ...rawData, nodeType } as unknown as WFNodeData,
+        selectable: true as const,
+        draggable: false as const,
+      }
+    }) as unknown as Node[]
 
-    const edges = rawEdges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      type: "smoothstep",
-      markerEnd: { type: MarkerType.ArrowClosed },
-      data: e.data,
-      style: { stroke: "#6b7280", strokeWidth: 1.5 },
-    }))
+    const edges = rawEdges.map((e) => {
+      const edgeColor = e.data?.outcome === "rejected" ? "#ef4444" : "#6b7280"
+      return {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        type: "smoothstep",
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
+        label: e.data?.outcome ? String(e.data.outcome) : undefined,
+        data: e.data,
+        style: { stroke: edgeColor, strokeWidth: 1.5 },
+        labelStyle: { fill: edgeColor, fontSize: 11 },
+      }
+    })
 
     return { nodes, edges }
   }, [workflowJson])
@@ -122,7 +159,7 @@ export default function WorkflowPreview({ workflowJson }: WorkflowPreviewProps) 
                 <div className="mt-1 flex flex-wrap gap-1">
                   {selectedNode.data.participants.map((p, i) => (
                     <Badge key={i} variant="secondary" className="text-xs">
-                      {p.type}: {p.name || p.id || "-"}
+                      {participantTypeLabel(p.type, t)} : {formatParticipant(p)}
                     </Badge>
                   ))}
                 </div>

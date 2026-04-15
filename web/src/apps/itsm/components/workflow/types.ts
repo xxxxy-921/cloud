@@ -6,9 +6,13 @@ export const NODE_TYPES = [
 export type NodeType = (typeof NODE_TYPES)[number]
 
 export interface Participant {
-  type: "user" | "position" | "department" | "requester_manager"
-  id?: number
+  type: string // "user" | "position" | "department" | "position_department" | "requester_manager"
+  id?: string | number
   name?: string
+  value?: string
+  // position_department fields (LLM output)
+  department_code?: string
+  position_code?: string
 }
 
 export interface GatewayCondition {

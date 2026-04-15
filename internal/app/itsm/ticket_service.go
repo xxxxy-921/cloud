@@ -30,6 +30,7 @@ type TicketService struct {
 	serviceRepo     *ServiceDefRepo
 	slaRepo         *SLATemplateRepo
 	priorityRepo    *PriorityRepo
+	formDefRepo     *FormDefRepo
 	classicEngine   *engine.ClassicEngine
 	smartEngine     *engine.SmartEngine
 	orgUserResolver app.OrgUserResolver // nil when Org App not installed
@@ -42,6 +43,7 @@ func NewTicketService(i do.Injector) (*TicketService, error) {
 		serviceRepo:   do.MustInvoke[*ServiceDefRepo](i),
 		slaRepo:       do.MustInvoke[*SLATemplateRepo](i),
 		priorityRepo:  do.MustInvoke[*PriorityRepo](i),
+		formDefRepo:   do.MustInvoke[*FormDefRepo](i),
 		classicEngine: do.MustInvoke[*engine.ClassicEngine](i),
 		smartEngine:   do.MustInvoke[*engine.SmartEngine](i),
 	}
@@ -149,11 +151,19 @@ func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Tick
 		// Start engine workflow
 		switch svc.EngineType {
 		case "classic":
-			return s.classicEngine.Start(context.Background(), tx, engine.StartParams{
+			startParams := engine.StartParams{
 				TicketID:     ticket.ID,
 				WorkflowJSON: json.RawMessage(ticket.WorkflowJSON),
 				RequesterID:  requesterID,
-			})
+			}
+			// Load start form schema for variable binding
+			if svc.FormID != nil {
+				if fd, err := s.formDefRepo.FindByID(*svc.FormID); err == nil {
+					startParams.StartFormSchema = fd.Schema
+					startParams.StartFormData = string(ticket.FormData)
+				}
+			}
+			return s.classicEngine.Start(context.Background(), tx, startParams)
 		case "smart":
 			return s.smartEngine.Start(context.Background(), tx, engine.StartParams{
 				TicketID:    ticket.ID,

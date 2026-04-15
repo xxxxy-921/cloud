@@ -15,8 +15,8 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
-import { type TicketItem } from "../../api"
-import { SLABadge } from "../../components/sla-badge"
+import { type TicketItem } from "../../../api"
+import { SLABadge } from "../../../components/sla-badge"
 
 const STATUS_MAP: Record<string, { variant: "default" | "secondary" | "destructive"; key: string }> = {
   completed: { variant: "default", key: "statusCompleted" },

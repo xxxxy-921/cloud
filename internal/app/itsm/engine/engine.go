@@ -25,9 +25,11 @@ type WorkflowEngine interface {
 }
 
 type StartParams struct {
-	TicketID     uint
-	WorkflowJSON json.RawMessage
-	RequesterID  uint
+	TicketID        uint
+	WorkflowJSON    json.RawMessage
+	RequesterID     uint
+	StartFormSchema string // form schema JSON for variable binding (optional)
+	StartFormData   string // form data JSON for variable binding (optional)
 }
 
 type ProgressParams struct {

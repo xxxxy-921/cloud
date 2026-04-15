@@ -1,5 +1,73 @@
 import { api } from "@/lib/api"
 
+// ─── Form Definition ────────────────────────────────────
+
+export interface FormDefItem {
+  id: number
+  name: string
+  code: string
+  description: string
+  schema: unknown
+  version: number
+  scope: string
+  serviceId: number | null
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FormDefListParams {
+  keyword?: string
+  isActive?: boolean
+  page?: number
+  pageSize?: number
+}
+
+export function fetchFormDefs(params: FormDefListParams) {
+  const p = new URLSearchParams()
+  if (params.keyword) p.set("keyword", params.keyword)
+  if (params.isActive !== undefined) p.set("isActive", String(params.isActive))
+  p.set("page", String(params.page ?? 1))
+  p.set("pageSize", String(params.pageSize ?? 20))
+  return api.get<{ items: FormDefItem[]; total: number }>(
+    `/api/v1/itsm/forms?${p}`,
+  )
+}
+
+export function fetchFormDef(id: number) {
+  return api.get<FormDefItem>(`/api/v1/itsm/forms/${id}`)
+}
+
+export function createFormDef(data: {
+  name: string
+  code: string
+  description?: string
+  schema: string
+  scope?: string
+  serviceId?: number | null
+}) {
+  return api.post<FormDefItem>("/api/v1/itsm/forms", data)
+}
+
+export function updateFormDef(
+  id: number,
+  data: Partial<{
+    name: string
+    code: string
+    description: string
+    schema: string
+    scope: string
+    serviceId: number | null
+    isActive: boolean
+  }>,
+) {
+  return api.put<FormDefItem>(`/api/v1/itsm/forms/${id}`, data)
+}
+
+export function deleteFormDef(id: number) {
+  return api.delete(`/api/v1/itsm/forms/${id}`)
+}
+
 // ─── Catalog ────────────────────────────────────────────
 
 export interface CatalogItem {
@@ -314,6 +382,7 @@ export interface TicketItem {
   assigneeName: string
   currentActivityId: number | null
   source: string
+  aiFailureCount: number
   formData: unknown
   workflowJson: unknown
   slaStatus: string
@@ -379,11 +448,13 @@ export function cancelTicket(id: number, reason: string) {
 }
 
 export function fetchMyTickets(params: {
+  keyword?: string
   status?: string
   page?: number
   pageSize?: number
 }) {
   const p = new URLSearchParams()
+  if (params.keyword) p.set("keyword", params.keyword)
   if (params.status) p.set("status", params.status)
   p.set("page", String(params.page ?? 1))
   p.set("pageSize", String(params.pageSize ?? 20))
@@ -393,10 +464,14 @@ export function fetchMyTickets(params: {
 }
 
 export function fetchTodoTickets(params: {
+  keyword?: string
+  status?: string
   page?: number
   pageSize?: number
 }) {
   const p = new URLSearchParams()
+  if (params.keyword) p.set("keyword", params.keyword)
+  if (params.status) p.set("status", params.status)
   p.set("page", String(params.page ?? 1))
   p.set("pageSize", String(params.pageSize ?? 20))
   return api.get<{ items: TicketItem[]; total: number }>(
@@ -432,6 +507,7 @@ export interface TimelineItem {
   operatorId: number
   operatorName: string
   metadata: unknown
+  reasoning: string
   createdAt: string
 }
 
@@ -529,11 +605,15 @@ export interface ApprovalItem {
   activityId: number
   activityName: string
   activityType: string
+  activityStatus: string
   formSchema: unknown
+  aiConfidence: number
+  aiReasoning: string
   startedAt: string | null
   createdAt: string
   assignmentId: number
   participantType: string
+  approvalKind: "workflow" | "ai_confirm"
 }
 
 export function fetchApprovals(params: { page?: number; pageSize?: number }) {
@@ -669,4 +749,22 @@ export interface WorkflowGenerateResponse {
 
 export function generateWorkflow(data: { serviceId: number; collaborationSpec: string }) {
   return api.post<WorkflowGenerateResponse>("/api/v1/itsm/workflows/generate", data)
+}
+
+// ─── Process Variables ──────────────────────────────────
+
+export interface ProcessVariableItem {
+  id: number
+  ticketId: number
+  scopeId: string
+  key: string
+  value: unknown
+  valueType: string
+  source: string
+  createdAt: string
+  updatedAt: string
+}
+
+export function fetchTicketVariables(ticketId: number) {
+  return api.get<ProcessVariableItem[]>(`/api/v1/itsm/tickets/${ticketId}/variables`).then((r) => r ?? [])
 }

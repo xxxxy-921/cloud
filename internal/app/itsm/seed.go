@@ -35,6 +35,9 @@ func seedITSM(db *gorm.DB, enforcer *casbin.Enforcer) error {
 	if err := seedEngineConfig(db); err != nil {
 		return err
 	}
+	if err := seedFormDefinitions(db); err != nil {
+		return err
+	}
 	return seedServiceDefinitions(db)
 }
 
@@ -153,6 +156,16 @@ func seedMenus(db *gorm.DB) error {
 		slog.Info("seed: created menu", "name", itsmDir.Name, "permission", itsmDir.Permission)
 	}
 
+	// Migrate: flatten old "工单管理" intermediate directory
+	var ticketDir model.Menu
+	if err := db.Where("permission = ?", "itsm:ticket").First(&ticketDir).Error; err == nil {
+		// Move children to ITSM top-level
+		db.Model(&model.Menu{}).Where("parent_id = ?", ticketDir.ID).Update("parent_id", itsmDir.ID)
+		// Soft-delete the intermediate directory
+		db.Delete(&ticketDir)
+		slog.Info("seed: flattened ticket menu directory", "oldId", ticketDir.ID)
+	}
+
 	// 服务目录
 	catalogMenu := seedMenu(db, &itsmDir.ID, "服务目录", model.MenuTypeMenu, "/itsm/catalogs", "FolderTree", "itsm:catalog:list", 0)
 	seedButtons(db, catalogMenu, []model.Menu{
@@ -207,6 +220,14 @@ func seedMenus(db *gorm.DB) error {
 	// 引擎配置
 	seedMenu(db, &itsmDir.ID, "引擎配置", model.MenuTypeMenu, "/itsm/engine-config", "Settings", "itsm:engine:config", 9)
 
+	// 表单管理
+	formMenu := seedMenu(db, &itsmDir.ID, "表单管理", model.MenuTypeMenu, "/itsm/forms", "FileText", "itsm:form:list", 10)
+	seedButtons(db, formMenu, []model.Menu{
+		{Name: "新增表单", Type: model.MenuTypeButton, Permission: "itsm:form:create", Sort: 0},
+		{Name: "编辑表单", Type: model.MenuTypeButton, Permission: "itsm:form:update", Sort: 1},
+		{Name: "删除表单", Type: model.MenuTypeButton, Permission: "itsm:form:delete", Sort: 2},
+	})
+
 	return nil
 }
 
@@ -227,6 +248,9 @@ func seedMenu(db *gorm.DB, parentID *uint, name string, menuType model.MenuType,
 			return nil
 		}
 		slog.Info("seed: created menu", "name", menu.Name, "permission", menu.Permission)
+	} else if menu.Sort != sort || (parentID != nil && (menu.ParentID == nil || *menu.ParentID != *parentID)) {
+		// Sync sort and parent if drifted
+		db.Model(&menu).Updates(map[string]any{"sort": sort, "parent_id": parentID})
 	}
 	return &menu
 }
@@ -275,6 +299,12 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/itsm/engine/config", "PUT"},
 		// Workflow Generate
 		{"admin", "/api/v1/itsm/workflows/generate", "POST"},
+		// Form Definitions
+		{"admin", "/api/v1/itsm/forms", "POST"},
+		{"admin", "/api/v1/itsm/forms", "GET"},
+		{"admin", "/api/v1/itsm/forms/:id", "GET"},
+		{"admin", "/api/v1/itsm/forms/:id", "PUT"},
+		{"admin", "/api/v1/itsm/forms/:id", "DELETE"},
 		// Priorities
 		{"admin", "/api/v1/itsm/priorities", "POST"},
 		{"admin", "/api/v1/itsm/priorities", "GET"},
@@ -305,6 +335,8 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/itsm/tickets/:id/progress", "POST"},
 		{"admin", "/api/v1/itsm/tickets/:id/signal", "POST"},
 		{"admin", "/api/v1/itsm/tickets/:id/activities", "GET"},
+		// Process variables
+		{"admin", "/api/v1/itsm/tickets/:id/variables", "GET"},
 		// Smart engine override routes
 		{"admin", "/api/v1/itsm/tickets/:id/activities/:aid/confirm", "POST"},
 		{"admin", "/api/v1/itsm/tickets/:id/activities/:aid/reject", "POST"},
@@ -347,6 +379,10 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "itsm:sla:update", "read"},
 		{"admin", "itsm:sla:delete", "read"},
 		{"admin", "itsm:engine:config", "read"},
+		{"admin", "itsm:form:list", "read"},
+		{"admin", "itsm:form:create", "read"},
+		{"admin", "itsm:form:update", "read"},
+		{"admin", "itsm:form:delete", "read"},
 	}
 
 	allPolicies := append(policies, menuPerms...)
@@ -407,6 +443,59 @@ func seedSLATemplates(db *gorm.DB) error {
 	return nil
 }
 
+func seedFormDefinitions(db *gorm.DB) error {
+	type formSeed struct {
+		Name        string
+		Code        string
+		Description string
+		Schema      string
+	}
+
+	seeds := []formSeed{
+		{
+			Name:        "通用事件表单",
+			Code:        "form_general_incident",
+			Description: "适用于一般事件上报的通用表单",
+			Schema: `{"version":1,"fields":[{"key":"title","type":"text","label":"标题","required":true,"validation":[{"rule":"required","message":"请输入标题"},{"rule":"maxLength","value":200,"message":"标题不能超过200字"}],"width":"full"},{"key":"description","type":"textarea","label":"描述","required":true,"validation":[{"rule":"required","message":"请输入描述"}],"width":"full","props":{"rows":4}},{"key":"urgency","type":"select","label":"紧急程度","required":true,"validation":[{"rule":"required","message":"请选择紧急程度"}],"options":[{"label":"低","value":"low"},{"label":"中","value":"medium"},{"label":"高","value":"high"},{"label":"紧急","value":"critical"}],"defaultValue":"medium","width":"half"},{"key":"impact","type":"select","label":"影响范围","required":true,"validation":[{"rule":"required","message":"请选择影响范围"}],"options":[{"label":"个人","value":"individual"},{"label":"部门","value":"department"},{"label":"全公司","value":"company"}],"defaultValue":"individual","width":"half"},{"key":"contact","type":"text","label":"联系方式","placeholder":"手机号或邮箱","width":"full"}],"layout":{"columns":2,"sections":[{"title":"基本信息","fields":["title","description"]},{"title":"分类与影响","fields":["urgency","impact","contact"]}]}}`,
+		},
+		{
+			Name:        "变更申请表单",
+			Code:        "form_change_request",
+			Description: "适用于变更申请流程的表单",
+			Schema: `{"version":1,"fields":[{"key":"title","type":"text","label":"变更标题","required":true,"validation":[{"rule":"required","message":"请输入变更标题"}],"width":"full"},{"key":"description","type":"textarea","label":"变更描述","required":true,"validation":[{"rule":"required","message":"请输入变更描述"}],"width":"full","props":{"rows":4}},{"key":"reason","type":"textarea","label":"变更原因","required":true,"validation":[{"rule":"required","message":"请输入变更原因"}],"width":"full","props":{"rows":3}},{"key":"planned_time","type":"datetime","label":"计划执行时间","required":true,"validation":[{"rule":"required","message":"请选择计划执行时间"}],"width":"half"},{"key":"impact_assessment","type":"textarea","label":"影响评估","required":true,"validation":[{"rule":"required","message":"请填写影响评估"}],"width":"full","props":{"rows":3}},{"key":"rollback_plan","type":"textarea","label":"回滚方案","required":true,"validation":[{"rule":"required","message":"请填写回滚方案"}],"width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"变更信息","fields":["title","description","reason"]},{"title":"执行计划","fields":["planned_time","impact_assessment","rollback_plan"]}]}}`,
+		},
+		{
+			Name:        "服务请求表单",
+			Code:        "form_service_request",
+			Description: "适用于一般服务请求的通用表单",
+			Schema: `{"version":1,"fields":[{"key":"title","type":"text","label":"请求标题","required":true,"validation":[{"rule":"required","message":"请输入请求标题"}],"width":"full"},{"key":"description","type":"textarea","label":"请求描述","required":true,"validation":[{"rule":"required","message":"请输入请求描述"}],"width":"full","props":{"rows":4}},{"key":"expected_date","type":"date","label":"期望完成日期","width":"half"},{"key":"remarks","type":"textarea","label":"备注","width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"请求信息","fields":["title","description"]},{"title":"补充信息","fields":["expected_date","remarks"]}]}}`,
+		},
+	}
+
+	for _, s := range seeds {
+		var existing FormDefinition
+		if err := db.Where("code = ?", s.Code).First(&existing).Error; err == nil {
+			continue
+		}
+		fd := FormDefinition{
+			Name:        s.Name,
+			Code:        s.Code,
+			Description: s.Description,
+			Schema:      s.Schema,
+			Version:     1,
+			Scope:       "global",
+			IsActive:    true,
+		}
+		if err := db.Create(&fd).Error; err != nil {
+			slog.Error("seed: failed to create form definition", "code", s.Code, "error", err)
+			continue
+		}
+		slog.Info("seed: created form definition", "code", s.Code, "name", s.Name)
+	}
+
+	return nil
+}
+
 func seedServiceDefinitions(db *gorm.DB) error {
 	// Look up the decision agent for smart services
 	var decisionAgentID *uint
@@ -424,6 +513,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 		Description       string
 		CatalogCode       string
 		SLACode           string
+		FormCode          string
 		CollaborationSpec string
 		Actions           []ServiceAction
 	}
@@ -435,6 +525,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 			Description: "用于验证服务申请与审批闭环的内置服务。",
 			CatalogCode: "account-access:provisioning",
 			SLACode:     "rapid-workplace",
+			FormCode:    "form_service_request",
 			CollaborationSpec: "收集提单用户的Github账号信息和申请理由（可选），交给信息部的IT管理员审批，审批通过后结束流程。",
 		},
 		{
@@ -505,6 +596,16 @@ func seedServiceDefinitions(db *gorm.DB) error {
 			slog.Warn("seed: SLA not found for service, setting to nil", "serviceCode", s.Code, "slaCode", s.SLACode)
 		}
 
+		var formID *uint
+		if s.FormCode != "" {
+			var fd FormDefinition
+			if err := db.Where("code = ?", s.FormCode).First(&fd).Error; err == nil {
+				formID = &fd.ID
+			} else {
+				slog.Warn("seed: form not found for service, setting to nil", "serviceCode", s.Code, "formCode", s.FormCode)
+			}
+		}
+
 		svc := ServiceDefinition{
 			Name:              s.Name,
 			Code:              s.Code,
@@ -512,6 +613,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 			CatalogID:         catalog.ID,
 			EngineType:        "smart",
 			SLAID:             slaID,
+			FormID:            formID,
 			AgentID:           decisionAgentID,
 			CollaborationSpec: s.CollaborationSpec,
 			IsActive:          true,
@@ -594,7 +696,7 @@ func seedEngineConfig(db *gorm.DB) error {
 	defaults := map[string]string{
 		"itsm.engine.runtime.decision_mode":   "direct_first",
 		"itsm.engine.general.max_retries":     "3",
-		"itsm.engine.general.timeout_seconds": "30",
+		"itsm.engine.general.timeout_seconds": "120",
 		"itsm.engine.general.reasoning_log":   "full",
 	}
 
@@ -626,7 +728,11 @@ const itsmGeneratorSystemPrompt = `你是 ITSM 工作流解析引擎。根据用
       "id": "string (唯一标识，如 node_1)",
       "type": "string (节点类型，见下方枚举)",
       "position": {"x": number, "y": number},
-      "data": { ... (节点配置，见下方说明) }
+      "data": {
+        "label": "string (节点显示名称)",
+        "nodeType": "string (与外层 type 相同)",
+        ... (其他字段见下方说明)
+      }
     }
   ],
   "edges": [
@@ -646,25 +752,35 @@ const itsmGeneratorSystemPrompt = `你是 ITSM 工作流解析引擎。根据用
 
 | 类型 | 说明 | data 必需字段 |
 |------|------|--------------|
-| start | 起始节点（有且仅有一个） | label |
-| end | 结束节点（至少一个） | label |
-| form | 表单填写节点 | label, participants |
-| approve | 审批节点 | label, participants, approve_mode(single/parallel/sequential) |
-| process | 人工处理节点 | label, participants |
-| action | 自动动作节点（webhook/脚本） | label, action_id (关联可用动作) |
-| gateway | 条件分支网关 | label, conditions (至少两条出边) |
-| notify | 通知节点 | label |
-| wait | 等待节点（定时/信号） | label, wait_mode(signal/timer), duration(如 "2h") |
+| start | 起始节点（有且仅有一个） | label, nodeType |
+| end | 结束节点（至少一个） | label, nodeType |
+| form | 表单填写节点 | label, nodeType, participants |
+| approve | 审批节点 | label, nodeType, participants, executionMode(single/parallel/sequential) |
+| process | 人工处理节点 | label, nodeType, participants |
+| action | 自动动作节点（webhook/脚本） | label, nodeType, actionId (关联可用动作) |
+| gateway | 条件分支网关 | label, nodeType, conditions (至少两条出边) |
+| notify | 通知节点 | label, nodeType |
+| wait | 等待节点（定时/信号） | label, nodeType, waitMode(signal/timer), duration(如 "2h") |
+
+**重要**：每个节点的 data 中必须包含 nodeType 字段，值与外层 type 一致。
 
 ## 参与人（participants）格式
 
 participants 是数组，每个元素：
-- type: "user" | "position" | "department" | "requester_manager"
-- value: 对应的标识字符串（如岗位名、部门名）
+- type: "user" | "position" | "department" | "position_department" | "requester_manager"
+
+各类型的附加字段：
+- user: name（用户名或标识）
+- position: name（岗位名称）
+- department: name（部门名称）
+- position_department: department_code（部门编码）+ position_code（岗位编码）
+- requester_manager: 无附加字段
 
 当协作规范中提到"提交人的直属上级"或"发起人经理"时，使用 requester_manager 类型。
 当提到具体岗位（如"IT主管"）时，使用 position 类型。
 当提到部门（如"IT部门"）时，使用 department 类型。
+当提到特定部门中的特定岗位（如"信息部的网络管理员"）时，使用 position_department 类型，设置 department_code 和 position_code。
+当提到具体用户（如"serial-reviewer"）时，使用 user 类型，设置 name。
 
 ## 网关（gateway）条件格式
 

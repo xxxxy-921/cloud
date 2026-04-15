@@ -3,9 +3,10 @@
 import { useState, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router"
-import { Ticket } from "lucide-react"
+import { Ticket, Search, Bot } from "lucide-react"
 import { useListPage } from "@/hooks/use-list-page"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DataTableCard, DataTableEmptyRow, DataTableLoadingRow, DataTablePagination,
@@ -13,8 +14,8 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
-import { type TicketItem } from "../../api"
-import { SLABadge } from "../../components/sla-badge"
+import { type TicketItem } from "../../../api"
+import { SLABadge } from "../../../components/sla-badge"
 
 const STATUS_MAP: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; key: string }> = {
   pending: { variant: "secondary", key: "statusPending" },
@@ -38,6 +39,7 @@ export function Component() {
   }, [statusTab])
 
   const {
+    keyword, setKeyword, handleSearch,
     page, setPage, items, total, totalPages, isLoading,
   } = useListPage<TicketItem>({
     queryKey: "itsm-tickets-mine",
@@ -47,7 +49,20 @@ export function Component() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">{t("itsm:tickets.mine")}</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t("itsm:tickets.mine")}</h2>
+        <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              className="w-64 pl-8"
+              placeholder={t("itsm:tickets.searchPlaceholder")}
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+          </div>
+        </form>
+      </div>
 
       <Tabs value={statusTab || "all"} onValueChange={(v) => { setStatusTab(v === "all" ? "" : v); setPage(1) }}>
         <TabsList>
@@ -68,6 +83,7 @@ export function Component() {
               <TableHead className="w-[100px]">{t("itsm:tickets.priority")}</TableHead>
               <TableHead className="w-[100px]">{t("itsm:tickets.status")}</TableHead>
               <TableHead className="w-[100px]">{t("itsm:tickets.service")}</TableHead>
+              <TableHead className="w-[90px]">{t("itsm:services.engineType")}</TableHead>
               <TableHead className="w-[80px]">{t("itsm:tickets.assignee")}</TableHead>
               <TableHead className="w-[100px]">{t("itsm:tickets.slaStatus")}</TableHead>
               <TableHead className="w-[140px]">{t("itsm:tickets.createdAt")}</TableHead>
@@ -75,9 +91,9 @@ export function Component() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <DataTableLoadingRow colSpan={8} />
+              <DataTableLoadingRow colSpan={9} />
             ) : items.length === 0 ? (
-              <DataTableEmptyRow colSpan={8} icon={Ticket} title={t("itsm:tickets.empty")} />
+              <DataTableEmptyRow colSpan={9} icon={Ticket} title={t("itsm:tickets.empty")} />
             ) : (
               items.map((item) => {
                 const statusInfo = STATUS_MAP[item.status] ?? { variant: "secondary" as const, key: "statusPending" }
@@ -95,6 +111,16 @@ export function Component() {
                       <Badge variant={statusInfo.variant}>{t(`itsm:tickets.${statusInfo.key}`)}</Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{item.serviceName}</TableCell>
+                    <TableCell>
+                      {item.engineType === "smart" ? (
+                        <Badge variant="outline" className="gap-1 border-amber-300 bg-amber-50 text-amber-700">
+                          <Bot className="h-3 w-3" />
+                          {t("itsm:services.engineSmart")}
+                        </Badge>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">{t("itsm:services.engineClassic")}</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm">{item.assigneeName || "—"}</TableCell>
                     <TableCell>
                       <SLABadge slaStatus={item.slaStatus} slaResolutionDeadline={item.slaResolutionDeadline} />

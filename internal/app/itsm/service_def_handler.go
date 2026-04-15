@@ -27,7 +27,7 @@ type CreateServiceDefRequest struct {
 	CatalogID         uint      `json:"catalogId" binding:"required"`
 	EngineType        string    `json:"engineType" binding:"required,oneof=classic smart"`
 	SLAID             *uint     `json:"slaId"`
-	FormSchema        JSONField `json:"formSchema"`
+	FormID            *uint     `json:"formId"`
 	WorkflowJSON      JSONField `json:"workflowJson"`
 	CollaborationSpec string    `json:"collaborationSpec"`
 	AgentID           *uint     `json:"agentId"`
@@ -52,7 +52,7 @@ func (h *ServiceDefHandler) Create(c *gin.Context) {
 		CatalogID:         req.CatalogID,
 		EngineType:        req.EngineType,
 		SLAID:             req.SLAID,
-		FormSchema:        req.FormSchema,
+		FormID:            req.FormID,
 		WorkflowJSON:      req.WorkflowJSON,
 		CollaborationSpec: req.CollaborationSpec,
 		AgentID:           req.AgentID,
@@ -142,7 +142,7 @@ type UpdateServiceDefRequest struct {
 	CatalogID         *uint      `json:"catalogId"`
 	EngineType        *string    `json:"engineType" binding:"omitempty,oneof=classic smart"`
 	SLAID             *uint      `json:"slaId"`
-	FormSchema        *JSONField `json:"formSchema"`
+	FormID            *uint      `json:"formId"`
 	WorkflowJSON      *JSONField `json:"workflowJson"`
 	CollaborationSpec *string    `json:"collaborationSpec"`
 	AgentID           *uint      `json:"agentId"`
@@ -187,8 +187,8 @@ func (h *ServiceDefHandler) Update(c *gin.Context) {
 	if req.SLAID != nil {
 		updates["sla_id"] = *req.SLAID
 	}
-	if req.FormSchema != nil {
-		updates["form_schema"] = *req.FormSchema
+	if req.FormID != nil {
+		updates["form_id"] = *req.FormID
 	}
 	if req.WorkflowJSON != nil {
 		updates["workflow_json"] = *req.WorkflowJSON

@@ -276,11 +276,11 @@ func (s *WorkflowGenerateService) getMaxRetries() int {
 func (s *WorkflowGenerateService) getTimeoutSeconds() int {
 	cfg, err := s.sysConfigRepo.Get("itsm.engine.general.timeout_seconds")
 	if err != nil || cfg.Value == "" {
-		return 30
+		return 120
 	}
 	var n int
 	if _, err := fmt.Sscanf(cfg.Value, "%d", &n); err != nil {
-		return 30
+		return 120
 	}
 	return n
 }

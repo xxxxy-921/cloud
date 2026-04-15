@@ -34,7 +34,7 @@ type WFEdgeData struct {
 // NodeData holds parsed node configuration (varies by type).
 type NodeData struct {
 	Label        string            `json:"label"`
-	FormSchema   json.RawMessage   `json:"form_schema,omitempty"`
+	FormID       string            `json:"formId,omitempty"`
 	ApproveMode  string            `json:"approve_mode,omitempty"` // single | parallel | sequential
 	Participants []Participant     `json:"participants,omitempty"`
 	ActionID     uint              `json:"action_id,omitempty"`

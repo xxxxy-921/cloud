@@ -35,6 +35,7 @@ func (a *ITSMApp) Models() []any {
 		&ServiceCatalog{},
 		&ServiceDefinition{},
 		&ServiceAction{},
+		&FormDefinition{},
 		&Priority{},
 		&SLATemplate{},
 		&EscalationRule{},
@@ -47,6 +48,8 @@ func (a *ITSMApp) Models() []any {
 		// Incident models
 		&TicketLink{},
 		&PostMortem{},
+		// Process variables
+		&ProcessVariable{},
 		// Knowledge documents
 		&ServiceKnowledgeDocument{},
 	}
@@ -62,11 +65,13 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewCatalogRepo)
 	do.Provide(i, NewServiceDefRepo)
 	do.Provide(i, NewServiceActionRepo)
+	do.Provide(i, NewFormDefRepo)
 	do.Provide(i, NewPriorityRepo)
 	do.Provide(i, NewSLATemplateRepo)
 	do.Provide(i, NewEscalationRuleRepo)
 	do.Provide(i, NewTicketRepo)
 	do.Provide(i, NewTimelineRepo)
+	do.Provide(i, NewVariableRepository)
 
 	// Engine components
 	do.Provide(i, func(i do.Injector) (*engine.ParticipantResolver, error) {
@@ -118,11 +123,13 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewCatalogService)
 	do.Provide(i, NewServiceDefService)
 	do.Provide(i, NewServiceActionService)
+	do.Provide(i, NewFormDefService)
 	do.Provide(i, NewPriorityService)
 	do.Provide(i, NewSLATemplateService)
 	do.Provide(i, NewEscalationRuleService)
 	do.Provide(i, NewTicketService)
 	do.Provide(i, NewTimelineService)
+	do.Provide(i, NewVariableService)
 	do.Provide(i, NewKnowledgeDocRepo)
 	do.Provide(i, NewKnowledgeDocService)
 	// Engine config
@@ -133,6 +140,7 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewCatalogHandler)
 	do.Provide(i, NewServiceDefHandler)
 	do.Provide(i, NewServiceActionHandler)
+	do.Provide(i, NewFormDefHandler)
 	do.Provide(i, NewPriorityHandler)
 	do.Provide(i, NewSLATemplateHandler)
 	do.Provide(i, NewEscalationRuleHandler)
@@ -140,12 +148,14 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewKnowledgeDocHandler)
 	do.Provide(i, NewEngineConfigHandler)
 	do.Provide(i, NewWorkflowGenerateHandler)
+	do.Provide(i, NewVariableHandler)
 }
 
 func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 	catalogH := do.MustInvoke[*CatalogHandler](a.injector)
 	serviceH := do.MustInvoke[*ServiceDefHandler](a.injector)
 	actionH := do.MustInvoke[*ServiceActionHandler](a.injector)
+	formDefH := do.MustInvoke[*FormDefHandler](a.injector)
 	priorityH := do.MustInvoke[*PriorityHandler](a.injector)
 	slaH := do.MustInvoke[*SLATemplateHandler](a.injector)
 	escalationH := do.MustInvoke[*EscalationRuleHandler](a.injector)
@@ -153,9 +163,17 @@ func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 	knowledgeDocH := do.MustInvoke[*KnowledgeDocHandler](a.injector)
 	engineConfigH := do.MustInvoke[*EngineConfigHandler](a.injector)
 	workflowGenH := do.MustInvoke[*WorkflowGenerateHandler](a.injector)
+	variableH := do.MustInvoke[*VariableHandler](a.injector)
 
 	g := api.Group("/itsm")
 	{
+		// Form Definitions
+		g.POST("/forms", formDefH.Create)
+		g.GET("/forms", formDefH.List)
+		g.GET("/forms/:id", formDefH.Get)
+		g.PUT("/forms/:id", formDefH.Update)
+		g.DELETE("/forms/:id", formDefH.Delete)
+
 		// Service Catalogs
 		g.POST("/catalogs", catalogH.Create)
 		g.GET("/catalogs/tree", catalogH.Tree)
@@ -222,6 +240,8 @@ func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 		g.POST("/tickets/:id/progress", ticketH.Progress)
 		g.POST("/tickets/:id/signal", ticketH.Signal)
 		g.GET("/tickets/:id/activities", ticketH.Activities)
+		// Process variables
+		g.GET("/tickets/:id/variables", variableH.List)
 		// Phase 3: Smart engine override routes
 		g.POST("/tickets/:id/activities/:aid/confirm", ticketH.ConfirmActivity)
 		g.POST("/tickets/:id/activities/:aid/reject", ticketH.RejectActivity)

@@ -7,7 +7,11 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, UserPlus, CheckCircle, XCircle, Clock } from "lucide-react"
+import {
+  ArrowLeft, UserPlus, CheckCircle, XCircle, Clock,
+  PlusCircle, Play, Bot, AlertTriangle, RotateCcw, ArrowRight,
+  type LucideIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,14 +34,16 @@ import {
   Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
 } from "@/components/ui/form"
 import { usePermission } from "@/hooks/use-permission"
+import { useAuthStore } from "@/stores/auth"
 import {
   fetchTicket, fetchTicketTimeline, fetchTicketActivities,
   assignTicket, completeTicket, cancelTicket, progressTicket, fetchUsers,
 } from "../../../api"
 import { WorkflowViewer } from "../../../components/workflow"
-import { AIDecisionPanel } from "../../../components/ai-decision-panel"
 import { OverrideActions } from "../../../components/override-actions"
 import { SmartFlowVisualization } from "../../../components/smart-flow-visualization"
+import { SmartCurrentActivityCard } from "../../../components/smart-current-activity-card"
+import { VariablesPanel } from "../../../components/variables-panel"
 
 const STATUS_MAP: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; key: string }> = {
   pending: { variant: "secondary", key: "statusPending" },
@@ -53,6 +59,28 @@ const SLA_VARIANT: Record<string, "default" | "secondary" | "destructive"> = {
   normal: "default",
   warning: "secondary",
   breached: "destructive",
+}
+
+const DEFAULT_EVENT_STYLE = { icon: Clock, bg: "bg-muted", fg: "text-muted-foreground" }
+const TIMELINE_EVENT_STYLE: Record<string, { icon: LucideIcon; bg: string; fg: string }> = {
+  ticket_created:        { icon: PlusCircle, bg: "bg-blue-100", fg: "text-blue-600" },
+  ticket_assigned:       { icon: UserPlus, bg: "bg-blue-100", fg: "text-blue-600" },
+  ticket_completed:      { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
+  ticket_cancelled:      { icon: XCircle, bg: "bg-gray-200", fg: "text-gray-500" },
+  workflow_started:      { icon: Play, bg: "bg-blue-100", fg: "text-blue-600" },
+  workflow_completed:    { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
+  activity_completed:    { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
+  activity_approved:     { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
+  activity_denied:       { icon: XCircle, bg: "bg-red-100", fg: "text-red-600" },
+  ai_decision_pending:   { icon: Bot, bg: "bg-amber-100", fg: "text-amber-600" },
+  ai_decision_executed:  { icon: Bot, bg: "bg-green-100", fg: "text-green-600" },
+  ai_decision_confirmed: { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
+  ai_decision_rejected:  { icon: XCircle, bg: "bg-red-100", fg: "text-red-600" },
+  ai_decision_failed:    { icon: AlertTriangle, bg: "bg-red-100", fg: "text-red-600" },
+  ai_disabled:           { icon: AlertTriangle, bg: "bg-amber-100", fg: "text-amber-600" },
+  ai_retry:              { icon: RotateCcw, bg: "bg-amber-100", fg: "text-amber-600" },
+  override_jump:         { icon: ArrowRight, bg: "bg-orange-100", fg: "text-orange-600" },
+  override_reassign:     { icon: UserPlus, bg: "bg-orange-100", fg: "text-orange-600" },
 }
 
 function useAssignSchema() {
@@ -92,6 +120,8 @@ export function Component() {
   const canAssign = usePermission("itsm:ticket:assign")
   const canComplete = usePermission("itsm:ticket:complete")
   const canCancel = usePermission("itsm:ticket:cancel")
+  const currentUser = useAuthStore((s) => s.user)
+  const currentUserId = currentUser?.id ?? 0
 
   const assignSchema = useAssignSchema()
   const cancelSchema = useCancelSchema()
@@ -323,15 +353,15 @@ export function Component() {
         </Card>
       </div>
 
+      {/* Smart Engine: Current Activity Card */}
+      {ticket.engineType === "smart" && (
+        <SmartCurrentActivityCard ticket={ticket} activities={activities} currentUserId={currentUserId} />
+      )}
+
       {/* Smart Engine: Flow Visualization */}
       {ticket.engineType === "smart" && activities.length > 0 && (
         <SmartFlowVisualization activities={activities} currentActivityId={ticket.currentActivityId} />
       )}
-
-      {/* Smart Engine: AI Decision Panel */}
-      {ticket.engineType === "smart" && activities.filter((a) => a.status === "pending_approval" || (a.aiDecision && a.status === "in_progress")).map((a) => (
-        <AIDecisionPanel key={a.id} ticketId={ticketId} activity={a} />
-      ))}
 
       {/* Workflow Viewer (classic engine only) */}
       {ticket.engineType === "classic" && ticket.workflowJson && (
@@ -370,6 +400,9 @@ export function Component() {
         </Card>
       )}
 
+      {/* Process Variables Panel */}
+      <VariablesPanel ticketId={ticketId} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t("itsm:tickets.timeline")}</CardTitle>
@@ -379,22 +412,36 @@ export function Component() {
             <p className="text-sm text-muted-foreground">{t("itsm:tickets.empty")}</p>
           ) : (
             <div className="relative space-y-0">
-              {timeline.map((event, idx) => (
-                <div key={event.id} className="flex gap-3 pb-6 last:pb-0">
-                  <div className="flex flex-col items-center">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-muted">
-                      <Clock className="h-3 w-3 text-muted-foreground" />
+              {timeline.map((event, idx) => {
+                const style = TIMELINE_EVENT_STYLE[event.eventType] ?? DEFAULT_EVENT_STYLE
+                const Icon = style.icon
+                return (
+                  <div key={event.id} className="flex gap-3 pb-6 last:pb-0">
+                    <div className="flex flex-col items-center">
+                      <div className={`flex h-6 w-6 items-center justify-center rounded-full ${style.bg}`}>
+                        <Icon className={`h-3 w-3 ${style.fg}`} />
+                      </div>
+                      {idx < timeline.length - 1 && <div className="w-px flex-1 bg-border" />}
                     </div>
-                    {idx < timeline.length - 1 && <div className="w-px flex-1 bg-border" />}
+                    <div className="flex-1 pt-0.5">
+                      <p className="text-sm">{event.content}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {event.operatorName} · {new Date(event.createdAt).toLocaleString()}
+                      </p>
+                      {event.reasoning && (
+                        <details className="mt-1.5">
+                          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                            {t("itsm:smart.reasoning")}
+                          </summary>
+                          <p className="mt-1 whitespace-pre-wrap rounded-md bg-muted/50 p-2.5 text-xs leading-relaxed">
+                            {event.reasoning}
+                          </p>
+                        </details>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-1 pt-0.5">
-                    <p className="text-sm">{event.content}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {event.operatorName} · {new Date(event.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </CardContent>

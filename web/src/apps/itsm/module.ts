@@ -9,6 +9,19 @@ registerApp({
   name: "itsm",
   routes: [
     {
+      path: "itsm/forms",
+      children: [
+        {
+          index: true,
+          lazy: () => import("./pages/forms/index"),
+        },
+      ],
+    },
+    {
+      path: "itsm/forms/:id",
+      lazy: () => import("./pages/forms/[id]"),
+    },
+    {
       path: "itsm/catalogs",
       children: [
         {

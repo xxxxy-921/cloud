@@ -1,18 +1,21 @@
 "use client"
 
+import { useState, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router"
-import { Ticket } from "lucide-react"
+import { Ticket, Search } from "lucide-react"
 import { useListPage } from "@/hooks/use-list-page"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DataTableCard, DataTableEmptyRow, DataTableLoadingRow, DataTablePagination,
 } from "@/components/ui/data-table"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
-import { type TicketItem } from "../../api"
-import { SLABadge } from "../../components/sla-badge"
+import { type TicketItem } from "../../../api"
+import { SLABadge } from "../../../components/sla-badge"
 
 const STATUS_MAP: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; key: string }> = {
   pending: { variant: "secondary", key: "statusPending" },
@@ -24,17 +27,48 @@ const STATUS_MAP: Record<string, { variant: "default" | "secondary" | "destructi
 export function Component() {
   const { t } = useTranslation(["itsm", "common"])
   const navigate = useNavigate()
+  const [statusTab, setStatusTab] = useState("")
+
+  const extraParams = useMemo(() => {
+    const params: Record<string, string> = {}
+    if (statusTab) params.status = statusTab
+    return params
+  }, [statusTab])
 
   const {
+    keyword, setKeyword, handleSearch,
     page, setPage, items, total, totalPages, isLoading,
   } = useListPage<TicketItem>({
     queryKey: "itsm-tickets-todo",
     endpoint: "/api/v1/itsm/tickets/todo",
+    extraParams,
   })
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">{t("itsm:tickets.todo")}</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t("itsm:tickets.todo")}</h2>
+        <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              className="w-64 pl-8"
+              placeholder={t("itsm:tickets.searchPlaceholder")}
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+          </div>
+        </form>
+      </div>
+
+      <Tabs value={statusTab || "all"} onValueChange={(v) => { setStatusTab(v === "all" ? "" : v); setPage(1) }}>
+        <TabsList>
+          <TabsTrigger value="all">{t("itsm:tickets.allStatuses")}</TabsTrigger>
+          <TabsTrigger value="pending">{t("itsm:tickets.statusPending")}</TabsTrigger>
+          <TabsTrigger value="in_progress">{t("itsm:tickets.statusInProgress")}</TabsTrigger>
+          <TabsTrigger value="waiting_approval">{t("itsm:tickets.statusWaitingApproval")}</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       <DataTableCard>
         <Table>

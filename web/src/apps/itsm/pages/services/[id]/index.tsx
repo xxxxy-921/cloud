@@ -543,15 +543,24 @@ export function Component() {
 
       {/* Workflow Section */}
       <section>
-        <h3 className="mb-4 text-sm font-semibold text-muted-foreground">{t("itsm:services.tabWorkflow")}</h3>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-muted-foreground">{t("itsm:services.tabWorkflow")}</h3>
+          {service.engineType === "classic" && service.workflowJson && (
+            <Button variant="outline" size="sm" onClick={() => navigate(`/itsm/services/${serviceId}/workflow`)}>
+              <Pencil className="mr-1.5 h-3.5 w-3.5" />{t("itsm:workflow.editWorkflow")}
+            </Button>
+          )}
+        </div>
         {!service.workflowJson ? (
           <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed text-muted-foreground">
             <p className="text-sm">{t("itsm:services.workflowEmpty")}</p>
-            <p className="text-xs">
-              {service.engineType === "smart"
-                ? t("itsm:generate.workflowEmptySmartHint")
-                : t("itsm:services.workflowEmptyHint")}
-            </p>
+            {service.engineType === "classic" ? (
+              <Button variant="outline" size="sm" onClick={() => navigate(`/itsm/services/${serviceId}/workflow`)}>
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />{t("itsm:workflow.designWorkflow")}
+              </Button>
+            ) : (
+              <p className="text-xs">{t("itsm:generate.workflowEmptySmartHint")}</p>
+            )}
           </div>
         ) : (
           <Suspense fallback={<div className="flex h-96 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>

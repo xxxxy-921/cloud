@@ -57,6 +57,13 @@ func (e *ClassicEngine) Start(ctx context.Context, tx *gorm.DB, params StartPara
 		return err
 	}
 
+	// Write start form bindings as process variables
+	if params.StartFormSchema != "" && params.StartFormData != "" {
+		if err := writeFormBindings(tx, params.TicketID, "root", params.StartFormSchema, params.StartFormData, "form:start"); err != nil {
+			slog.Warn("failed to write start form bindings", "ticketID", params.TicketID, "error", err)
+		}
+	}
+
 	// Record timeline: workflow started
 	if err := e.recordTimeline(tx, params.TicketID, nil, params.RequesterID, "workflow_started", "流程已启动"); err != nil {
 		return err
@@ -107,6 +114,14 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 	}
 	if err := tx.Model(&activityModel{}).Where("id = ?", params.ActivityID).Updates(updates).Error; err != nil {
 		return err
+	}
+
+	// Write form bindings as process variables (if activity had a form with bindings)
+	if activity.FormSchema != "" && len(params.Result) > 0 {
+		source := fmt.Sprintf("form:%d", params.ActivityID)
+		if err := writeFormBindings(tx, params.TicketID, "root", activity.FormSchema, string(params.Result), source); err != nil {
+			slog.Warn("failed to write form bindings on progress", "ticketID", params.TicketID, "activityID", params.ActivityID, "error", err)
+		}
 	}
 
 	// Record timeline
@@ -244,6 +259,10 @@ func (e *ClassicEngine) handleEnd(tx *gorm.DB, ticketID, operatorID uint, node *
 
 func (e *ClassicEngine) handleForm(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
+
+	// Resolve formId to schema snapshot
+	formSchema := resolveFormSchema(tx, data.FormID)
+
 	act := &activityModel{
 		TicketID:      ticketID,
 		Name:          labelOrDefault(data, "表单填写"),
@@ -251,7 +270,7 @@ func (e *ClassicEngine) handleForm(tx *gorm.DB, ticketID, operatorID uint, node 
 		Status:        ActivityPending,
 		NodeID:        node.ID,
 		ExecutionMode: "single",
-		FormSchema:    string(data.FormSchema),
+		FormSchema:    formSchema,
 		StartedAt:     &now,
 	}
 	if err := tx.Create(act).Error; err != nil {
@@ -289,6 +308,10 @@ func (e *ClassicEngine) handleApprove(tx *gorm.DB, ticketID, operatorID uint, no
 
 func (e *ClassicEngine) handleProcess(tx *gorm.DB, ticketID, operatorID uint, node *WFNode, data *NodeData) error {
 	now := time.Now()
+
+	// Resolve formId to schema snapshot
+	formSchema := resolveFormSchema(tx, data.FormID)
+
 	act := &activityModel{
 		TicketID:      ticketID,
 		Name:          labelOrDefault(data, "处理"),
@@ -296,7 +319,7 @@ func (e *ClassicEngine) handleProcess(tx *gorm.DB, ticketID, operatorID uint, no
 		Status:        ActivityPending,
 		NodeID:        node.ID,
 		ExecutionMode: "single",
-		FormSchema:    string(data.FormSchema),
+		FormSchema:    formSchema,
 		StartedAt:     &now,
 	}
 	if err := tx.Create(act).Error; err != nil {
@@ -359,7 +382,7 @@ func (e *ClassicEngine) handleGateway(
 	tx.Where("ticket_id = ? AND status = ? AND form_data IS NOT NULL AND form_data != ''", ticketID, ActivityCompleted).
 		Order("id DESC").First(&latestActivity)
 
-	evalCtx := buildEvalContext(&ticket, &latestActivity)
+	evalCtx := buildEvalContext(tx, &ticket, &latestActivity)
 
 	edges := outEdges[node.ID]
 	var matchedEdge *WFEdge
@@ -649,3 +672,27 @@ type timelineModel struct {
 }
 
 func (timelineModel) TableName() string { return "itsm_ticket_timelines" }
+
+// formDefModel is a lightweight read-only model for resolving form schema by code.
+type formDefModel struct {
+	ID     uint   `gorm:"primaryKey"`
+	Code   string `gorm:"column:code"`
+	Schema string `gorm:"column:schema;type:text"`
+}
+
+func (formDefModel) TableName() string { return "itsm_form_definitions" }
+
+// resolveFormSchema looks up a FormDefinition by code and returns its schema JSON.
+// Returns empty string if formID is empty or not found (with a log warning).
+func resolveFormSchema(tx *gorm.DB, formCode string) string {
+	if formCode == "" {
+		return ""
+	}
+	var fd formDefModel
+	if err := tx.Where("code = ?", formCode).First(&fd).Error; err != nil {
+		slog.Warn("form definition not found, activity will have no form schema",
+			"formCode", formCode, "error", err)
+		return ""
+	}
+	return fd.Schema
+}
