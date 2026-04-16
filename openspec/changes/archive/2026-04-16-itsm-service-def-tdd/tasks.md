@@ -21,7 +21,7 @@
 - [x] 3.1 编写 `requireLLMEnv` 辅助函数（环境变量门控 + t.Skip）
 - [x] 3.2 编写 `TestLLMExtract_SimpleWorkflow`（线性流程：开始→表单→审批→结束）
 - [x] 3.3 编写 `TestLLMExtract_BranchWorkflow`（分支流程：含排他网关）
-- [ ] 3.4 使用 `.env.test` 配置运行集成测试确认通过
+- [x] 3.4 使用 `.env.test` 配置运行集成测试确认通过
 
 ## 4. BDD 基础设施
 

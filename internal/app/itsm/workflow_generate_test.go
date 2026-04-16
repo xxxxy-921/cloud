@@ -160,15 +160,24 @@ const testSystemPrompt = `你是工作流 JSON 生成器。输入是协作规范
 
 JSON schema:
 {
-  "nodes": [{"id": "string", "type": "string", "data": {}}],
+  "nodes": [{"id": "string", "type": "string", "data": {"label": "string"}}],
   "edges": [{"id": "string", "source": "string", "target": "string", "data": {}}]
 }
 
 节点类型: start, end, form, approve, process, action, notify, exclusive
-每个 node 必须有 id, type。data 字段可以包含 label 等附加信息。
+每个 node 必须有 id, type。data 字段包含 label。
 每个 edge 必须有 id, source, target。
 必须恰好 1 个 start 节点，至少 1 个 end 节点。
-排他网关(exclusive)节点的出边必须在 data 中包含 condition 或 default 字段。
+
+排他网关(exclusive)节点至少有 2 条出边。出边的 data 中：
+- 条件分支必须包含 "condition" 对象: {"field": "string", "operator": "equals", "value": "string"}
+- 默认分支使用 "default": true
+- 至少一条出边应标记 "default": true
+
+示例：排他网关的出边 data:
+  条件边: {"condition": {"field": "approve.result", "operator": "equals", "value": "approved"}}
+  默认边: {"default": true}
+
 仅输出合法的 JSON，不要包含任何额外文字或 markdown 代码块标记。`
 
 // callLLMForWorkflow calls the LLM with the test system prompt and returns
