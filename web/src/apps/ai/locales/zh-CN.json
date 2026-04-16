@@ -273,6 +273,8 @@
       "react": "ReAct",
       "plan_and_execute": "计划执行"
     },
+    "provider": "供应商",
+    "selectProvider": "选择供应商",
     "model": "模型",
     "selectModel": "选择模型",
     "systemPrompt": "系统提示词",

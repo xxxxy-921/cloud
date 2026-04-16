@@ -273,6 +273,8 @@
       "react": "ReAct",
       "plan_and_execute": "Plan & Execute"
     },
+    "provider": "Provider",
+    "selectProvider": "Select provider",
     "model": "Model",
     "selectModel": "Select model",
     "systemPrompt": "System Prompt",

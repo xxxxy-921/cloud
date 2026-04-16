@@ -27,6 +27,7 @@ const agentSchema = z.object({
   type: z.enum(["assistant", "coding"]),
   visibility: z.enum(["private", "team", "public"]),
   strategy: z.string().optional(),
+  providerId: z.string().optional(),
   modelId: z.coerce.number().optional(),
   systemPrompt: z.string().optional(),
   temperature: z.coerce.number().min(0).max(2).optional(),
@@ -47,11 +48,17 @@ interface AgentSheetProps {
   agent: AgentInfo | null
 }
 
+interface ProviderItem {
+  id: number
+  name: string
+}
+
 interface ModelItem {
   id: number
   displayName: string
   modelId: string
   type: string
+  providerId: number
 }
 
 export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
@@ -76,13 +83,36 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
 
   const watchType = useWatch({ control: form.control, name: "type" })
   const watchExecMode = useWatch({ control: form.control, name: "execMode" })
+  const selectedProviderId = useWatch({ control: form.control, name: "providerId" }) ?? ""
 
-  const { data: modelsData } = useQuery({
-    queryKey: ["ai-models-llm"],
-    queryFn: () => api.get<PaginatedResponse<ModelItem>>("/api/v1/ai/models?type=llm&pageSize=100"),
+  // Fetch providers
+  const { data: providersData } = useQuery({
+    queryKey: ["ai-providers"],
+    queryFn: () => api.get<PaginatedResponse<ProviderItem>>("/api/v1/ai/providers?pageSize=100"),
     enabled: open,
   })
+  const providers = providersData?.items ?? []
+
+  // For edit mode: resolve provider from the agent's modelId
+  const { data: editModelDetail } = useQuery({
+    queryKey: ["ai-model-detail", agent?.modelId],
+    queryFn: () => api.get<ModelItem>(`/api/v1/ai/models/${agent!.modelId}`),
+    enabled: open && !!agent?.modelId,
+  })
+  const editProviderId = editModelDetail?.providerId ? String(editModelDetail.providerId) : ""
+
+  // Fetch LLM models filtered by selected provider
+  const { data: modelsData } = useQuery({
+    queryKey: ["ai-models-llm", selectedProviderId],
+    queryFn: () => api.get<PaginatedResponse<ModelItem>>(`/api/v1/ai/models?type=llm&providerId=${selectedProviderId}&pageSize=100`),
+    enabled: open && selectedProviderId !== "",
+  })
   const models = modelsData?.items ?? []
+
+  function handleProviderChange(value: string) {
+    form.setValue("providerId", value)
+    form.setValue("modelId", undefined)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -93,6 +123,7 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
         type: agent.type,
         visibility: agent.visibility,
         strategy: agent.strategy || "react",
+        providerId: editProviderId,
         modelId: agent.modelId ?? undefined,
         systemPrompt: agent.systemPrompt || "",
         temperature: agent.temperature,
@@ -117,7 +148,7 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
         execMode: "local",
       })
     }
-  }, [open, agent, form])
+  }, [open, agent, editProviderId, form])
 
   const mutation = useMutation({
     mutationFn: (values: AgentFormValues) => {
@@ -219,10 +250,29 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
+                    <FormField control={form.control} name="providerId" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("ai:agents.provider")}</FormLabel>
+                        <Select value={field.value ?? ""} onValueChange={handleProviderChange}>
+                          <FormControl><SelectTrigger className="w-full"><SelectValue placeholder={t("ai:agents.selectProvider")} /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            {providers.map((p) => (
+                              <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+
                     <FormField control={form.control} name="modelId" render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("ai:agents.model")}</FormLabel>
-                        <Select onValueChange={(v) => field.onChange(Number(v))} value={field.value ? String(field.value) : ""}>
+                        <Select
+                          onValueChange={(v) => field.onChange(Number(v))}
+                          value={field.value ? String(field.value) : ""}
+                          disabled={selectedProviderId === ""}
+                        >
                           <FormControl><SelectTrigger className="w-full"><SelectValue placeholder={t("ai:agents.selectModel")} /></SelectTrigger></FormControl>
                           <SelectContent>
                             {models.map((m) => (
@@ -233,7 +283,9 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
                         <FormMessage />
                       </FormItem>
                     )} />
+                  </div>
 
+                  <div className="grid grid-cols-2 gap-3">
                     <FormField control={form.control} name="strategy" render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("ai:agents.strategy")}</FormLabel>
