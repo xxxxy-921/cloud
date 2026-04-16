@@ -21,10 +21,7 @@ interface WorkflowPreviewProps {
 /** Format a participant for display */
 function formatParticipant(p: Participant): string {
   if (p.type === "position_department") {
-    const parts = [
-      (p as unknown as Record<string, unknown>).department_code,
-      (p as unknown as Record<string, unknown>).position_code,
-    ].filter(Boolean)
+    const parts = [p.department_code, p.position_code].filter(Boolean)
     if (parts.length > 0) return parts.join(" / ")
   }
   if (p.name) return p.name
@@ -43,6 +40,13 @@ function participantTypeLabel(type: string, t: (k: string) => string): string {
     requester_manager: t("workflow.participant.requesterManager"),
   }
   return map[type] ?? type
+}
+
+/** Parse formSchema fields for display */
+function parsePreviewFields(schema: unknown): Array<{ key: string; type: string; label: string; options?: string[] }> {
+  if (!schema || typeof schema !== "object") return []
+  const s = schema as { fields?: Array<{ key: string; type: string; label: string; options?: string[] }> }
+  return Array.isArray(s.fields) ? s.fields : []
 }
 
 export default function WorkflowPreview({ workflowJson }: WorkflowPreviewProps) {
@@ -184,14 +188,29 @@ export default function WorkflowPreview({ workflowJson }: WorkflowPreviewProps) 
               </div>
             )}
 
-            {selectedNode.data.formSchema != null && (
-              <div>
-                <span className="text-muted-foreground">{t("services.formSchema")}:</span>
-                <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
-                  {JSON.stringify(selectedNode.data.formSchema, null, 2)}
-                </pre>
-              </div>
-            )}
+            {selectedNode.data.formSchema != null && (() => {
+              const fields = parsePreviewFields(selectedNode.data.formSchema)
+              return fields.length > 0 ? (
+                <div>
+                  <span className="text-muted-foreground">{t("workflow.prop.formFields")} ({fields.length}):</span>
+                  <div className="mt-1 rounded border p-1.5 space-y-0.5">
+                    {fields.map((f) => (
+                      <div key={f.key} className="flex items-center justify-between text-xs">
+                        <span>{f.label || f.key}</span>
+                        <span className="text-muted-foreground">{f.type}{f.options ? ` (${f.options.length})` : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <span className="text-muted-foreground">{t("services.formSchema")}:</span>
+                  <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
+                    {JSON.stringify(selectedNode.data.formSchema, null, 2)}
+                  </pre>
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}

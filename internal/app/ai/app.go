@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"log/slog"
+
 	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/do/v2"
@@ -9,6 +11,7 @@ import (
 	"metis/internal/app"
 	"metis/internal/app/node"
 	"metis/internal/scheduler"
+	"metis/internal/service"
 )
 
 func init() {
@@ -88,6 +91,18 @@ func (a *AIApp) Providers(i do.Injector) {
 	do.Provide(i, NewMemoryService)
 	do.Provide(i, NewMemoryHandler)
 	do.Provide(i, NewAgentGateway)
+
+	// General tool registry (used by CompositeToolExecutor in gateway)
+	do.Provide(i, func(i do.Injector) (*GeneralToolRegistry, error) {
+		userSvc := do.MustInvoke[*service.UserService](i)
+		userFinder := &userFinderAdapter{userSvc: userSvc}
+
+		// OrgResolver is optional (Org App may not be installed)
+		var orgResolver OrgResolver
+		// TODO: wire OrgResolver adapter when Org App provides the interface
+
+		return NewGeneralToolRegistry(userFinder, orgResolver), nil
+	})
 }
 
 func (a *AIApp) Routes(api *gin.RouterGroup) {
@@ -236,4 +251,61 @@ func (a *AIApp) Tasks() []scheduler.TaskDef {
 	defs = append(defs, extractSvc.TaskDefs()...)
 	defs = append(defs, compileSvc.TaskDefs()...)
 	return defs
+}
+
+// collectToolRegistries gathers all ToolHandlerRegistry instances from registered Apps.
+// It always includes the GeneralToolRegistry first, then any App that implements
+// app.ToolRegistryProvider (e.g. ITSM).
+func collectToolRegistries(i do.Injector) []ToolHandlerRegistry {
+	generalReg := do.MustInvoke[*GeneralToolRegistry](i)
+
+	var registries []ToolHandlerRegistry
+	registries = append(registries, generalReg)
+
+	// Discover registries from other Apps.
+	for _, a := range app.All() {
+		trp, ok := a.(app.ToolRegistryProvider)
+		if !ok {
+			continue
+		}
+		raw := trp.GetToolRegistry()
+		if reg, ok := raw.(ToolHandlerRegistry); ok {
+			registries = append(registries, reg)
+			slog.Info("AI: discovered tool registry", "app", a.Name())
+		}
+	}
+
+	return registries
+}
+
+// --- userFinderAdapter bridges service.UserService to the UserFinder interface ---
+
+type userFinderAdapter struct {
+	userSvc *service.UserService
+}
+
+func (a *userFinderAdapter) FindByID(id uint) (*GeneralUserInfo, error) {
+	user, err := a.userSvc.GetByIDWithManager(id)
+	if err != nil {
+		return nil, err
+	}
+	info := &GeneralUserInfo{
+		ID:       user.ID,
+		Username: user.Username,
+		Email:    user.Email,
+		Phone:    user.Phone,
+		Avatar:   user.Avatar,
+		RoleID:   user.RoleID,
+	}
+	if user.Role.ID > 0 {
+		info.RoleName = user.Role.Name
+		info.RoleCode = user.Role.Code
+	}
+	if user.ManagerID != nil {
+		info.ManagerID = user.ManagerID
+		if user.Manager != nil {
+			info.ManagerUsername = user.Manager.Username
+		}
+	}
+	return info, nil
 }

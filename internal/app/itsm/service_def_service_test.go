@@ -41,25 +41,28 @@ func TestServiceDefServiceList_FiltersByEngineType(t *testing.T) {
 	}
 }
 
-func TestServiceDefServiceCreate_RejectsClassicFieldsOnSmartService(t *testing.T) {
+func TestServiceDefServiceCreate_AllowsWorkflowJSONOnSmartService(t *testing.T) {
 	db := newTestDB(t)
 	svc := newServiceDefServiceForTest(t, db)
 	catSvc := newCatalogServiceForTest(t, db)
 
 	root, _ := catSvc.Create("Root", "root", "", "", nil, 10)
-	_, err := svc.Create(&ServiceDefinition{
+	created, err := svc.Create(&ServiceDefinition{
 		Name:         "Smart",
 		Code:         "smart",
 		CatalogID:    root.ID,
 		EngineType:   "smart",
 		WorkflowJSON: JSONField(`{"nodes":[],"edges":[]}`),
 	})
-	if err == nil || err.Error() != "service engine field mismatch" {
-		t.Fatalf("expected service engine field mismatch, got %v", err)
+	if err != nil {
+		t.Fatalf("smart service with workflowJSON should be allowed, got %v", err)
+	}
+	if created.ID == 0 {
+		t.Fatal("expected created service to have ID")
 	}
 }
 
-func TestServiceDefServiceCreate_RejectsSmartFieldsOnClassicService(t *testing.T) {
+func TestServiceDefServiceCreate_RejectsAgentIDOnClassicService(t *testing.T) {
 	db := newTestDB(t)
 	svc := newServiceDefServiceForTest(t, db)
 	catSvc := newCatalogServiceForTest(t, db)
@@ -71,12 +74,11 @@ func TestServiceDefServiceCreate_RejectsSmartFieldsOnClassicService(t *testing.T
 	}
 
 	_, err := svc.Create(&ServiceDefinition{
-		Name:              "Classic",
-		Code:              "classic",
-		CatalogID:         root.ID,
-		EngineType:        "classic",
-		CollaborationSpec: "spec",
-		AgentID:           &agent.ID,
+		Name:       "Classic",
+		Code:       "classic",
+		CatalogID:  root.ID,
+		EngineType: "classic",
+		AgentID:    &agent.ID,
 	})
 	if err == nil || err.Error() != "service engine field mismatch" {
 		t.Fatalf("expected service engine field mismatch, got %v", err)

@@ -25,6 +25,9 @@ type AgentGateway struct {
 	providerRepo *ProviderRepo
 	encKey     crypto.EncryptionKey
 
+	// Tool registries for building CompositeToolExecutor per session
+	toolRegistries []ToolHandlerRegistry
+
 	// Active execution contexts, keyed by session ID
 	mu         sync.Mutex
 	executions map[uint]context.CancelFunc
@@ -32,14 +35,15 @@ type AgentGateway struct {
 
 func NewAgentGateway(i do.Injector) (*AgentGateway, error) {
 	return &AgentGateway{
-		agentSvc:     do.MustInvoke[*AgentService](i),
-		sessionSvc:   do.MustInvoke[*SessionService](i),
-		memorySvc:    do.MustInvoke[*MemoryService](i),
-		agentRepo:    do.MustInvoke[*AgentRepo](i),
-		modelRepo:    do.MustInvoke[*ModelRepo](i),
-		providerRepo: do.MustInvoke[*ProviderRepo](i),
-		encKey:       do.MustInvoke[crypto.EncryptionKey](i),
-		executions:   make(map[uint]context.CancelFunc),
+		agentSvc:       do.MustInvoke[*AgentService](i),
+		sessionSvc:     do.MustInvoke[*SessionService](i),
+		memorySvc:      do.MustInvoke[*MemoryService](i),
+		agentRepo:      do.MustInvoke[*AgentRepo](i),
+		modelRepo:      do.MustInvoke[*ModelRepo](i),
+		providerRepo:   do.MustInvoke[*ProviderRepo](i),
+		encKey:         do.MustInvoke[crypto.EncryptionKey](i),
+		toolRegistries: collectToolRegistries(i),
+		executions:     make(map[uint]context.CancelFunc),
 	}, nil
 }
 
@@ -145,7 +149,7 @@ func (gw *AgentGateway) Run(ctx context.Context, sessionID uint) (io.ReadCloser,
 	}
 
 	// Select executor
-	executor, err := gw.selectExecutor(agent)
+	executor, err := gw.selectExecutor(agent, sessionID, session.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -259,15 +263,14 @@ func (gw *AgentGateway) Cancel(sessionID uint) {
 	}
 }
 
-func (gw *AgentGateway) selectExecutor(agent *Agent) (Executor, error) {
+func (gw *AgentGateway) selectExecutor(agent *Agent, sessionID, userID uint) (Executor, error) {
 	switch agent.Type {
 	case AgentTypeAssistant:
 		client, err := gw.buildLLMClient(agent)
 		if err != nil {
 			return nil, fmt.Errorf("build LLM client: %w", err)
 		}
-		// TODO: inject real ToolExecutor
-		var toolExec ToolExecutor
+		toolExec := NewCompositeToolExecutor(gw.toolRegistries, sessionID, userID)
 		switch agent.Strategy {
 		case AgentStrategyPlanAndExecute:
 			return NewPlanAndExecuteExecutor(client, toolExec), nil

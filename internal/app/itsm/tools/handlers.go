@@ -11,11 +11,9 @@ import (
 // ToolHandler handles execution of a single tool call.
 type ToolHandler func(ctx context.Context, userID uint, args json.RawMessage) (json.RawMessage, error)
 
-// contextKey is used for storing values in context.
-type contextKey string
-
 // SessionIDKey is the context key for the session ID.
-const SessionIDKey contextKey = "session_id"
+// Uses plain string so the AI tool executor (different package) can inject the same key.
+const SessionIDKey = "ai_session_id"
 
 // ---------------------------------------------------------------------------
 // Session state
@@ -685,7 +683,7 @@ func ticketWithdrawHandler(op ServiceDeskOperator) ToolHandler {
 			return nil, fmt.Errorf("ticket_code is required")
 		}
 		if p.Reason == "" {
-			return nil, fmt.Errorf("reason is required")
+			p.Reason = "用户撤回"
 		}
 
 		if err := op.WithdrawTicket(userID, p.TicketCode, p.Reason); err != nil {

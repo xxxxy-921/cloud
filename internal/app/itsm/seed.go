@@ -773,7 +773,7 @@ const itsmGeneratorSystemPrompt = `你是 ITSM 工作流解析引擎。根据用
 |------|------|--------------|
 | start | 起始节点（有且仅有一个） | label, nodeType |
 | end | 结束节点（至少一个） | label, nodeType |
-| form | 表单填写节点 | label, nodeType, participants |
+| form | 表单填写节点 | label, nodeType, participants, formSchema |
 | approve | 审批节点 | label, nodeType, participants, executionMode(single/parallel/sequential) |
 | process | 人工处理节点 | label, nodeType, participants |
 | action | 自动动作节点（webhook/脚本） | label, nodeType, actionId (关联可用动作) |
@@ -800,6 +800,22 @@ participants 是数组，每个元素：
 当提到部门（如"IT部门"）时，使用 department 类型。
 当提到特定部门中的特定岗位（如"信息部的网络管理员"）时，使用 position_department 类型，设置 department_code 和 position_code。
 当提到具体用户（如"serial-reviewer"）时，使用 user 类型，设置 name。
+
+## 表单字段（formSchema）格式
+
+form 节点必须包含 formSchema，描述该节点需要收集的字段：
+
+{
+  "fields": [
+    { "key": "request_kind", "type": "select", "label": "请求类型", "options": ["VPN新开通", "VPN故障排查", "网络支持"] },
+    { "key": "urgency", "type": "select", "label": "紧急程度", "options": ["低", "中", "高", "紧急"] },
+    { "key": "description", "type": "textarea", "label": "问题描述" },
+    { "key": "contact_phone", "type": "text", "label": "联系电话" }
+  ]
+}
+
+字段 type 可选值：text, textarea, select, number, date, checkbox
+根据协作规范中描述的业务场景，推断合理的表单字段。排他网关 condition 中引用的 form.xxx 字段必须在上游 form 节点的 formSchema.fields 中有对应 key。
 
 ## 排他网关（exclusive）条件格式
 

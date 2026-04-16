@@ -83,12 +83,17 @@ export function NodePropertyPanel({ node, serviceId, onClose }: NodePanelProps) 
         </div>
       )}
 
-      {/* Form binding */}
+      {/* Form binding (classic mode) */}
       {hasFormBinding && (
         <FormBindingPicker
           formDefinitionId={data.formDefinitionId}
           onChange={(id, schema) => updateData({ formDefinitionId: id, formSchema: schema })}
         />
+      )}
+
+      {/* Inline formSchema read-only display (smart mode / LLM-generated) */}
+      {hasFormBinding && !data.formDefinitionId && data.formSchema != null && (
+        <InlineFormSchemaView schema={data.formSchema} />
       )}
 
       {/* Action picker */}
@@ -175,6 +180,45 @@ export function NodePropertyPanel({ node, serviceId, onClose }: NodePanelProps) 
           <Trash2 className="mr-1.5 h-3.5 w-3.5" />{t("workflow.prop.deleteNode")}
         </Button>
       )}
+    </div>
+  )
+}
+
+// ─── Inline FormSchema (read-only, smart mode) ─────────
+
+interface FormSchemaField {
+  key: string
+  type: string
+  label: string
+  options?: string[]
+}
+
+function parseInlineFields(schema: unknown): FormSchemaField[] {
+  if (!schema || typeof schema !== "object") return []
+  const s = schema as { fields?: FormSchemaField[] }
+  return Array.isArray(s.fields) ? s.fields : []
+}
+
+const FIELD_TYPE_LABELS: Record<string, string> = {
+  text: "文本", textarea: "多行文本", select: "选择", number: "数字", date: "日期", checkbox: "复选",
+}
+
+function InlineFormSchemaView({ schema }: { schema: unknown }) {
+  const { t } = useTranslation("itsm")
+  const fields = parseInlineFields(schema)
+  if (fields.length === 0) return null
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs">{t("workflow.prop.formFields")} ({fields.length})</Label>
+      <div className="rounded border p-1.5 space-y-0.5">
+        {fields.map((f) => (
+          <div key={f.key} className="flex items-center justify-between text-[10px]">
+            <span>{f.label || f.key}</span>
+            <span className="text-muted-foreground">{FIELD_TYPE_LABELS[f.type] ?? f.type}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

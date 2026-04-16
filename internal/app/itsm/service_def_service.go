@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -175,11 +174,11 @@ func (s *ServiceDefService) validateCatalogID(catalogID uint) error {
 func (s *ServiceDefService) validateEngineFields(engineType string, formID *uint, workflowJSON JSONField, collaborationSpec string, agentID *uint) error {
 	switch engineType {
 	case "classic":
-		if strings.TrimSpace(collaborationSpec) != "" || agentID != nil {
+		if agentID != nil {
 			return ErrServiceEngineMismatch
 		}
 	case "smart":
-		if formID != nil || len(workflowJSON) > 0 {
+		if formID != nil {
 			return ErrServiceEngineMismatch
 		}
 	}

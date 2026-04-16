@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Trash2, User, Building2, Briefcase, UserCheck } from "lucide-react"
+import { Plus, Trash2, User, Building2, Briefcase, UserCheck, Users } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Participant } from "../types"
 
@@ -39,13 +39,23 @@ const PARTICIPANT_TYPES = [
   { value: "user", icon: User, label: "workflow.participant.user" },
   { value: "position", icon: Briefcase, label: "workflow.participant.position" },
   { value: "department", icon: Building2, label: "workflow.participant.department" },
+  { value: "position_department", icon: Users, label: "workflow.participant.positionDepartment" },
   { value: "requester_manager", icon: UserCheck, label: "workflow.participant.requesterManager" },
 ] as const
+
+function formatParticipantLabel(p: Participant): string {
+  if (p.type === "position_department") {
+    const parts = [p.department_code, p.position_code].filter(Boolean)
+    if (parts.length > 0) return parts.join(" / ")
+  }
+  return p.name ?? p.value ?? p.type
+}
 
 export function ParticipantPicker({ participants, onChange }: ParticipantPickerProps) {
   const { t } = useTranslation("itsm")
   const [addingType, setAddingType] = useState<string>("")
   const [userKeyword, setUserKeyword] = useState("")
+  const [pdDeptCode, setPdDeptCode] = useState("")
 
   const { data: users } = useQuery({
     queryKey: ["users-search", userKeyword],
@@ -57,14 +67,14 @@ export function ParticipantPicker({ participants, onChange }: ParticipantPickerP
   const { data: positions } = useQuery({
     queryKey: ["org-positions"],
     queryFn: () => api.get<{ items: PositionItem[] }>("/api/v1/org/positions?pageSize=0").then((r) => r.items),
-    enabled: addingType === "position",
+    enabled: addingType === "position" || addingType === "position_department",
     staleTime: 60_000,
   })
 
   const { data: departments } = useQuery({
     queryKey: ["org-departments-tree"],
     queryFn: () => api.get<{ items: DeptTreeNode[] }>("/api/v1/org/departments/tree").then((r) => r.items),
-    enabled: addingType === "department",
+    enabled: addingType === "department" || addingType === "position_department",
     staleTime: 60_000,
   })
 
@@ -72,6 +82,7 @@ export function ParticipantPicker({ participants, onChange }: ParticipantPickerP
     onChange([...participants, p])
     setAddingType("")
     setUserKeyword("")
+    setPdDeptCode("")
   }
 
   function removeParticipant(index: number) {
@@ -81,6 +92,10 @@ export function ParticipantPicker({ participants, onChange }: ParticipantPickerP
   function handleTypeSelect(type: string) {
     if (type === "requester_manager") {
       addParticipant({ type: "requester_manager", name: t("workflow.participant.requesterManager") })
+      return
+    }
+    if (type === "position_department") {
+      setAddingType("position_department")
       return
     }
     setAddingType(type)
@@ -98,7 +113,7 @@ export function ParticipantPicker({ participants, onChange }: ParticipantPickerP
             <div key={i} className="flex items-center justify-between rounded border px-2 py-1">
               <div className="flex items-center gap-1.5">
                 <Badge variant="outline" className="text-[10px]">{p.type}</Badge>
-                <span className="text-xs">{p.name ?? p.value ?? p.type}</span>
+                <span className="text-xs">{formatParticipantLabel(p)}</span>
               </div>
               <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => removeParticipant(i)}>
                 <Trash2 size={12} />
@@ -192,6 +207,50 @@ export function ParticipantPicker({ participants, onChange }: ParticipantPickerP
             ))}
           </div>
           <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setAddingType("")}>
+            {t("common.cancel")}
+          </Button>
+        </div>
+      ) : addingType === "position_department" ? (
+        <div className="space-y-1">
+          {!pdDeptCode ? (
+            <>
+              <Label className="text-[11px] text-muted-foreground">{t("workflow.participant.department")}</Label>
+              <div className="max-h-32 overflow-y-auto rounded border">
+                {flatDepts.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-muted"
+                    style={{ paddingLeft: `${(d.depth ?? 0) * 12 + 8}px` }}
+                    onClick={() => setPdDeptCode(d.code)}
+                  >
+                    <Building2 size={12} />
+                    <span>{d.name}</span>
+                    <span className="text-muted-foreground">{d.code}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <Label className="text-[11px] text-muted-foreground">{t("workflow.participant.position")}</Label>
+              <div className="max-h-32 overflow-y-auto rounded border">
+                {(positions ?? []).map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-muted"
+                    onClick={() => addParticipant({ type: "position_department", department_code: pdDeptCode, position_code: p.code })}
+                  >
+                    <Briefcase size={12} />
+                    <span>{p.name}</span>
+                    <span className="text-muted-foreground">{p.code}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => { setAddingType(""); setPdDeptCode("") }}>
             {t("common.cancel")}
           </Button>
         </div>

@@ -90,3 +90,10 @@ type AIKnowledgeResult struct {
 type AIToolRegistry interface {
 	RegisterTool(toolkit, name, displayName, description string, parametersSchema string) (uint, error)
 }
+
+// ToolRegistryProvider is an optional interface an App can implement
+// to provide a tool handler registry for AI agent tool dispatch.
+// The returned value must satisfy ai.ToolHandlerRegistry.
+type ToolRegistryProvider interface {
+	GetToolRegistry() any
+}

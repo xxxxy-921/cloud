@@ -107,10 +107,33 @@ export function toConditionGroup(c: GatewayCondition | ConditionGroup | undefine
   return { logic: "and", conditions: [{ field: c.field, operator: c.operator, value: c.value }] }
 }
 
+const OP_LABELS: Record<string, string> = {
+  equals: "=", not_equals: "≠", contains_any: "∈",
+  gt: ">", lt: "<", gte: "≥", lte: "≤",
+  is_empty: "为空", is_not_empty: "非空",
+}
+
+function shortField(f: string): string {
+  return f.replace(/^form\./, "")
+}
+
+function shortValue(v: unknown): string {
+  const s = String(v ?? "")
+  return s.length > 16 ? `${s.slice(0, 16)}…` : s
+}
+
+function formatSingleCondition(c: { field: string; operator: string; value: unknown }): string {
+  const op = OP_LABELS[c.operator] ?? c.operator
+  if (c.operator === "is_empty" || c.operator === "is_not_empty") {
+    return `${shortField(c.field)} ${op}`
+  }
+  return `${shortField(c.field)} ${op} ${shortValue(c.value)}`
+}
+
 export function conditionSummary(c: GatewayCondition | ConditionGroup | undefined): string {
   if (!c) return ""
-  if (!isConditionGroup(c)) return `${c.field} ${c.operator} ${String(c.value)}`
+  if (!isConditionGroup(c)) return formatSingleCondition(c)
   return c.conditions
-    .map((item) => isConditionGroup(item) ? `(${conditionSummary(item)})` : `${item.field} ${item.operator} ${String(item.value)}`)
-    .join(` ${c.logic.toUpperCase()} `)
+    .map((item) => isConditionGroup(item) ? `(${conditionSummary(item)})` : formatSingleCondition(item))
+    .join(c.logic === "and" ? " 且 " : " 或 ")
 }

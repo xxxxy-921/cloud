@@ -12,6 +12,7 @@ import (
 
 	"metis/internal/app"
 	"metis/internal/app/itsm/engine"
+	"metis/internal/app/itsm/tools"
 	"metis/internal/database"
 	"metis/internal/model"
 	"metis/internal/repository"
@@ -28,6 +29,11 @@ type ITSMApp struct {
 }
 
 func (a *ITSMApp) Name() string { return "itsm" }
+
+// GetToolRegistry implements app.ToolRegistryProvider.
+func (a *ITSMApp) GetToolRegistry() any {
+	return do.MustInvoke[*tools.Registry](a.injector)
+}
 
 func (a *ITSMApp) Models() []any {
 	return []any{
@@ -153,6 +159,22 @@ func (a *ITSMApp) Providers(i do.Injector) {
 	do.Provide(i, NewWorkflowGenerateHandler)
 	do.Provide(i, NewVariableHandler)
 	do.Provide(i, NewTokenHandler)
+
+	// ITSM tool chain (Operator, StateStore, Registry)
+	do.Provide(i, func(i do.Injector) (*tools.Operator, error) {
+		db := do.MustInvoke[*database.DB](i)
+		resolver := do.MustInvoke[*engine.ParticipantResolver](i)
+		return tools.NewOperator(db.DB, resolver), nil
+	})
+	do.Provide(i, func(i do.Injector) (*tools.SessionStateStore, error) {
+		db := do.MustInvoke[*database.DB](i)
+		return tools.NewSessionStateStore(db.DB), nil
+	})
+	do.Provide(i, func(i do.Injector) (*tools.Registry, error) {
+		op := do.MustInvoke[*tools.Operator](i)
+		store := do.MustInvoke[*tools.SessionStateStore](i)
+		return tools.NewRegistry(op, store), nil
+	})
 }
 
 func (a *ITSMApp) Routes(api *gin.RouterGroup) {
@@ -325,6 +347,9 @@ var _ engine.WorkflowEngine = (*engine.ClassicEngine)(nil)
 
 // Ensure SmartEngine implements engine.WorkflowEngine at compile time
 var _ engine.WorkflowEngine = (*engine.SmartEngine)(nil)
+
+// Ensure ITSMApp implements app.ToolRegistryProvider at compile time
+var _ app.ToolRegistryProvider = (*ITSMApp)(nil)
 
 // Placeholder for background context usage
 var _ = context.Background
