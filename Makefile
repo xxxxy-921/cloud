@@ -92,12 +92,52 @@ push:
 	git commit -m "Update"
 	git push
 
+# gotestsum detection (fallback to go test if not installed)
+GOTESTSUM := $(shell command -v gotestsum 2>/dev/null)
+
 test-llm:
 	@test -f .env.test || (echo "Missing .env.test — copy .env.test.example and fill in values" && exit 1)
 	@export $$(cat .env.test | xargs) && \
 	go test ./internal/app/itsm/ -run TestLLM -v -timeout 120s
 
-.PHONY: web-build web-dev refer-clone dev build release release-license build-license build-sidecar release-sidecar run push test test-license test-fuzz test-llm
+test-pretty:
+ifdef GOTESTSUM
+	gotestsum --format testdox ./...
+else
+	@echo "gotestsum not found, falling back to go test -v"
+	go test -v ./...
+endif
+
+test-cover:
+	-go test ./... -coverprofile=coverage.out -covermode=atomic
+	go tool cover -html=coverage.out -o coverage.html
+	@go tool cover -func=coverage.out | tail -1
+	@echo "Report: coverage.html"
+
+test-report:
+ifdef GOTESTSUM
+	-gotestsum --format testdox --junitfile test-report.xml -- ./... -coverprofile=coverage.out -covermode=atomic
+	go tool cover -html=coverage.out -o coverage.html
+	@go tool cover -func=coverage.out | tail -1
+else
+	@echo "gotestsum not found, falling back to test-cover"
+	$(MAKE) test-cover
+endif
+
+test-llm-report:
+	@test -f .env.test || (echo "Missing .env.test — copy .env.test.example and fill in values" && exit 1)
+ifdef GOTESTSUM
+	@export $$(cat .env.test | xargs) && \
+	gotestsum --format testdox --junitfile test-llm-report.xml -- ./internal/app/itsm/ -run TestLLM -v -timeout 120s
+else
+	@export $$(cat .env.test | xargs) && \
+	go test ./internal/app/itsm/ -run TestLLM -v -timeout 120s
+endif
+
+test-bdd:
+	go test ./internal/app/itsm/ -run TestBDD -v
+
+.PHONY: web-build web-dev refer-clone dev build release release-license build-license build-sidecar release-sidecar run push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-bdd
 
 # Backward-compat aliases
 license: build-license

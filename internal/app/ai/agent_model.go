@@ -211,23 +211,29 @@ type AgentSession struct {
 	UserID  uint   `json:"userId" gorm:"not null;index"`
 	Status  string `json:"status" gorm:"size:16;not null;default:running"`
 	Title   string `json:"title" gorm:"size:256"`
-	Pinned  bool   `json:"pinned" gorm:"not null;default:false"`
+	Pinned  bool           `json:"pinned" gorm:"not null;default:false"`
+	State   model.JSONText `json:"state" gorm:"type:text"`
 }
 
 func (AgentSession) TableName() string { return "ai_agent_sessions" }
 
 type AgentSessionResponse struct {
-	ID        uint      `json:"id"`
-	AgentID   uint      `json:"agentId"`
-	UserID    uint      `json:"userId"`
-	Status    string    `json:"status"`
-	Title     string    `json:"title"`
-	Pinned    bool      `json:"pinned"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID        uint            `json:"id"`
+	AgentID   uint            `json:"agentId"`
+	UserID    uint            `json:"userId"`
+	Status    string          `json:"status"`
+	Title     string          `json:"title"`
+	Pinned    bool            `json:"pinned"`
+	State     json.RawMessage `json:"state,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
 func (s *AgentSession) ToResponse() AgentSessionResponse {
+	var state json.RawMessage
+	if len(s.State) > 0 {
+		state = json.RawMessage(s.State)
+	}
 	return AgentSessionResponse{
 		ID:        s.ID,
 		AgentID:   s.AgentID,
@@ -235,6 +241,7 @@ func (s *AgentSession) ToResponse() AgentSessionResponse {
 		Status:    s.Status,
 		Title:     s.Title,
 		Pinned:    s.Pinned,
+		State:     state,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
 	}

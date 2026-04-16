@@ -308,6 +308,46 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 			}`),
 			IsActive: false,
 		},
+		{
+			Toolkit:     "general",
+			Name:        "general.current_time",
+			DisplayName: "获取当前时间",
+			Description: "获取当前时间。支持传入标准 IANA 时区名（如 Asia/Shanghai），返回服务端时间、UTC 时间、中国时间和目标时区时间。",
+			ParametersSchema: model.JSONText(`{
+				"type": "object",
+				"properties": {
+					"timezone": {"type": "string", "description": "IANA 时区名（如 Asia/Shanghai），可选"}
+				}
+			}`),
+			IsActive: true,
+		},
+		{
+			Toolkit:     "general",
+			Name:        "system.current_user_profile",
+			DisplayName: "获取当前用户信息",
+			Description: "读取当前提单用户的基础资料和组织归属（部门、岗位、角色），帮助服务台用已有信息补齐提单上下文。",
+			ParametersSchema: model.JSONText(`{
+				"type": "object",
+				"properties": {}
+			}`),
+			IsActive: true,
+		},
+		{
+			Toolkit:     "general",
+			Name:        "organization.org_context",
+			DisplayName: "组织架构查询",
+			Description: "读取人员、部门、岗位关系信息，用于流程决策和参与者解析。支持按用户名、部门代码、岗位代码筛选。",
+			ParametersSchema: model.JSONText(`{
+				"type": "object",
+				"properties": {
+					"username": {"type": "string", "description": "按用户名查询"},
+					"department_code": {"type": "string", "description": "按部门代码筛选"},
+					"position_code": {"type": "string", "description": "按岗位代码筛选"},
+					"include_inactive": {"type": "boolean", "description": "是否包含停用记录，默认 false"}
+				}
+			}`),
+			IsActive: true,
+		},
 	}
 	for _, tool := range builtinTools {
 		var existing Tool
