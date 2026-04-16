@@ -78,12 +78,11 @@ export function KnowledgeBaseForm({ open, onOpenChange, knowledgeBase }: Knowled
   const schema = useKnowledgeBaseSchema()
 
   // Fetch providers
-  const { data: providersData } = useQuery({
+  const { data: providers = [] } = useQuery({
     queryKey: ["ai-providers"],
-    queryFn: () => api.get<PaginatedResponse<ProviderOption>>("/api/v1/ai/providers?pageSize=100"),
+    queryFn: () => api.get<PaginatedResponse<ProviderOption>>("/api/v1/ai/providers?pageSize=100").then((r) => r?.items ?? []),
     enabled: open,
   })
-  const providers = providersData?.items ?? []
 
   // For edit mode: resolve the provider from the selected compile model
   const { data: editModelDetail } = useQuery({

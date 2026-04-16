@@ -86,12 +86,11 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
   const selectedProviderId = useWatch({ control: form.control, name: "providerId" }) ?? ""
 
   // Fetch providers
-  const { data: providersData } = useQuery({
+  const { data: providers = [] } = useQuery({
     queryKey: ["ai-providers"],
-    queryFn: () => api.get<PaginatedResponse<ProviderItem>>("/api/v1/ai/providers?pageSize=100"),
+    queryFn: () => api.get<PaginatedResponse<ProviderItem>>("/api/v1/ai/providers?pageSize=100").then((r) => r?.items ?? []),
     enabled: open,
   })
-  const providers = providersData?.items ?? []
 
   // For edit mode: resolve provider from the agent's modelId
   const { data: editModelDetail } = useQuery({
@@ -102,12 +101,11 @@ export function AgentSheet({ open, onOpenChange, agent }: AgentSheetProps) {
   const editProviderId = editModelDetail?.providerId ? String(editModelDetail.providerId) : ""
 
   // Fetch LLM models filtered by selected provider
-  const { data: modelsData } = useQuery({
-    queryKey: ["ai-models-llm", selectedProviderId],
-    queryFn: () => api.get<PaginatedResponse<ModelItem>>(`/api/v1/ai/models?type=llm&providerId=${selectedProviderId}&pageSize=100`),
+  const { data: models = [] } = useQuery({
+    queryKey: ["ai-models", selectedProviderId],
+    queryFn: () => api.get<PaginatedResponse<ModelItem>>(`/api/v1/ai/models?type=llm&providerId=${selectedProviderId}&pageSize=100`).then((r) => r?.items ?? []),
     enabled: open && selectedProviderId !== "",
   })
-  const models = modelsData?.items ?? []
 
   function handleProviderChange(value: string) {
     form.setValue("providerId", value)

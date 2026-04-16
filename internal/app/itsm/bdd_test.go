@@ -2,18 +2,9 @@ package itsm
 
 // bdd_test.go — godog BDD test suite entry point for ITSM.
 //
-// This file configures the godog test suite to run Gherkin .feature files
-// from the features/ directory. Scenarios tagged @wip are excluded by default.
-//
 // Run BDD tests:
 //   go test ./internal/app/itsm/ -run TestBDD -v
 //   make test-bdd
-//
-// Future feature files will cover:
-//   - Classic engine workflow execution (token progression, gateways)
-//   - Smart engine agent-driven ticket handling
-//   - Workflow generation via LLM pipeline
-//   - SLA enforcement and escalation
 
 import (
 	"context"
@@ -47,10 +38,7 @@ func initializeScenario(sc *godog.ScenarioContext) {
 		return ctx, nil
 	})
 
-	// Step definitions will be registered here as features are added.
-	// Example:
-	//   sc.Given(`^一个服务定义 "([^"]*)" 使用经典引擎$`, bc.givenServiceWithClassicEngine)
-	//   sc.When(`^用户创建工单$`, bc.whenUserCreatesTicket)
-	//   sc.Then(`^工单状态为 "([^"]*)"$`, bc.thenTicketStatusIs)
-	_ = bc
+	// Common Given steps
+	sc.Given(`^已完成系统初始化$`, bc.givenSystemInitialized)
+	sc.Given(`^已准备好以下参与人、岗位与职责$`, bc.givenParticipants)
 }

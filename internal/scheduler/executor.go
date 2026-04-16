@@ -70,7 +70,7 @@ func (e *executor) run(exec *model.TaskExecution) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	slog.Info("scheduler: executing task", "task", exec.TaskName, "trigger", exec.Trigger, "execId", exec.ID)
+	slog.Debug("scheduler: executing task", "task", exec.TaskName, "trigger", exec.Trigger, "execId", exec.ID)
 
 	err := taskDef.Handler(ctx, json.RawMessage(exec.Payload))
 
@@ -100,7 +100,7 @@ func (e *executor) run(exec *model.TaskExecution) {
 				if enqErr := e.store.Enqueue(context.Background(), retry); enqErr != nil {
 					slog.Error("scheduler: failed to enqueue retry", "task", exec.TaskName, "error", enqErr)
 				} else {
-					slog.Info("scheduler: retrying task", "task", exec.TaskName, "retry", retry.RetryCount)
+					slog.Debug("scheduler: retrying task", "task", exec.TaskName, "retry", retry.RetryCount)
 				}
 			}
 			exec.Status = ExecFailed
@@ -109,7 +109,7 @@ func (e *executor) run(exec *model.TaskExecution) {
 		slog.Error("scheduler: task failed", "task", exec.TaskName, "status", exec.Status, "error", exec.Error)
 	} else {
 		exec.Status = ExecCompleted
-		slog.Info("scheduler: task completed", "task", exec.TaskName, "execId", exec.ID)
+		slog.Debug("scheduler: task completed", "task", exec.TaskName, "execId", exec.ID)
 	}
 
 	if updErr := e.store.UpdateExecution(context.Background(), exec); updErr != nil {

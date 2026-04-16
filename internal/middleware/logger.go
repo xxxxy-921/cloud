@@ -7,6 +7,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var silentPaths = map[string]bool{
+	"/api/v1/notifications/unread-count": true,
+}
+
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -14,6 +18,10 @@ func Logger() gin.HandlerFunc {
 		raw := c.Request.URL.RawQuery
 
 		c.Next()
+
+		if silentPaths[path] {
+			return
+		}
 
 		if raw != "" {
 			path = path + "?" + raw
