@@ -69,6 +69,7 @@
     "@rolldown/plugin-babel": "^0.2.2",
     "@tailwindcss/vite": "^4.2.2",
     "@types/babel__core": "^7.20.5",
+    "@types/dagre": "^0.7.54",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

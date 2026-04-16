@@ -1,0 +1,96 @@
+name: Docker Release
+
+on:
+  push:
+    tags:
+      - 'license/v*'
+      # 新增 edition 只需加行:
+      # - 'server/v*'
+      # - 'sidecar/v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          EDITION="${TAG%%/*}"
+          VERSION="${TAG#*/}"
+          echo "edition=$EDITION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Parsed: edition=$EDITION, version=$VERSION"
+
+      - name: Resolve build params
+        id: params
+        run: |
+          case "${{ steps.parse.outputs.edition }}" in
+            license)
+              echo "build_tag=edition_license"   >> "$GITHUB_OUTPUT"
+              echo "apps=system,license"          >> "$GITHUB_OUTPUT"
+              echo "cmd_path=./cmd/server"        >> "$GITHUB_OUTPUT"
+              ;;
+            server)
+              echo "build_tag="                   >> "$GITHUB_OUTPUT"
+              echo "apps="                        >> "$GITHUB_OUTPUT"
+              echo "cmd_path=./cmd/server"        >> "$GITHUB_OUTPUT"
+              ;;
+            sidecar)
+              echo "build_tag="                   >> "$GITHUB_OUTPUT"
+              echo "apps="                        >> "$GITHUB_OUTPUT"
+              echo "cmd_path=./cmd/sidecar"       >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unknown edition: ${{ steps.parse.outputs.edition }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ steps.parse.outputs.edition }}
+          tags: |
+            type=match,pattern=\w+/v(.*),group=1
+            type=raw,value=latest
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            EDITION=${{ steps.params.outputs.build_tag }}
+            APPS=${{ steps.params.outputs.apps }}
+            BINARY_NAME=${{ steps.parse.outputs.edition }}
+            CMD_PATH=${{ steps.params.outputs.cmd_path }}
+            VERSION=${{ steps.parse.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
