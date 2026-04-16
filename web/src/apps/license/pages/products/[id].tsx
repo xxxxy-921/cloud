@@ -233,7 +233,7 @@ export function Component() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {canUpdate && actions.map((action) => {
+          {canUpdate && actions.map((action: any) => {
             const ActionIcon = action.icon
             const actionLabel = t(`license:${action.labelKey}`)
             return (

@@ -178,7 +178,7 @@ export function Component() {
                           variant={statusStyle.variant}
                           className={statusStyle.className}
                         >
-                          {t(`license:status.${statusKey}`, item.status)}
+                          {t(`license:status.${String(statusKey)}`, item.status)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right text-sm tabular-nums">{item.planCount}</TableCell>
