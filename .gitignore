@@ -35,3 +35,4 @@ server
 sidecar
 !cmd/server
 !cmd/sidecar
+!internal/sidecar
