@@ -2,7 +2,7 @@
 
 ## Group 1: Shared Components
 
-- [ ] 1. Create `agents/components/binding-checkbox-list.tsx` — reusable BindingCheckboxList component with title, scrollable checkbox list, useQuery data fetching, loading/empty states
+- [x] 1. Create `agents/components/binding-checkbox-list.tsx` — reusable BindingCheckboxList component with title, scrollable checkbox list, useQuery data fetching, loading/empty states
 - [ ] 2. Create `agents/components/agent-form.tsx` — shared AgentForm component with 5 Card sections (basic info, model config, runtime config, tool bindings, prompts). Accept optional `agent?: AgentWithBindings` prop for edit mode. Include provider→model cascade, type-conditional sections, Zod schema validation, binding checkbox lists in 2x2 grid
 
 ## Group 2: Create & Edit Pages

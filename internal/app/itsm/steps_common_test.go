@@ -34,9 +34,10 @@ type bddContext struct {
 	departments map[string]*org.Department // key = department code
 
 	// Ticket lifecycle (populated by When steps, asserted by Then steps)
-	service *ServiceDefinition
-	ticket  *Ticket
-	tickets map[string]*Ticket // multi-ticket scenarios, key = alias
+	service  *ServiceDefinition
+	priority *Priority
+	ticket   *Ticket
+	tickets  map[string]*Ticket // multi-ticket scenarios, key = alias
 }
 
 func newBDDContext() *bddContext {
@@ -47,6 +48,7 @@ func newBDDContext() *bddContext {
 func (bc *bddContext) reset() {
 	bc.lastErr = nil
 	bc.service = nil
+	bc.priority = nil
 	bc.ticket = nil
 	bc.users = make(map[string]*model.User)
 	bc.usersByName = make(map[string]*model.User)

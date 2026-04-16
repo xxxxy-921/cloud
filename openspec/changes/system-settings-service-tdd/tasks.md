@@ -27,5 +27,5 @@
 
 ## 5. Verification
 
-- [ ] 5.1 Run `go test ./internal/service/ -run TestSettingsService -v` and ensure all tests pass.
-- [ ] 5.2 Run `go test ./...` to confirm no regressions.
+- [x] 5.1 Run `go test ./internal/service/ -run TestSettingsService -v` and ensure all tests pass.
+- [x] 5.2 Run `go test ./...` to confirm no regressions.
