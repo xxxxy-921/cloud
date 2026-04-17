@@ -52,7 +52,7 @@ func main() {
 
 	configPath := flag.String("config", "config.yml", "path to config file")
 	host := flag.String("host", "0.0.0.0", "server host")
-	port := flag.String("port", "8000", "server port")
+	port := flag.String("port", "8080", "server port")
 	flag.Parse()
 
 	// 1. Try to load config
@@ -248,7 +248,7 @@ func main() {
 			serverPort = portCfg.Value
 		}
 		// CLI port flag overrides DB config if explicitly set
-		if p := flag.Lookup("port"); p != nil && p.Value.String() != "8000" {
+		if p := flag.Lookup("port"); p != nil && p.Value.String() != "8080" {
 			serverPort = *port
 		}
 

@@ -41,7 +41,7 @@ func (s *ServiceDefService) Create(svc *ServiceDefinition) (*ServiceDefinition, 
 	if err := s.validateCatalogID(svc.CatalogID); err != nil {
 		return nil, err
 	}
-	if err := s.validateEngineFields(svc.EngineType, svc.FormID, svc.WorkflowJSON, svc.CollaborationSpec, svc.AgentID); err != nil {
+	if err := s.validateEngineFields(svc.EngineType, svc.WorkflowJSON, svc.CollaborationSpec, svc.AgentID); err != nil {
 		return nil, err
 	}
 	if err := s.validateAgent(svc.AgentID); err != nil {
@@ -96,10 +96,6 @@ func (s *ServiceDefService) Update(id uint, updates map[string]any) (*ServiceDef
 	if et, ok := updates["engine_type"].(string); ok {
 		engineType = et
 	}
-	formID := existing.FormID
-	if v, ok := updates["form_id"].(uint); ok {
-		formID = &v
-	}
 	workflowJSON := existing.WorkflowJSON
 	if v, ok := updates["workflow_json"].(JSONField); ok {
 		workflowJSON = v
@@ -112,7 +108,7 @@ func (s *ServiceDefService) Update(id uint, updates map[string]any) (*ServiceDef
 	if v, ok := updates["agent_id"].(uint); ok {
 		agentID = &v
 	}
-	if err := s.validateEngineFields(engineType, formID, workflowJSON, collaborationSpec, agentID); err != nil {
+	if err := s.validateEngineFields(engineType, workflowJSON, collaborationSpec, agentID); err != nil {
 		return nil, err
 	}
 	if err := s.validateAgent(agentID); err != nil {
@@ -171,7 +167,7 @@ func (s *ServiceDefService) validateCatalogID(catalogID uint) error {
 	return nil
 }
 
-func (s *ServiceDefService) validateEngineFields(engineType string, formID *uint, workflowJSON JSONField, collaborationSpec string, agentID *uint) error {
+func (s *ServiceDefService) validateEngineFields(engineType string, workflowJSON JSONField, collaborationSpec string, agentID *uint) error {
 	switch engineType {
 	case "classic":
 		if agentID != nil && *agentID != 0 {

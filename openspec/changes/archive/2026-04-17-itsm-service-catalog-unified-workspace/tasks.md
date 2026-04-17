@@ -29,4 +29,4 @@
 
 - [x] 5.1 Remove `pages/catalogs/index.tsx` and `pages/services/create/index.tsx`
 - [x] 5.2 Update `web/src/apps/itsm/module.ts`: remove `/itsm/catalogs` route, remove `/itsm/services/create` route, add redirect from `/itsm/catalogs` to `/itsm/services`
-- [ ] 5.3 Update ITSM seed (`internal/app/itsm/seed.go`): remove "服务目录" menu item from seed sync, keep "服务定义" menu unchanged
+- [x] 5.3 Update ITSM seed (`internal/app/itsm/seed.go`): remove "服务目录" menu item from seed sync, keep "服务定义" menu unchanged

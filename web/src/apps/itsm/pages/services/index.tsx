@@ -27,7 +27,7 @@ import {
   fetchCatalogTree, fetchServiceDefs, createServiceDef, deleteServiceDef,
 } from "../../api"
 import { CatalogNavPanel } from "../../components/catalog-nav-panel"
-import { ServiceCard, GuideCard } from "../../components/service-card"
+import { ServiceCard } from "../../components/service-card"
 
 // ─── Create Schema ─────────────────────────────────────
 
@@ -118,7 +118,7 @@ export function Component() {
     queryFn: () => fetchServiceDefs({ pageSize: 100 }),
   })
 
-  const allServices = servicesData?.items ?? []
+  const allServices = useMemo(() => servicesData?.items ?? [], [servicesData])
 
   // ── Derived data ─────────────────────────────────────
 
@@ -177,9 +177,9 @@ export function Component() {
   // ── Render ───────────────────────────────────────────
 
   return (
-    <div className="space-y-4">
+    <div className="flex h-[calc(100vh-theme(spacing.14)-theme(spacing.12))] flex-col">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex shrink-0 items-center justify-between pb-4">
         <h2 className="text-lg font-semibold">{t("itsm:services.title")}</h2>
         {canCreateService && (
           <Button onClick={() => setCreateOpen(true)}>
@@ -189,7 +189,7 @@ export function Component() {
       </div>
 
       {/* Workspace: nav + grid */}
-      <div className="flex gap-4 items-start">
+      <div className="flex min-h-0 flex-1 gap-4">
         <CatalogNavPanel
           catalogs={catalogs}
           services={allServices}
@@ -200,7 +200,7 @@ export function Component() {
           canDelete={canDeleteCatalog}
         />
 
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 overflow-y-auto">
           {servicesLoading ? (
             <div className="flex items-center justify-center py-20">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -223,7 +223,7 @@ export function Component() {
                   return (
                     <div key={root.id}>
                       <h3 className="mb-3 text-sm font-medium text-muted-foreground">{root.name}</h3>
-                      <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-4">
+                      <div className="grid grid-cols-3 gap-4">
                         {group.map((svc) => (
                           <ServiceCard
                             key={svc.id}
@@ -237,12 +237,6 @@ export function Component() {
                     </div>
                   )
                 })}
-                {/* Global guide card at the end when some services exist */}
-                {allServices.length > 0 && canCreateService && (
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-4">
-                    <GuideCard onClick={() => setCreateOpen(true)} />
-                  </div>
-                )}
                 {allServices.length === 0 && (
                   <EmptyState
                     icon={Cog}
@@ -265,7 +259,7 @@ export function Component() {
                 actionLabel={t("itsm:services.addService")}
               />
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 {filteredServices.map((svc) => (
                   <ServiceCard
                     key={svc.id}
@@ -275,9 +269,6 @@ export function Component() {
                     onDelete={(id) => deleteMut.mutate(id)}
                   />
                 ))}
-                {canCreateService && (
-                  <GuideCard onClick={() => setCreateOpen(true)} />
-                )}
               </div>
             )
           )}

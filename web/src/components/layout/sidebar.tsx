@@ -94,23 +94,26 @@ export function Sidebar() {
   const navApps = useMemo(() => buildNavApps(menuTree), [menuTree])
   const activeApp = useMemo(() => findActiveNavApp(navApps, pathname), [navApps, pathname])
 
-  const visibleItems = activeApp?.children ?? []
+  const visibleItems = useMemo(() => activeApp?.children ?? [], [activeApp])
   const menuGroups = useMemo(
     () => (activeApp ? getMenuGroups(activeApp.permission) : undefined),
     [activeApp],
   )
 
-  const groupedItems = useMemo(() => {
-    if (!menuGroups || menuGroups.length === 0) return null
+  const sections = useMemo(() => {
+    if (!menuGroups || menuGroups.length === 0) {
+      return [{ label: null as string | null, items: visibleItems }]
+    }
     const allGrouped = new Set(menuGroups.flatMap((g) => g.items))
     const groups = menuGroups
       .map((group) => ({
-        label: group.label,
+        label: group.label as string | null,
         items: visibleItems.filter((item) => group.items.includes(item.permission)),
       }))
       .filter((g) => g.items.length > 0)
     const ungrouped = visibleItems.filter((item) => !allGrouped.has(item.permission))
-    return { groups, ungrouped }
+    if (ungrouped.length > 0) groups.push({ label: null, items: ungrouped })
+    return groups
   }, [menuGroups, visibleItems])
 
   return (
@@ -169,27 +172,34 @@ export function Sidebar() {
           collapsed ? "w-0 px-0" : "w-40 px-2",
         )}
       >
-        {groupedItems
-          ? (
-              <>
-                {groupedItems.groups.map((group, gi) => (
-                  <div key={group.label} className={gi > 0 ? "pt-2" : undefined}>
-                    <div className="px-3 pb-1 text-[11px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
-                      {t(`menuGroup.${group.label}`, { ns: activeApp?.permission, defaultValue: group.label, nsSeparator: false })}
-                    </div>
-                    {group.items.map((item) => (
-                      <NavItem key={item.id} item={item} pathname={pathname} navigate={navigate} t={t} />
-                    ))}
-                  </div>
-                ))}
-                {groupedItems.ungrouped.map((item) => (
-                  <NavItem key={item.id} item={item} pathname={pathname} navigate={navigate} t={t} />
-                ))}
-              </>
-            )
-          : visibleItems.map((item) => (
-              <NavItem key={item.id} item={item} pathname={pathname} navigate={navigate} t={t} />
-            ))}
+        {sections.map((section, si) => (
+          <div key={section.label ?? "ungrouped"} className={section.label && si > 0 ? "pt-2" : undefined}>
+            {section.label && (
+              <div className="px-3 pb-1 text-[11px] font-semibold tracking-wider text-muted-foreground/60 uppercase">
+                {t(`menuGroup.${section.label}`, { ns: activeApp?.permission, defaultValue: section.label, nsSeparator: false })}
+              </div>
+            )}
+            {section.items.map((item) => {
+              const Icon = getIcon(item.icon)
+              const isActive = pathname === item.path
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => navigate(item.path || "/")}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors duration-200",
+                    isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                      : "text-sidebar-foreground hover:bg-black/[0.04]",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{t(`menu.${item.permission ?? ""}`, { defaultValue: item.name, nsSeparator: false })}</span>
+                </button>
+              )
+            })}
+          </div>
+        ))}
       </nav>
     </aside>
   )

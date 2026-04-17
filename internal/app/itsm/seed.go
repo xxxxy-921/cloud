@@ -186,20 +186,33 @@ func seedMenus(db *gorm.DB) error {
 		slog.Info("seed: flattened ticket menu directory", "oldId", ticketDir.ID)
 	}
 
-	// 服务目录
-	catalogMenu := seedMenu(db, &itsmDir.ID, "服务目录", model.MenuTypeMenu, "/itsm/catalogs", "FolderTree", "itsm:catalog:list", 0)
-	seedButtons(db, catalogMenu, []model.Menu{
-		{Name: "新增分类", Type: model.MenuTypeButton, Permission: "itsm:catalog:create", Sort: 0},
-		{Name: "编辑分类", Type: model.MenuTypeButton, Permission: "itsm:catalog:update", Sort: 1},
-		{Name: "删除分类", Type: model.MenuTypeButton, Permission: "itsm:catalog:delete", Sort: 2},
-	})
+	// Migrate: remove standalone "服务目录" menu, catalog management is now inline in services page
+	var oldCatalogMenu model.Menu
+	if err := db.Where("permission = ?", "itsm:catalog:list").First(&oldCatalogMenu).Error; err == nil {
+		// Delete associated buttons
+		db.Where("parent_id = ?", oldCatalogMenu.ID).Delete(&model.Menu{})
+		db.Delete(&oldCatalogMenu)
+		slog.Info("seed: removed standalone catalog menu", "oldId", oldCatalogMenu.ID)
+	}
 
-	// 服务定义
-	serviceMenu := seedMenu(db, &itsmDir.ID, "服务定义", model.MenuTypeMenu, "/itsm/services", "Cog", "itsm:service:list", 1)
+	// Migrate: rename "服务定义" to "服务目录" for unified workspace
+	var existingServiceMenu model.Menu
+	if err := db.Where("permission = ?", "itsm:service:list").First(&existingServiceMenu).Error; err == nil {
+		if existingServiceMenu.Name == "服务定义" {
+			db.Model(&existingServiceMenu).Update("name", "服务目录")
+			slog.Info("seed: renamed service menu to 服务目录")
+		}
+	}
+
+	// 服务目录 (unified workspace: catalogs + services)
+	serviceMenu := seedMenu(db, &itsmDir.ID, "服务目录", model.MenuTypeMenu, "/itsm/services", "Cog", "itsm:service:list", 0)
 	seedButtons(db, serviceMenu, []model.Menu{
 		{Name: "新增服务", Type: model.MenuTypeButton, Permission: "itsm:service:create", Sort: 0},
 		{Name: "编辑服务", Type: model.MenuTypeButton, Permission: "itsm:service:update", Sort: 1},
 		{Name: "删除服务", Type: model.MenuTypeButton, Permission: "itsm:service:delete", Sort: 2},
+		{Name: "新增分类", Type: model.MenuTypeButton, Permission: "itsm:catalog:create", Sort: 3},
+		{Name: "编辑分类", Type: model.MenuTypeButton, Permission: "itsm:catalog:update", Sort: 4},
+		{Name: "删除分类", Type: model.MenuTypeButton, Permission: "itsm:catalog:delete", Sort: 5},
 	})
 
 	// 全部工单
@@ -372,7 +385,6 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 
 	menuPerms := [][]string{
 		{"admin", "itsm", "read"},
-		{"admin", "itsm:catalog:list", "read"},
 		{"admin", "itsm:catalog:create", "read"},
 		{"admin", "itsm:catalog:update", "read"},
 		{"admin", "itsm:catalog:delete", "read"},

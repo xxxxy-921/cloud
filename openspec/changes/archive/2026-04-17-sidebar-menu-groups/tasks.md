@@ -18,6 +18,6 @@
 
 ## 4. 验证
 
-- [ ] 4.1 验证 ITSM sidebar 显示三个分组，各组内菜单项顺序正确
-- [ ] 4.2 验证无 menuGroups 的 App（如系统设置）sidebar 渲染不变
-- [ ] 4.3 验证 `bun run lint` 通过
+- [x] 4.1 验证 ITSM sidebar 显示三个分组，各组内菜单项顺序正确
+- [x] 4.2 验证无 menuGroups 的 App（如系统设置）sidebar 渲染不变
+- [x] 4.3 验证 `bun run lint` 通过
