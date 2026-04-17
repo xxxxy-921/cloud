@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -89,4 +90,31 @@ func (r *ParticipantResolver) resolveRequesterManager(tx *gorm.DB, ticketID uint
 		return nil, nil
 	}
 	return []uint{managerID}, nil
+}
+
+// resolveForToolArgs is the JSON structure for decision.resolve_participant tool arguments.
+type resolveForToolArgs struct {
+	Type           string `json:"type"`
+	Value          string `json:"value,omitempty"`
+	PositionCode   string `json:"position_code,omitempty"`
+	DepartmentCode string `json:"department_code,omitempty"`
+}
+
+// ResolveForTool resolves participants from JSON tool arguments.
+// It wraps Resolve() with JSON parameter parsing for the decision tool.
+func (r *ParticipantResolver) ResolveForTool(tx *gorm.DB, ticketID uint, toolArgs json.RawMessage) ([]uint, error) {
+	var args resolveForToolArgs
+	if err := json.Unmarshal(toolArgs, &args); err != nil {
+		return nil, fmt.Errorf("invalid tool arguments: %w", err)
+	}
+	if args.Type == "" {
+		return nil, fmt.Errorf("participant type is required")
+	}
+	p := Participant{
+		Type:           args.Type,
+		Value:          args.Value,
+		PositionCode:   args.PositionCode,
+		DepartmentCode: args.DepartmentCode,
+	}
+	return r.Resolve(tx, ticketID, p)
 }

@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-
-	"metis/internal/llm"
 )
 
 // --- Interfaces for AI App dependency injection ---
@@ -111,64 +109,6 @@ var AllowedSmartStepTypes = map[string]bool{
 	"notify": true, "form": true, "complete": true, "escalate": true,
 }
 
-// --- Ticket case snapshot types ---
-
-// TicketCase is the complete snapshot sent to the agent for decision-making.
-type TicketCase struct {
-	Ticket            TicketInfo        `json:"ticket"`
-	Service           ServiceInfo       `json:"service"`
-	CollaborationSpec string            `json:"collaboration_spec,omitempty"`
-	SLAStatus         *SLAStatusInfo    `json:"sla_status,omitempty"`
-	ActivityHistory   []ActivitySummary `json:"activity_history,omitempty"`
-	FormData          json.RawMessage   `json:"form_data,omitempty"`
-}
-
-type TicketInfo struct {
-	Code        string `json:"code"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Priority    string `json:"priority"`
-	Status      string `json:"status"`
-	Source      string `json:"source"`
-}
-
-type ServiceInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	EngineType  string `json:"engine_type"`
-}
-
-type SLAStatusInfo struct {
-	ResponseRemainingSeconds   int64 `json:"response_remaining_seconds"`
-	ResolutionRemainingSeconds int64 `json:"resolution_remaining_seconds"`
-}
-
-type ActivitySummary struct {
-	Type        string  `json:"type"`
-	Name        string  `json:"name"`
-	Outcome     string  `json:"outcome"`
-	CompletedAt string  `json:"completed_at,omitempty"`
-	AIReasoning string  `json:"ai_reasoning,omitempty"`
-	Confidence  float64 `json:"confidence,omitempty"`
-}
-
-// --- Policy snapshot types ---
-
-// TicketPolicySnapshot defines what the agent is allowed to do.
-type TicketPolicySnapshot struct {
-	AllowedStepTypes         []string               `json:"allowed_step_types"`
-	ParticipantCandidates    []ParticipantCandidate  `json:"participant_candidates"`
-	AvailableActions         []ActionInfo            `json:"available_actions"`
-	AllowedStatusTransitions []string                `json:"allowed_status_transitions"`
-	CurrentStatus            string                  `json:"current_status"`
-}
-
-type ActionInfo struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
 // --- SmartEngine ---
 
 // SmartEngine implements WorkflowEngine via AI Agent-driven decisions.
@@ -176,6 +116,7 @@ type SmartEngine struct {
 	agentProvider     AgentProvider
 	knowledgeSearcher KnowledgeSearcher
 	userProvider      UserProvider
+	resolver          *ParticipantResolver
 	scheduler         TaskSubmitter
 }
 
@@ -184,12 +125,14 @@ func NewSmartEngine(
 	agentProvider AgentProvider,
 	knowledgeSearcher KnowledgeSearcher,
 	userProvider UserProvider,
+	resolver *ParticipantResolver,
 	scheduler TaskSubmitter,
 ) *SmartEngine {
 	return &SmartEngine{
 		agentProvider:     agentProvider,
 		knowledgeSearcher: knowledgeSearcher,
 		userProvider:      userProvider,
+		resolver:          resolver,
 		scheduler:         scheduler,
 	}
 }
@@ -336,29 +279,18 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 
 	cfg := ParseSmartServiceConfig(svcInfo.AgentConfig)
 
-	// Build TicketCase snapshot
-	ticketCase, err := e.buildTicketCase(tx, ticketID, svcInfo)
-	if err != nil {
-		return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("构建工单快照失败: %v", err))
-	}
-
-	// Compile policy snapshot
-	policy, err := e.compilePolicy(tx, ticketID, svcInfo)
-	if err != nil {
-		return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("编译策略失败: %v", err))
-	}
-
 	// Check terminal state
-	if len(policy.AllowedStepTypes) == 0 {
-		return nil // ticket is in terminal state, nothing to do
+	switch ticket.Status {
+	case "completed", "cancelled", "failed":
+		return nil
 	}
 
-	// Call agent with timeout
+	// Call agentic decision with timeout
 	timeout := time.Duration(cfg.DecisionTimeoutSeconds) * time.Second
 	decisionCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	plan, err := e.callAgent(decisionCtx, tx, svcInfo, ticketCase, policy)
+	plan, err := e.agenticDecision(decisionCtx, tx, ticketID, svcInfo)
 	if err != nil {
 		reason := fmt.Sprintf("AI 决策失败: %v", err)
 		if decisionCtx.Err() == context.DeadlineExceeded {
@@ -368,16 +300,8 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 	}
 
 	// Validate decision plan
-	if err := e.validateDecisionPlan(plan, policy, svcInfo); err != nil {
-		// Retry once with format correction
-		slog.Warn("decision plan validation failed, retrying", "error", err, "ticketID", ticketID)
-		plan, err = e.callAgentWithCorrection(decisionCtx, tx, svcInfo, ticketCase, policy, err.Error())
-		if err != nil {
-			return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("AI 决策校验不通过（重试后仍失败）: %v", err))
-		}
-		if err := e.validateDecisionPlan(plan, policy, svcInfo); err != nil {
-			return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("AI 决策校验不通过: %v", err))
-		}
+	if err := e.validateDecisionPlan(tx, plan, svcInfo); err != nil {
+		return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("AI 决策校验不通过: %v", err))
 	}
 
 	// Reset failure count on success
@@ -543,282 +467,16 @@ func (e *SmartEngine) pendApprovalDecisionPlan(tx *gorm.DB, ticketID uint, plan 
 	return nil
 }
 
-// --- Agent call ---
-
-func (e *SmartEngine) callAgent(ctx context.Context, tx *gorm.DB, svc *serviceModel, ticketCase *TicketCase, policy *TicketPolicySnapshot) (*DecisionPlan, error) {
-	if svc.AgentID == nil {
-		return nil, fmt.Errorf("service has no bound agent")
-	}
-
-	agentCfg, err := e.agentProvider.GetAgentConfig(*svc.AgentID)
-	if err != nil {
-		return nil, fmt.Errorf("get agent config: %w", err)
-	}
-
-	// Build messages
-	systemPrompt := buildSystemPrompt(svc.CollaborationSpec, agentCfg.SystemPrompt)
-
-	// Knowledge context will be injected from ServiceKnowledgeDocuments (TODO: itsm-service-knowledge-doc)
-
-	caseJSON, _ := json.MarshalIndent(ticketCase, "", "  ")
-	policyJSON, _ := json.MarshalIndent(policy, "", "  ")
-
-	userMessage := fmt.Sprintf("## 工单上下文\n\n```json\n%s\n```\n\n## 策略约束\n\n```json\n%s\n```\n\n请根据以上工单上下文和策略约束，输出下一步决策。", caseJSON, policyJSON)
-
-	// Create LLM client
-	client, err := llm.NewClient(agentCfg.Protocol, agentCfg.BaseURL, agentCfg.APIKey)
-	if err != nil {
-		return nil, fmt.Errorf("create llm client: %w", err)
-	}
-
-	temp := float32(agentCfg.Temperature)
-	maxTokens := agentCfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 2048
-	}
-
-	resp, err := client.Chat(ctx, llm.ChatRequest{
-		Model: agentCfg.Model,
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: systemPrompt},
-			{Role: llm.RoleUser, Content: userMessage},
-		},
-		MaxTokens:   maxTokens,
-		Temperature: &temp,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm chat: %w", err)
-	}
-
-	return parseDecisionPlan(resp.Content)
-}
-
-func (e *SmartEngine) callAgentWithCorrection(ctx context.Context, tx *gorm.DB, svc *serviceModel, ticketCase *TicketCase, policy *TicketPolicySnapshot, validationError string) (*DecisionPlan, error) {
-	if svc.AgentID == nil {
-		return nil, fmt.Errorf("service has no bound agent")
-	}
-
-	agentCfg, err := e.agentProvider.GetAgentConfig(*svc.AgentID)
-	if err != nil {
-		return nil, fmt.Errorf("get agent config: %w", err)
-	}
-
-	systemPrompt := buildSystemPrompt(svc.CollaborationSpec, agentCfg.SystemPrompt)
-
-	caseJSON, _ := json.MarshalIndent(ticketCase, "", "  ")
-	policyJSON, _ := json.MarshalIndent(policy, "", "  ")
-
-	userMessage := fmt.Sprintf(`## 工单上下文
-
-%s
-
-## 策略约束
-
-%s
-
-## 格式纠正
-
-上一次输出校验失败，错误：%s
-
-请严格按照以下 JSON 格式输出：
-{"next_step_type": "...", "activities": [...], "reasoning": "...", "confidence": 0.0}
-
-next_step_type 必须是以下之一：%v`,
-		string(caseJSON), string(policyJSON), validationError, policy.AllowedStepTypes)
-
-	client, err := llm.NewClient(agentCfg.Protocol, agentCfg.BaseURL, agentCfg.APIKey)
-	if err != nil {
-		return nil, fmt.Errorf("create llm client: %w", err)
-	}
-
-	temp := float32(agentCfg.Temperature)
-	resp, err := client.Chat(ctx, llm.ChatRequest{
-		Model: agentCfg.Model,
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: systemPrompt},
-			{Role: llm.RoleUser, Content: userMessage},
-		},
-		MaxTokens:   2048,
-		Temperature: &temp,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm chat retry: %w", err)
-	}
-
-	return parseDecisionPlan(resp.Content)
-}
-
-// --- Snapshot builders ---
-
-func (e *SmartEngine) buildTicketCase(tx *gorm.DB, ticketID uint, svc *serviceModel) (*TicketCase, error) {
-	var ticket ticketModel
-	if err := tx.First(&ticket, ticketID).Error; err != nil {
-		return nil, err
-	}
-
-	// Load priority name
-	var priorityName string
-	var priority struct {
-		Name string
-	}
-	if err := tx.Table("itsm_priorities").Where("id = ?", ticket.PriorityID).Select("name").First(&priority).Error; err == nil {
-		priorityName = priority.Name
-	}
-
-	tc := &TicketCase{
-		Ticket: TicketInfo{
-			Code:        ticket.Status, // will fix below
-			Title:       "",
-			Description: "",
-			Priority:    priorityName,
-			Status:      ticket.Status,
-			Source:      "",
-		},
-		Service: ServiceInfo{
-			Name:        svc.Name,
-			Description: svc.Description,
-			EngineType:  svc.EngineType,
-		},
-		CollaborationSpec: svc.CollaborationSpec,
-	}
-
-	// Load full ticket info from the real table
-	var fullTicket struct {
-		Code        string
-		Title       string
-		Description string
-		Status      string
-		Source      string
-		FormData    string
-		SLAResponseDeadline   *time.Time
-		SLAResolutionDeadline *time.Time
-	}
-	if err := tx.Table("itsm_tickets").Where("id = ?", ticketID).
-		Select("code, title, description, status, source, form_data, sla_response_deadline, sla_resolution_deadline").
-		First(&fullTicket).Error; err == nil {
-		tc.Ticket.Code = fullTicket.Code
-		tc.Ticket.Title = fullTicket.Title
-		tc.Ticket.Description = fullTicket.Description
-		tc.Ticket.Status = fullTicket.Status
-		tc.Ticket.Source = fullTicket.Source
-
-		if fullTicket.FormData != "" {
-			tc.FormData = json.RawMessage(fullTicket.FormData)
-		}
-
-		// SLA status
-		now := time.Now()
-		if fullTicket.SLAResponseDeadline != nil || fullTicket.SLAResolutionDeadline != nil {
-			sla := &SLAStatusInfo{}
-			if fullTicket.SLAResponseDeadline != nil {
-				sla.ResponseRemainingSeconds = int64(fullTicket.SLAResponseDeadline.Sub(now).Seconds())
-			}
-			if fullTicket.SLAResolutionDeadline != nil {
-				sla.ResolutionRemainingSeconds = int64(fullTicket.SLAResolutionDeadline.Sub(now).Seconds())
-			}
-			tc.SLAStatus = sla
-		}
-	}
-
-	// Load activity history
-	var activities []activityModel
-	tx.Where("ticket_id = ? AND status = ?", ticketID, ActivityCompleted).
-		Order("id ASC").Find(&activities)
-
-	for _, a := range activities {
-		summary := ActivitySummary{
-			Type:        a.ActivityType,
-			Name:        a.Name,
-			Outcome:     a.TransitionOutcome,
-			AIReasoning: a.AIReasoning,
-			Confidence:  a.AIConfidence,
-		}
-		if a.FinishedAt != nil {
-			summary.CompletedAt = a.FinishedAt.Format(time.RFC3339)
-		}
-		tc.ActivityHistory = append(tc.ActivityHistory, summary)
-	}
-
-	return tc, nil
-}
-
-func (e *SmartEngine) compilePolicy(tx *gorm.DB, ticketID uint, svc *serviceModel) (*TicketPolicySnapshot, error) {
-	var ticket ticketModel
-	if err := tx.First(&ticket, ticketID).Error; err != nil {
-		return nil, err
-	}
-
-	policy := &TicketPolicySnapshot{
-		CurrentStatus: ticket.Status,
-	}
-
-	// Determine allowed step types based on ticket status
-	switch ticket.Status {
-	case "completed", "cancelled", "failed":
-		policy.AllowedStepTypes = []string{}
-	default:
-		policy.AllowedStepTypes = []string{"approve", "process", "action", "notify", "form", "complete", "escalate"}
-	}
-
-	// Determine allowed status transitions
-	switch ticket.Status {
-	case "pending":
-		policy.AllowedStatusTransitions = []string{"in_progress", "cancelled"}
-	case "in_progress":
-		policy.AllowedStatusTransitions = []string{"completed", "cancelled", "waiting_approval"}
-	case "waiting_approval":
-		policy.AllowedStatusTransitions = []string{"in_progress", "completed", "cancelled"}
-	default:
-		policy.AllowedStatusTransitions = []string{}
-	}
-
-	// Load participant candidates
-	if e.userProvider != nil {
-		candidates, err := e.userProvider.ListActiveUsers()
-		if err == nil {
-			policy.ParticipantCandidates = candidates
-		}
-	}
-
-	// Load available actions for this service
-	var actions []struct {
-		ID          uint
-		Name        string
-		Description string
-	}
-	tx.Table("itsm_service_actions").
-		Where("service_id = ? AND is_active = ?", svc.ID, true).
-		Select("id, name, description").
-		Find(&actions)
-
-	for _, a := range actions {
-		policy.AvailableActions = append(policy.AvailableActions, ActionInfo{
-			ID:          a.ID,
-			Name:        a.Name,
-			Description: a.Description,
-		})
-	}
-
-	return policy, nil
-}
-
 // --- Validation ---
 
-func (e *SmartEngine) validateDecisionPlan(plan *DecisionPlan, policy *TicketPolicySnapshot, svc *serviceModel) error {
+func (e *SmartEngine) validateDecisionPlan(tx *gorm.DB, plan *DecisionPlan, svc *serviceModel) error {
 	if plan == nil {
 		return fmt.Errorf("decision plan is nil")
 	}
 
 	// Check next_step_type is allowed
-	allowed := false
-	for _, t := range policy.AllowedStepTypes {
-		if t == plan.NextStepType {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return fmt.Errorf("next_step_type %q 不在允许列表 %v 中", plan.NextStepType, policy.AllowedStepTypes)
+	if !AllowedSmartStepTypes[plan.NextStepType] {
+		return fmt.Errorf("next_step_type %q 不合法", plan.NextStepType)
 	}
 
 	// Validate activities
@@ -827,31 +485,29 @@ func (e *SmartEngine) validateDecisionPlan(plan *DecisionPlan, policy *TicketPol
 			return fmt.Errorf("activities[%d].type %q 不合法", i, a.Type)
 		}
 
-		// Check participant is in candidates if specified
-		if a.ParticipantID != nil && *a.ParticipantID > 0 && len(policy.ParticipantCandidates) > 0 {
-			found := false
-			for _, c := range policy.ParticipantCandidates {
-				if c.UserID == *a.ParticipantID {
-					found = true
-					break
-				}
+		// Check participant is an active user
+		if a.ParticipantID != nil && *a.ParticipantID > 0 {
+			var user struct {
+				IsActive bool
 			}
-			if !found {
-				return fmt.Errorf("activities[%d].participant_id %d 不在候选列表中", i, *a.ParticipantID)
+			if err := tx.Table("users").Where("id = ?", *a.ParticipantID).
+				Select("is_active").First(&user).Error; err != nil {
+				return fmt.Errorf("activities[%d].participant_id %d 用户不存在", i, *a.ParticipantID)
+			}
+			if !user.IsActive {
+				return fmt.Errorf("activities[%d].participant_id %d 用户未激活", i, *a.ParticipantID)
 			}
 		}
 
-		// Check action_id exists if action type
+		// Check action_id exists for this service
 		if a.Type == "action" && a.ActionID != nil && *a.ActionID > 0 {
-			found := false
-			for _, act := range policy.AvailableActions {
-				if act.ID == *a.ActionID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("activities[%d].action_id %d 不在可用动作列表中", i, *a.ActionID)
+			var count int64
+			tx.Table("itsm_service_actions").
+				Where("id = ? AND service_id = ? AND is_active = ? AND deleted_at IS NULL",
+					*a.ActionID, svc.ID, true).
+				Count(&count)
+			if count == 0 {
+				return fmt.Errorf("activities[%d].action_id %d 不在服务可用动作列表中", i, *a.ActionID)
 			}
 		}
 	}
@@ -888,43 +544,6 @@ func (e *SmartEngine) recordTimeline(tx *gorm.DB, ticketID uint, activityID *uin
 	}
 	return tx.Create(tl).Error
 }
-
-func buildSystemPrompt(collaborationSpec, agentSystemPrompt string) string {
-	prompt := ""
-	if collaborationSpec != "" {
-		prompt += "## 服务处理规范\n\n" + collaborationSpec + "\n\n---\n\n"
-	}
-	if agentSystemPrompt != "" {
-		prompt += "## 角色定义\n\n" + agentSystemPrompt + "\n\n---\n\n"
-	}
-	prompt += decisionOutputFormat
-	return prompt
-}
-
-const decisionOutputFormat = `## 输出要求
-
-你必须严格按照以下 JSON 格式输出决策，不要包含其他文本：
-
-{
-  "next_step_type": "process|approve|action|notify|form|complete|escalate",
-  "activities": [
-    {
-      "type": "process|approve|action|notify|form",
-      "participant_type": "user",
-      "participant_id": 42,
-      "action_id": null,
-      "instructions": "操作指引"
-    }
-  ],
-  "reasoning": "决策推理过程...",
-  "confidence": 0.85
-}
-
-字段说明：
-- next_step_type: 下一步类型。"complete" 表示流程可以结束。
-- activities: 需要创建的活动列表。
-- reasoning: 你的推理过程（会展示给管理员审核）。
-- confidence: 决策信心（0.0-1.0）。越高表示越确信。`
 
 func parseDecisionPlan(content string) (*DecisionPlan, error) {
 	// Try to extract JSON from the response (may be wrapped in markdown code blocks)

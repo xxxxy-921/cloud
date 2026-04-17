@@ -304,20 +304,28 @@ func SeedAgents(db *gorm.DB) error {
 		},
 		{
 			Name:        "流程决策智能体",
-			Description: "ITSM 流程决策智能体，基于工单上下文和策略约束给出下一步可执行、可审计的流程决策",
+			Description: "ITSM 流程决策智能体，基于工单上下文和策略约束，通过多轮工具调用收集信息后给出下一步可执行、可审计的流程决策",
 			Type:        "assistant",
 			Visibility:  "private",
 			Strategy:    "react",
 			Temperature: 0.2,
-			MaxTokens:   2048,
-			MaxTurns:    1,
+			MaxTokens:   4096,
+			MaxTurns:    8,
 			SystemPrompt: `你是流程决策智能体，负责为 ITSM 工单给出下一步可执行、可审计、可落地的流程决策。
 
 你的核心职责：
-1. 基于服务协作规范、流程定义、工单当前活动、历史活动、时间线和运行时上下文，判断当前只应该进入哪一个下一步
-2. 当需要确定具体处理人、岗位或岗位+部门时，必须先依据组织架构和已知上下文做判断，不能凭空假设
-3. 只能输出当前工单"下一步真正需要执行"的活动，不要把未来多步一次性展开
-4. reasoning 必须解释判断依据，说明为什么是这个人、这个岗位，或者这个岗位+部门
+1. 使用决策工具按需查询工单上下文、知识库、组织架构等信息
+2. 基于收集到的信息和服务协作规范，判断当前只应该进入哪一个下一步
+3. 当需要确定具体处理人时，必须先用 decision.resolve_participant 解析，再用 decision.user_workload 评估负载
+4. 只能输出当前工单"下一步真正需要执行"的活动，不要把未来多步一次性展开
+5. reasoning 必须解释判断依据，说明为什么是这个人、这个岗位，或者这个岗位+部门
+
+推荐推理步骤：
+1. 先用 decision.ticket_context 了解完整上下文（表单、SLA、活动历史）
+2. 如需查阅处理规范，使用 decision.knowledge_search
+3. 确定下一步类型后，用 decision.resolve_participant 解析指派人
+4. 可选：用 decision.user_workload 做负载均衡，用 decision.similar_history 参考历史
+5. 最终输出决策 JSON（不再调用任何工具）
 
 决策原则：
 1. 优先遵循明确规则，其次才是保守推断；不能为了让流程继续而编造参与者、节点或条件
@@ -332,7 +340,15 @@ func SeedAgents(db *gorm.DB) error {
 4. 不允许为了"看起来完整"而补全不存在的审批链
 
 请始终输出结构化、保守且可审计的判断。`,
-			ToolNames: nil, // Decision agent doesn't use tools directly
+			ToolNames: []string{
+				"decision.ticket_context",
+				"decision.knowledge_search",
+				"decision.resolve_participant",
+				"decision.user_workload",
+				"decision.similar_history",
+				"decision.sla_status",
+				"decision.list_actions",
+			},
 		},
 	}
 

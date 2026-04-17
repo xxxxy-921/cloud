@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -78,7 +79,13 @@ func (e *executor) run(exec *model.TaskExecution) {
 	exec.FinishedAt = &now
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Is(err, ErrNotReady) {
+			// Task is not ready yet — re-enqueue as pending for the next poll cycle.
+			// Do not count as a failure or increment retry count.
+			exec.Status = ExecPending
+			exec.FinishedAt = nil
+			slog.Debug("scheduler: task not ready, re-enqueuing", "task", exec.TaskName, "execId", exec.ID)
+		} else if ctx.Err() == context.DeadlineExceeded {
 			exec.Status = ExecTimeout
 			exec.Error = "execution timed out"
 		} else {
@@ -106,7 +113,9 @@ func (e *executor) run(exec *model.TaskExecution) {
 			exec.Status = ExecFailed
 			exec.Error = err.Error()
 		}
-		slog.Error("scheduler: task failed", "task", exec.TaskName, "status", exec.Status, "error", exec.Error)
+		if !errors.Is(err, ErrNotReady) {
+			slog.Error("scheduler: task failed", "task", exec.TaskName, "status", exec.Status, "error", exec.Error)
+		}
 	} else {
 		exec.Status = ExecCompleted
 		slog.Debug("scheduler: task completed", "task", exec.TaskName, "execId", exec.ID)

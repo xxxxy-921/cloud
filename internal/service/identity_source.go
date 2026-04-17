@@ -48,6 +48,10 @@ type DomainCheckResult struct {
 type IdentitySourceService struct {
 	repo *repository.IdentitySourceRepo
 	db   *database.DB
+
+	TestOIDCFn  func(ctx context.Context, issuerURL string) error
+	TestLDAPFn  func(cfg *model.LDAPConfig) error
+	LDAPAuthFn  func(cfg *model.LDAPConfig, username, password string) (*identity.LDAPAuthResult, error)
 }
 
 func NewIdentitySource(i do.Injector) (*IdentitySourceService, error) {
@@ -155,15 +159,15 @@ func (s *IdentitySourceService) TestConnection(id uint) (bool, string) {
 
 	switch source.Type {
 	case "oidc":
-		return s.testOIDC(source)
+		return s.runTestOIDC(source)
 	case "ldap":
-		return s.testLDAP(source)
+		return s.runTestLDAP(source)
 	default:
 		return false, "unsupported type"
 	}
 }
 
-func (s *IdentitySourceService) testOIDC(source *model.IdentitySource) (bool, string) {
+func (s *IdentitySourceService) runTestOIDC(source *model.IdentitySource) (bool, string) {
 	var cfg model.OIDCConfig
 	if err := json.Unmarshal([]byte(source.Config), &cfg); err != nil {
 		return false, "invalid OIDC config: " + err.Error()
@@ -181,14 +185,18 @@ func (s *IdentitySourceService) testOIDC(source *model.IdentitySource) (bool, st
 	}
 
 	ctx := context.Background()
-	if err := identity.TestOIDCDiscovery(ctx, cfg.IssuerURL); err != nil {
+	testFn := s.TestOIDCFn
+	if testFn == nil {
+		testFn = identity.TestOIDCDiscovery
+	}
+	if err := testFn(ctx, cfg.IssuerURL); err != nil {
 		return false, "OIDC discovery failed: " + err.Error()
 	}
 
 	return true, "OIDC discovery successful"
 }
 
-func (s *IdentitySourceService) testLDAP(source *model.IdentitySource) (bool, string) {
+func (s *IdentitySourceService) runTestLDAP(source *model.IdentitySource) (bool, string) {
 	var cfg model.LDAPConfig
 	if err := json.Unmarshal([]byte(source.Config), &cfg); err != nil {
 		return false, "invalid LDAP config: " + err.Error()
@@ -205,7 +213,11 @@ func (s *IdentitySourceService) testLDAP(source *model.IdentitySource) (bool, st
 		return false, "server URL is empty"
 	}
 
-	if err := identity.TestLDAPConnection(&cfg); err != nil {
+	testFn := s.TestLDAPFn
+	if testFn == nil {
+		testFn = identity.TestLDAPConnection
+	}
+	if err := testFn(&cfg); err != nil {
 		return false, "LDAP bind failed: " + err.Error()
 	}
 
@@ -387,7 +399,11 @@ func (s *IdentitySourceService) AuthenticateByPassword(username, password string
 			cfg.BindPassword = decrypted
 		}
 
-		result, err := identity.LDAPAuthenticate(&cfg, username, password)
+		authFn := s.LDAPAuthFn
+		if authFn == nil {
+			authFn = identity.LDAPAuthenticate
+		}
+		result, err := authFn(&cfg, username, password)
 		if err != nil {
 			slog.Debug("identity: LDAP auth failed", "sourceId", source.ID, "username", username, "error", err)
 			continue
@@ -451,7 +467,7 @@ func (s *IdentitySourceService) IsForcedSSO(email string) bool {
 // ExtractDomain extracts the domain part from an email address.
 func ExtractDomain(email string) string {
 	at := strings.LastIndex(email, "@")
-	if at < 0 || at == len(email)-1 {
+	if at <= 0 || at == len(email)-1 {
 		return ""
 	}
 	return strings.ToLower(email[at+1:])

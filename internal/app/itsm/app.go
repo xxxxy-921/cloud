@@ -125,7 +125,10 @@ func (a *ITSMApp) Providers(i do.Injector) {
 		userSvc := do.MustInvoke[*service.UserService](i)
 		userProvider := &userProviderAdapter{userSvc: userSvc}
 
-		return engine.NewSmartEngine(agentProvider, knowledgeSearcher, userProvider, submitter), nil
+		// Participant resolver for tool-based participant resolution
+		resolver := do.MustInvoke[*engine.ParticipantResolver](i)
+
+		return engine.NewSmartEngine(agentProvider, knowledgeSearcher, userProvider, resolver, submitter), nil
 	})
 
 	// Services

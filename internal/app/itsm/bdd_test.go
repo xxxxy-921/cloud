@@ -42,7 +42,7 @@ func initializeScenario(sc *godog.ScenarioContext) {
 		return ctx, nil
 	})
 
-	// Common Given steps
-	sc.Given(`^已完成系统初始化$`, bc.givenSystemInitialized)
-	sc.Given(`^已准备好以下参与人、岗位与职责$`, bc.givenParticipants)
+	registerCommonSteps(sc, bc)
+	registerClassicSteps(sc, bc)
+	registerSmartSteps(sc, bc)
 }

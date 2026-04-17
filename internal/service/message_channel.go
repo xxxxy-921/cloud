@@ -16,16 +16,20 @@ import (
 var ErrChannelNotFound = errors.New("error.channel.not_found")
 
 type MessageChannelService struct {
-	repo *repository.MessageChannelRepo
+	repo           *repository.MessageChannelRepo
+	DriverResolver func(string) (channel.Driver, error)
 }
 
 func NewMessageChannel(i do.Injector) (*MessageChannelService, error) {
 	repo := do.MustInvoke[*repository.MessageChannelRepo](i)
-	return &MessageChannelService{repo: repo}, nil
+	return &MessageChannelService{
+		repo:           repo,
+		DriverResolver: channel.GetDriver,
+	}, nil
 }
 
 func (s *MessageChannelService) Create(name, channelType, config string) (*model.MessageChannel, error) {
-	if _, err := channel.GetDriver(channelType); err != nil {
+	if _, err := s.DriverResolver(channelType); err != nil {
 		return nil, err
 	}
 
@@ -139,7 +143,7 @@ func (s *MessageChannelService) TestChannel(id uint) error {
 		return err
 	}
 
-	driver, err := channel.GetDriver(ch.Type)
+	driver, err := s.DriverResolver(ch.Type)
 	if err != nil {
 		return err
 	}
@@ -161,7 +165,7 @@ func (s *MessageChannelService) SendTest(id uint, to []string, subject, body str
 		return err
 	}
 
-	driver, err := channel.GetDriver(ch.Type)
+	driver, err := s.DriverResolver(ch.Type)
 	if err != nil {
 		return err
 	}

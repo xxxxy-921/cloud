@@ -17,7 +17,7 @@ type Driver interface {
 }
 
 var drivers = map[string]Driver{
-	"email": &EmailDriver{},
+	"email": NewEmailDriver(),
 }
 
 // GetDriver returns the driver for the given channel type.

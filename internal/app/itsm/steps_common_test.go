@@ -8,6 +8,7 @@ package itsm
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/cucumber/godog"
 	"github.com/glebarez/sqlite"
@@ -24,29 +25,44 @@ type bddContext struct {
 	db      *gorm.DB
 	lastErr error
 
-	// Engine
-	engine *engine.ClassicEngine
+	// Engines
+	engine      *engine.ClassicEngine
+	smartEngine *engine.SmartEngine
+	llmCfg      llmConfig // LLM connection config (from env, shared across scenarios)
 
 	// Participants (populated by Given steps)
-	users       map[string]*model.User  // key = identity label (e.g. "申请人")
-	usersByName map[string]*model.User  // key = username
-	positions   map[string]*org.Position // key = position code
+	users       map[string]*model.User     // key = identity label (e.g. "申请人")
+	usersByName map[string]*model.User     // key = username
+	positions   map[string]*org.Position   // key = position code
 	departments map[string]*org.Department // key = department code
 
 	// Ticket lifecycle (populated by When steps, asserted by Then steps)
-	service  *ServiceDefinition
-	priority *Priority
-	ticket   *Ticket
-	tickets  map[string]*Ticket // multi-ticket scenarios, key = alias
+	collaborationSpec string
+	service           *ServiceDefinition
+	priority          *Priority
+	ticket            *Ticket
+	tickets           map[string]*Ticket // multi-ticket scenarios, key = alias
 }
 
 func newBDDContext() *bddContext {
-	return &bddContext{}
+	return &bddContext{
+		llmCfg: loadLLMConfig(),
+	}
+}
+
+// loadLLMConfig reads LLM config from env vars (once per test suite).
+func loadLLMConfig() llmConfig {
+	return llmConfig{
+		baseURL: os.Getenv("LLM_TEST_BASE_URL"),
+		apiKey:  os.Getenv("LLM_TEST_API_KEY"),
+		model:   os.Getenv("LLM_TEST_MODEL"),
+	}
 }
 
 // reset clears all state for a new scenario. Called in sc.Before.
 func (bc *bddContext) reset() {
 	bc.lastErr = nil
+	bc.collaborationSpec = ""
 	bc.service = nil
 	bc.priority = nil
 	bc.ticket = nil
@@ -106,6 +122,11 @@ func (bc *bddContext) reset() {
 	orgSvc := &testOrgService{db: db}
 	resolver := engine.NewParticipantResolver(orgSvc)
 	bc.engine = engine.NewClassicEngine(resolver, &noopSubmitter{})
+
+	// Build SmartEngine with test dependencies.
+	agentProvider := &testAgentProvider{db: db, llmCfg: bc.llmCfg}
+	userProvider := &testUserProvider{db: db}
+	bc.smartEngine = engine.NewSmartEngine(agentProvider, nil, userProvider, resolver, &noopSubmitter{})
 }
 
 // ---------------------------------------------------------------------------
@@ -182,8 +203,71 @@ func (n *noopSubmitter) SubmitTask(_ string, _ json.RawMessage) error { return n
 
 var _ engine.TaskSubmitter = (*noopSubmitter)(nil)
 
+// testAgentProvider implements engine.AgentProvider for BDD tests.
+// Reads Agent record from DB, combines with LLM config from env.
+type testAgentProvider struct {
+	db     *gorm.DB
+	llmCfg llmConfig
+}
+
+func (p *testAgentProvider) GetAgentConfig(agentID uint) (*engine.SmartAgentConfig, error) {
+	var agent ai.Agent
+	if err := p.db.First(&agent, agentID).Error; err != nil {
+		return nil, fmt.Errorf("agent %d not found: %w", agentID, err)
+	}
+	return &engine.SmartAgentConfig{
+		Name:         agent.Name,
+		SystemPrompt: agent.SystemPrompt,
+		Temperature:  agent.Temperature,
+		MaxTokens:    agent.MaxTokens,
+		Protocol:     "openai",
+		BaseURL:      p.llmCfg.baseURL,
+		APIKey:       p.llmCfg.apiKey,
+		Model:        p.llmCfg.model,
+	}, nil
+}
+
+var _ engine.AgentProvider = (*testAgentProvider)(nil)
+
+// testUserProvider implements engine.UserProvider for BDD tests.
+// Queries all active users with their position/department info from the BDD in-memory DB.
+type testUserProvider struct {
+	db *gorm.DB
+}
+
+func (p *testUserProvider) ListActiveUsers() ([]engine.ParticipantCandidate, error) {
+	var users []model.User
+	if err := p.db.Where("is_active = ?", true).Find(&users).Error; err != nil {
+		return nil, err
+	}
+
+	candidates := make([]engine.ParticipantCandidate, 0, len(users))
+	for _, u := range users {
+		c := engine.ParticipantCandidate{
+			UserID: u.ID,
+			Name:   u.Username,
+		}
+		// Try to find UserPosition + Position + Department
+		var up org.UserPosition
+		if err := p.db.Where("user_id = ?", u.ID).First(&up).Error; err == nil {
+			var pos org.Position
+			if err := p.db.First(&pos, up.PositionID).Error; err == nil {
+				c.Position = pos.Code
+			}
+			var dept org.Department
+			if err := p.db.First(&dept, up.DepartmentID).Error; err == nil {
+				c.Department = dept.Code
+			}
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates, nil
+}
+
+var _ engine.UserProvider = (*testUserProvider)(nil)
+
 // ---------------------------------------------------------------------------
-// Common Given step definitions
+// Common step definitions
 // ---------------------------------------------------------------------------
 
 // givenSystemInitialized is a no-op — reset() already handles initialization.
@@ -265,4 +349,47 @@ func (bc *bddContext) givenParticipants(table *godog.Table) error {
 	}
 
 	return nil
+}
+
+// givenVPNCollaborationSpec stores the VPN collaboration spec in bddContext.
+func (bc *bddContext) givenVPNCollaborationSpec() error {
+	bc.collaborationSpec = vpnCollaborationSpec
+	return nil
+}
+
+// thenTicketStatusIs refreshes the ticket from DB and asserts its status.
+func (bc *bddContext) thenTicketStatusIs(expected string) error {
+	if bc.ticket == nil {
+		return fmt.Errorf("no ticket in context")
+	}
+	if err := bc.db.First(bc.ticket, bc.ticket.ID).Error; err != nil {
+		return fmt.Errorf("refresh ticket: %w", err)
+	}
+	if bc.ticket.Status != expected {
+		return fmt.Errorf("expected ticket status %q, got %q", expected, bc.ticket.Status)
+	}
+	return nil
+}
+
+// thenTicketStatusIsNot refreshes the ticket from DB and asserts its status is not the given value.
+func (bc *bddContext) thenTicketStatusIsNot(notExpected string) error {
+	if bc.ticket == nil {
+		return fmt.Errorf("no ticket in context")
+	}
+	if err := bc.db.First(bc.ticket, bc.ticket.ID).Error; err != nil {
+		return fmt.Errorf("refresh ticket: %w", err)
+	}
+	if bc.ticket.Status == notExpected {
+		return fmt.Errorf("expected ticket status NOT to be %q, but it is", notExpected)
+	}
+	return nil
+}
+
+// registerCommonSteps registers all shared step definitions.
+func registerCommonSteps(sc *godog.ScenarioContext, bc *bddContext) {
+	sc.Given(`^已完成系统初始化$`, bc.givenSystemInitialized)
+	sc.Given(`^已准备好以下参与人、岗位与职责$`, bc.givenParticipants)
+	sc.Given(`^已定义 VPN 开通申请协作规范$`, bc.givenVPNCollaborationSpec)
+	sc.Then(`^工单状态为 "([^"]*)"$`, bc.thenTicketStatusIs)
+	sc.Then(`^工单状态不为 "([^"]*)"$`, bc.thenTicketStatusIsNot)
 }

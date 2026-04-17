@@ -164,6 +164,7 @@ var (
 // Smart engine defaults
 const (
 	DefaultConfidenceThreshold    = 0.8
-	DefaultDecisionTimeoutSeconds = 30
+	DefaultDecisionTimeoutSeconds = 60
 	MaxAIFailureCount             = 3
+	DecisionToolMaxTurns          = 8
 )

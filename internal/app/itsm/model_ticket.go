@@ -118,22 +118,23 @@ func (t *Ticket) IsTerminal() bool {
 // TicketActivity 工单活动（工作流步骤）
 type TicketActivity struct {
 	model.BaseModel
-	TicketID          uint      `json:"ticketId" gorm:"not null;index"`
-	Name              string    `json:"name" gorm:"size:128"`
-	ActivityType      string    `json:"activityType" gorm:"size:16"` // form | approve | process | action | end
-	Status            string    `json:"status" gorm:"size:16;default:pending"`
-	NodeID            string    `json:"nodeId" gorm:"size:64"`              // classic mode: workflow_json node ID
-	ExecutionMode     string    `json:"executionMode" gorm:"size:16"`       // single | parallel | serial
-	FormSchema        JSONField `json:"formSchema" gorm:"type:text"`
-	FormData          JSONField `json:"formData" gorm:"type:text"`
-	TransitionOutcome string    `json:"transitionOutcome" gorm:"size:16"`   // submit | approve | reject | success | failure
-	AIDecision        JSONField `json:"aiDecision" gorm:"type:text"`        // smart mode
-	AIReasoning       string    `json:"aiReasoning" gorm:"type:text"`       // smart mode
-	AIConfidence      float64   `json:"aiConfidence" gorm:"default:0"`      // smart mode
-	OverriddenBy      *uint     `json:"overriddenBy"`                       // operator ID when overridden
-	DecisionReasoning string    `json:"decisionReasoning" gorm:"type:text"`
-	StartedAt         *time.Time `json:"startedAt"`
-	FinishedAt        *time.Time `json:"finishedAt"`
+	TicketID          uint       `json:"ticketId" gorm:"not null;index"`
+	TokenID           *uint      `json:"tokenId" gorm:"column:token_id;index"`
+	Name              string     `json:"name" gorm:"size:128"`
+	ActivityType      string     `json:"activityType" gorm:"column:activity_type;size:16"`
+	Status            string     `json:"status" gorm:"size:16;default:pending"`
+	NodeID            string     `json:"nodeId" gorm:"column:node_id;size:64"`
+	ExecutionMode     string     `json:"executionMode" gorm:"column:execution_mode;size:16"`
+	FormSchema        JSONField  `json:"formSchema" gorm:"column:form_schema;type:text"`
+	FormData          JSONField  `json:"formData" gorm:"column:form_data;type:text"`
+	TransitionOutcome string     `json:"transitionOutcome" gorm:"column:transition_outcome;size:16"`
+	AIDecision        JSONField  `json:"aiDecision" gorm:"column:ai_decision;type:text"`
+	AIReasoning       string     `json:"aiReasoning" gorm:"column:ai_reasoning;type:text"`
+	AIConfidence      float64    `json:"aiConfidence" gorm:"column:ai_confidence;default:0"`
+	OverriddenBy      *uint      `json:"overriddenBy" gorm:"column:overridden_by"`
+	DecisionReasoning string     `json:"decisionReasoning" gorm:"column:decision_reasoning;type:text"`
+	StartedAt         *time.Time `json:"startedAt" gorm:"column:started_at"`
+	FinishedAt        *time.Time `json:"finishedAt" gorm:"column:finished_at"`
 }
 
 func (TicketActivity) TableName() string { return "itsm_ticket_activities" }

@@ -3,13 +3,59 @@ package channel
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/smtp"
 	"strings"
 )
 
+// smtpClient matches the methods of *smtp.Client we use.
+type smtpClient interface {
+	Auth(auth smtp.Auth) error
+	Mail(from string) error
+	Rcpt(to string) error
+	Data() (io.WriteCloser, error)
+	Quit() error
+	Extension(ext string) (bool, string)
+	StartTLS(config *tls.Config) error
+}
+
 // EmailDriver implements Driver for SMTP email sending.
-type EmailDriver struct{}
+type EmailDriver struct {
+	dial func(addr, host string, secure bool) (smtpClient, error)
+}
+
+// NewEmailDriver creates an EmailDriver with real network dialing.
+func NewEmailDriver() *EmailDriver {
+	return &EmailDriver{dial: realDialSMTP}
+}
+
+func realDialSMTP(addr, host string, secure bool) (smtpClient, error) {
+	if secure {
+		tlsConfig := &tls.Config{ServerName: host}
+		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("TLS connection failed: %w", err)
+		}
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return client, nil
+	}
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("connection failed: %w", err)
+	}
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return client, nil
+}
 
 func (d *EmailDriver) Send(config map[string]any, payload Payload) error {
 	host := strVal(config, "host")
@@ -46,10 +92,31 @@ func (d *EmailDriver) Send(config map[string]any, payload Payload) error {
 
 	auth := smtp.PlainAuth("", username, password, host)
 
-	if secure {
-		return d.sendTLS(addr, host, auth, from, payload.To, []byte(msg.String()))
+	client, err := d.dial(addr, host, secure)
+	if err != nil {
+		return err
 	}
-	return smtp.SendMail(addr, auth, from, payload.To, []byte(msg.String()))
+	defer client.Quit()
+
+	if err := client.Auth(auth); err != nil {
+		return err
+	}
+	if err := client.Mail(from); err != nil {
+		return err
+	}
+	for _, addr := range payload.To {
+		if err := client.Rcpt(addr); err != nil {
+			return err
+		}
+	}
+	w, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte(msg.String())); err != nil {
+		return err
+	}
+	return w.Close()
 }
 
 func (d *EmailDriver) Test(config map[string]any) error {
@@ -62,42 +129,18 @@ func (d *EmailDriver) Test(config map[string]any) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	auth := smtp.PlainAuth("", username, password, host)
 
-	if secure {
-		tlsConfig := &tls.Config{ServerName: host}
-		conn, err := tls.Dial("tcp", addr, tlsConfig)
-		if err != nil {
-			return fmt.Errorf("TLS connection failed: %w", err)
-		}
-		defer conn.Close()
-
-		client, err := smtp.NewClient(conn, host)
-		if err != nil {
-			return fmt.Errorf("SMTP client creation failed: %w", err)
-		}
-		defer client.Quit()
-
-		if err := client.Auth(auth); err != nil {
-			return fmt.Errorf("SMTP authentication failed: %w", err)
-		}
-		return nil
-	}
-
-	conn, err := net.Dial("tcp", addr)
+	client, err := d.dial(addr, host, secure)
 	if err != nil {
-		return fmt.Errorf("connection failed: %w", err)
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, host)
-	if err != nil {
-		return fmt.Errorf("SMTP client creation failed: %w", err)
+		return err
 	}
 	defer client.Quit()
 
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		tlsConfig := &tls.Config{ServerName: host}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			return fmt.Errorf("STARTTLS failed: %w", err)
+	if !secure {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			tlsConfig := &tls.Config{ServerName: host}
+			if err := client.StartTLS(tlsConfig); err != nil {
+				return fmt.Errorf("STARTTLS failed: %w", err)
+			}
 		}
 	}
 
@@ -105,41 +148,6 @@ func (d *EmailDriver) Test(config map[string]any) error {
 		return fmt.Errorf("SMTP authentication failed: %w", err)
 	}
 	return nil
-}
-
-func (d *EmailDriver) sendTLS(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
-	tlsConfig := &tls.Config{ServerName: host}
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
-	if err != nil {
-		return fmt.Errorf("TLS connection failed: %w", err)
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, host)
-	if err != nil {
-		return err
-	}
-	defer client.Quit()
-
-	if err := client.Auth(auth); err != nil {
-		return err
-	}
-	if err := client.Mail(from); err != nil {
-		return err
-	}
-	for _, addr := range to {
-		if err := client.Rcpt(addr); err != nil {
-			return err
-		}
-	}
-	w, err := client.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(msg); err != nil {
-		return err
-	}
-	return w.Close()
 }
 
 func strVal(m map[string]any, key string) string {

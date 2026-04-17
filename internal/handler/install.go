@@ -34,12 +34,18 @@ type InstallHandler struct {
 	injector          do.Injector
 	engine            *gin.Engine
 	overrideProviders func(do.Injector)
+	configPath        string
 	installed         bool
 }
 
 // NewInstall creates an InstallHandler.
 func NewInstall(injector do.Injector, engine *gin.Engine, overrideProviders func(do.Injector)) *InstallHandler {
-	return &InstallHandler{injector: injector, engine: engine, overrideProviders: overrideProviders}
+	return &InstallHandler{
+		injector:          injector,
+		engine:            engine,
+		overrideProviders: overrideProviders,
+		configPath:        do.MustInvokeNamed[string](injector, "configPath"),
+	}
 }
 
 // RegisterInstallRoutes registers install-only routes on the Gin engine.
@@ -282,8 +288,8 @@ func (h *InstallHandler) Execute(c *gin.Context) {
 		return
 	}
 
-	// 10. Write config.yml
-	if err := cfg.Save("config.yml"); err != nil {
+	// 10. Write config file
+	if err := cfg.Save(h.configPath); err != nil {
 		Fail(c, http.StatusInternalServerError, "failed to write config: "+err.Error())
 		return
 	}

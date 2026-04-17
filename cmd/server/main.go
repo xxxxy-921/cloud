@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,8 +33,11 @@ import (
 )
 
 func main() {
-	// 1. Try to load config.yml
-	cfg, err := config.Load("config.yml")
+	configPath := flag.String("config", "config.yml", "path to config file")
+	flag.Parse()
+
+	// 1. Try to load config
+	cfg, err := config.Load(*configPath)
 	if err != nil && !errors.Is(err, config.ErrConfigNotFound) {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
@@ -41,6 +45,7 @@ func main() {
 
 	// 2. IOC container
 	injector := do.New()
+	do.ProvideNamedValue(injector, "configPath", *configPath)
 
 	// 3. Check installation state and connect database
 	var db *database.DB

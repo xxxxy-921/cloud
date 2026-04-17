@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"metis/internal/scheduler"
 )
 
 // ActionExecutePayload is the async task payload for itsm-action-execute.
@@ -143,16 +146,16 @@ func HandleWaitTimer(db *gorm.DB, classicEngine *ClassicEngine) func(ctx context
 			return fmt.Errorf("invalid execute_after time: %w", err)
 		}
 
-		// Not yet time — skip without error (will be retried on next poll)
+		// Not yet time — return ErrNotReady so scheduler retains the task
 		if time.Now().Before(executeAfter) {
-			return nil
+			return scheduler.ErrNotReady
 		}
 
 		slog.Info("wait timer expired", "ticketID", p.TicketID, "activityID", p.ActivityID)
 
-		// Verify the activity is still active
+		// Verify the activity is still active (with lock to prevent concurrent progress)
 		var activity activityModel
-		if err := db.First(&activity, p.ActivityID).Error; err != nil {
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&activity, p.ActivityID).Error; err != nil {
 			return nil // activity gone, skip
 		}
 		if activity.Status != ActivityPending && activity.Status != ActivityInProgress {
@@ -200,14 +203,14 @@ func HandleBoundaryTimer(db *gorm.DB, classicEngine *ClassicEngine) func(ctx con
 			return fmt.Errorf("invalid execute_after time: %w", err)
 		}
 
-		// Not yet time — skip
+		// Not yet time — return ErrNotReady so scheduler retains the task
 		if time.Now().Before(executeAfter) {
-			return nil
+			return scheduler.ErrNotReady
 		}
 
-		// Load boundary token — lazy check: if not suspended, host already completed
+		// Load boundary token with lock — if not suspended, host already completed
 		var bToken executionTokenModel
-		if err := db.First(&bToken, p.BoundaryTokenID).Error; err != nil {
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&bToken, p.BoundaryTokenID).Error; err != nil {
 			return nil // token gone, skip
 		}
 		if bToken.Status != TokenSuspended {

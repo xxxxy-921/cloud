@@ -45,8 +45,14 @@ cd web && bun run preview  # Preview production build locally
 ```bash
 go test ./...                                    # Run all Go tests
 go test ./internal/app/ai -run TestName -v      # Run a single test
+make test-license                                # License app tests only
+make test-fuzz                                   # Fuzz tests (license crypto, 30s each)
+make test-bdd                                    # ITSM BDD tests
+make test-cover                                  # Coverage report → coverage.html
+make test-pretty                                 # Pretty output (requires gotestsum)
+make test-llm                                    # LLM integration tests (needs .env.test)
 ```
-Currently only backend Go tests exist (`internal/app/ai/data_stream_test.go`). No frontend tests yet.
+Tests exist in `internal/service/` (kernel), `internal/app/license/`, `internal/app/itsm/`, and `internal/app/ai/`. No frontend tests yet.
 
 **Package manager**: Frontend uses **bun** (`bun install`, `bun run dev`, `bun run build`).
 
@@ -80,9 +86,9 @@ All dependencies are registered as `do.Provide()` providers in `main.go` and res
 │         始终存在，不可拔除          │
 └──────────────┬───────────────────┘
                │
-  ┌────┬────┬──┴──┬────┬────┐
-  ▼    ▼    ▼     ▼    ▼    ▼
- AI  Node  Org   APM  Obs  License   ← optional Apps, build-tag controlled
+  ┌────┬────┬──┴──┬────┬────┬────┐
+  ▼    ▼    ▼     ▼    ▼    ▼    ▼
+ AI  Node  Org   APM  Obs  License  ITSM  ← optional Apps, build-tag controlled
 ```
 
 Each App implements `app.App` (`internal/app/app.go`):
@@ -215,6 +221,23 @@ ForwardAuth for external observability tools (e.g., Grafana). `IntegrationToken`
 ### License App
 
 License lifecycle management with Ed25519 signing + AES-GCM encryption. Supports key rotation with versioned keys and bulk reissue. Can be compiled standalone via `edition_license`.
+
+### ITSM App
+
+IT Service Management with dual workflow engines:
+
+```
+ServiceCatalog → ServiceDefinition → ServiceAction (workflow steps)
+  └─ FormDefinition, Priority, SLATemplate, EscalationRule
+Ticket → TicketActivity → TicketTimeline
+  └─ ProcessVariable, ExecutionToken
+  └─ TicketLink, PostMortem (incidents)
+```
+
+- **ClassicEngine**: BPMN-style workflow with nodes (user_task, action, gateway, wait_timer, approval), token-based execution, and boundary timers
+- **SmartEngine**: AI-powered workflow that uses an Agent to make decisions, resolve participants, and search knowledge bases
+- **Tool Registry** (`tools/`): Exposes ITSM operations (ticket CRUD, assignment, state transitions) as AI Agent tools via `app.ToolRegistryProvider`
+- Scheduler tasks: `itsm-action-execute`, `itsm-wait-timer`, `itsm-smart-progress`, `itsm-boundary-timer`, `itsm-doc-parse`
 
 ### i18n
 

@@ -3,10 +3,16 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"metis/internal/model"
 )
+
+// ErrNotReady is returned by task handlers when the task is not yet ready to execute
+// (e.g., a timer that hasn't reached its execute_after time). The scheduler will
+// re-enqueue the task for the next poll cycle without marking it as completed or failed.
+var ErrNotReady = errors.New("task not ready")
 
 // Task types.
 const (

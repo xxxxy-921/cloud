@@ -11,10 +11,16 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// NotificationSender is an optional interface for sending notifications from workflow nodes.
+type NotificationSender interface {
+	Send(ctx context.Context, channelID uint, subject, body string, recipientIDs []uint) error
+}
+
 // ClassicEngine implements WorkflowEngine via BPMN-style graph traversal.
 type ClassicEngine struct {
-	resolver *ParticipantResolver
+	resolver  *ParticipantResolver
 	scheduler TaskSubmitter
+	notifier  NotificationSender
 }
 
 // TaskSubmitter allows the engine to submit async scheduler tasks.
@@ -22,8 +28,8 @@ type TaskSubmitter interface {
 	SubmitTask(name string, payload json.RawMessage) error
 }
 
-func NewClassicEngine(resolver *ParticipantResolver, scheduler TaskSubmitter) *ClassicEngine {
-	return &ClassicEngine{resolver: resolver, scheduler: scheduler}
+func NewClassicEngine(resolver *ParticipantResolver, scheduler TaskSubmitter, notifier NotificationSender) *ClassicEngine {
+	return &ClassicEngine{resolver: resolver, scheduler: scheduler, notifier: notifier}
 }
 
 // Start parses the workflow, finds the start node, creates the root token, and processes the first node.
@@ -90,7 +96,7 @@ func (e *ClassicEngine) Start(ctx context.Context, tx *gorm.DB, params StartPara
 func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params ProgressParams) error {
 	// Load the activity
 	var activity activityModel
-	if err := tx.First(&activity, params.ActivityID).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&activity, params.ActivityID).Error; err != nil {
 		return ErrActivityNotFound
 	}
 	if activity.Status != ActivityPending && activity.Status != ActivityInProgress {
@@ -102,7 +108,7 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 		return fmt.Errorf("activity %d has no associated execution token", params.ActivityID)
 	}
 	var token executionTokenModel
-	if err := tx.First(&token, *activity.TokenID).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&token, *activity.TokenID).Error; err != nil {
 		return ErrTokenNotFound
 	}
 	if token.Status != TokenActive {
@@ -125,18 +131,32 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 		return ErrNodeNotFound
 	}
 
-	// Complete the current activity
-	now := time.Now()
-	updates := map[string]any{
-		"status":             ActivityCompleted,
-		"transition_outcome": params.Outcome,
-		"finished_at":        now,
-	}
-	if len(params.Result) > 0 {
-		updates["form_data"] = string(params.Result)
-	}
-	if err := tx.Model(&activityModel{}).Where("id = ?", params.ActivityID).Updates(updates).Error; err != nil {
-		return err
+	// Multi-person approval: delegate to progressApproval for approve-type activities
+	// with parallel or sequential mode before completing the activity.
+	if activity.ActivityType == NodeApprove && (activity.ExecutionMode == "parallel" || activity.ExecutionMode == "sequential") {
+		shouldContinue, err := e.progressApproval(tx, &activity, params)
+		if err != nil {
+			return err
+		}
+		if !shouldContinue {
+			// Activity still in progress (not all assignments done)
+			return nil
+		}
+		// All assignments done — activity already completed by progressApproval, continue workflow
+	} else {
+		// Single mode or non-approve: complete the activity immediately
+		now := time.Now()
+		updates := map[string]any{
+			"status":             ActivityCompleted,
+			"transition_outcome": params.Outcome,
+			"finished_at":        now,
+		}
+		if len(params.Result) > 0 {
+			updates["form_data"] = string(params.Result)
+		}
+		if err := tx.Model(&activityModel{}).Where("id = ?", params.ActivityID).Updates(updates).Error; err != nil {
+			return err
+		}
 	}
 
 	// Write form bindings as process variables (if activity had a form with bindings)
@@ -154,10 +174,18 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 	// Cancel any suspended boundary tokens (⑤b itsm-boundary-events)
 	cancelBoundaryTokens(tx, &token)
 
+	// Reload activity to get the final transition_outcome (may differ from params.Outcome in multi-approval)
+	var finalActivity activityModel
+	tx.First(&finalActivity, params.ActivityID)
+	finalOutcome := finalActivity.TransitionOutcome
+	if finalOutcome == "" {
+		finalOutcome = params.Outcome
+	}
+
 	// Find matching outgoing edge
-	edge, err := e.matchEdge(outEdges[currentNode.ID], params.Outcome)
+	edge, err := e.matchEdge(outEdges[currentNode.ID], finalOutcome)
 	if err != nil {
-		return fmt.Errorf("从节点 %s 出发无法找到 outcome=%s 的路径: %w", currentNode.ID, params.Outcome, err)
+		return fmt.Errorf("从节点 %s 出发无法找到 outcome=%s 的路径: %w", currentNode.ID, finalOutcome, err)
 	}
 
 	targetNode, ok := nodeMap[edge.Target]
@@ -305,6 +333,147 @@ func (e *ClassicEngine) processNode(
 		}
 		return fmt.Errorf("%w: %s", ErrInvalidNodeType, node.Type)
 	}
+}
+
+// --- Multi-person Approval ---
+
+// progressApproval handles multi-person approval modes (parallel/sequential).
+// Returns (shouldContinue=true) when the activity is fully completed and workflow should advance,
+// or (shouldContinue=false) when the activity is still waiting for more approvals.
+func (e *ClassicEngine) progressApproval(tx *gorm.DB, activity *activityModel, params ProgressParams) (bool, error) {
+	now := time.Now()
+
+	// Complete the caller's assignment
+	result := tx.Model(&assignmentModel{}).
+		Where("activity_id = ? AND assignee_id = ? AND status = ?", activity.ID, params.OperatorID, "pending").
+		Updates(map[string]any{
+			"status":      "completed",
+			"finished_at": now,
+		})
+	if result.RowsAffected == 0 {
+		return false, fmt.Errorf("no pending assignment found for user %d on activity %d", params.OperatorID, activity.ID)
+	}
+
+	switch activity.ExecutionMode {
+	case "parallel":
+		return e.progressParallelApproval(tx, activity, params, now)
+	case "sequential":
+		return e.progressSequentialApproval(tx, activity, params, now)
+	default:
+		// Should not reach here (caller checks mode), but handle gracefully
+		return e.completeActivity(tx, activity, params, now)
+	}
+}
+
+// progressParallelApproval implements 会签 (countersign) mode:
+// - Any reject → immediately complete activity with "reject" outcome
+// - All approve → complete activity with "approve" outcome
+// - Otherwise → wait for remaining participants
+func (e *ClassicEngine) progressParallelApproval(tx *gorm.DB, activity *activityModel, params ProgressParams, now time.Time) (bool, error) {
+	// If this person rejected, short-circuit: complete activity immediately with "reject"
+	if params.Outcome == "reject" {
+		// Cancel all remaining pending assignments
+		tx.Model(&assignmentModel{}).
+			Where("activity_id = ? AND status = ?", activity.ID, "pending").
+			Updates(map[string]any{"status": "cancelled", "finished_at": now})
+
+		return e.completeActivity(tx, activity, ProgressParams{
+			TicketID:   params.TicketID,
+			ActivityID: params.ActivityID,
+			Outcome:    "reject",
+			Result:     params.Result,
+			OperatorID: params.OperatorID,
+		}, now)
+	}
+
+	// Count remaining pending assignments
+	var remaining int64
+	tx.Model(&assignmentModel{}).
+		Where("activity_id = ? AND status = ?", activity.ID, "pending").
+		Count(&remaining)
+
+	if remaining > 0 {
+		// Still waiting for other participants
+		e.recordTimeline(tx, params.TicketID, &params.ActivityID, params.OperatorID,
+			"approval_partial", fmt.Sprintf("会签：用户 %d 已通过，还有 %d 人待审批", params.OperatorID, remaining))
+		return false, nil
+	}
+
+	// All assignments completed — complete the activity with "approve"
+	return e.completeActivity(tx, activity, ProgressParams{
+		TicketID:   params.TicketID,
+		ActivityID: params.ActivityID,
+		Outcome:    "approve",
+		Result:     params.Result,
+		OperatorID: params.OperatorID,
+	}, now)
+}
+
+// progressSequentialApproval implements 依次审批 mode:
+// - Complete current assignment, advance is_current to next
+// - If no more assignments, complete activity
+func (e *ClassicEngine) progressSequentialApproval(tx *gorm.DB, activity *activityModel, params ProgressParams, now time.Time) (bool, error) {
+	// If rejected at any point, complete activity with "reject"
+	if params.Outcome == "reject" {
+		// Cancel all remaining pending assignments
+		tx.Model(&assignmentModel{}).
+			Where("activity_id = ? AND status = ?", activity.ID, "pending").
+			Updates(map[string]any{"status": "cancelled", "finished_at": now})
+
+		return e.completeActivity(tx, activity, ProgressParams{
+			TicketID:   params.TicketID,
+			ActivityID: params.ActivityID,
+			Outcome:    "reject",
+			Result:     params.Result,
+			OperatorID: params.OperatorID,
+		}, now)
+	}
+
+	// Find next pending assignment by sequence order
+	var nextAssignment assignmentModel
+	err := tx.Where("activity_id = ? AND status = ?", activity.ID, "pending").
+		Order("sequence ASC").First(&nextAssignment).Error
+
+	if err != nil {
+		// No more pending assignments — all done, complete activity
+		return e.completeActivity(tx, activity, ProgressParams{
+			TicketID:   params.TicketID,
+			ActivityID: params.ActivityID,
+			Outcome:    "approve",
+			Result:     params.Result,
+			OperatorID: params.OperatorID,
+		}, now)
+	}
+
+	// Advance is_current to the next assignment
+	tx.Model(&assignmentModel{}).Where("activity_id = ?", activity.ID).Update("is_current", false)
+	tx.Model(&assignmentModel{}).Where("id = ?", nextAssignment.ID).Update("is_current", true)
+
+	// Update ticket assignee to the next person
+	if nextAssignment.AssigneeID != nil {
+		tx.Model(&ticketModel{}).Where("id = ?", params.TicketID).Update("assignee_id", *nextAssignment.AssigneeID)
+	}
+
+	e.recordTimeline(tx, params.TicketID, &params.ActivityID, params.OperatorID,
+		"approval_sequential", fmt.Sprintf("依次审批：用户 %d 已通过，流转至下一审批人", params.OperatorID))
+
+	return false, nil
+}
+
+// completeActivity marks an activity as completed with the given outcome.
+func (e *ClassicEngine) completeActivity(tx *gorm.DB, activity *activityModel, params ProgressParams, now time.Time) (bool, error) {
+	updates := map[string]any{
+		"status":             ActivityCompleted,
+		"transition_outcome": params.Outcome,
+		"finished_at":        now,
+	}
+	if len(params.Result) > 0 {
+		updates["form_data"] = string(params.Result)
+	}
+	if err := tx.Model(&activityModel{}).Where("id = ?", params.ActivityID).Updates(updates).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // --- Node handlers ---
@@ -790,6 +959,12 @@ func (e *ClassicEngine) tryCompleteJoin(
 		return fmt.Errorf("join node %s reached by root token (no parent)", joinNode.ID)
 	}
 
+	// Lock the parent token first, then count remaining siblings (serializes concurrent join attempts)
+	var parentToken executionTokenModel
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&parentToken, *token.ParentTokenID).Error; err != nil {
+		return fmt.Errorf("parent token %d not found: %w", *token.ParentTokenID, err)
+	}
+
 	// Count remaining active/waiting siblings
 	var remaining int64
 	tx.Model(&executionTokenModel{}).
@@ -803,10 +978,6 @@ func (e *ClassicEngine) tryCompleteJoin(
 	}
 
 	// All siblings completed — reactivate parent token
-	var parentToken executionTokenModel
-	if err := tx.First(&parentToken, *token.ParentTokenID).Error; err != nil {
-		return fmt.Errorf("parent token %d not found: %w", *token.ParentTokenID, err)
-	}
 
 	tx.Model(&executionTokenModel{}).Where("id = ?", parentToken.ID).Update("status", TokenActive)
 	parentToken.Status = TokenActive
