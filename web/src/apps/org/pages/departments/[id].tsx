@@ -168,7 +168,7 @@ function AllowedPositionsSection({ deptId }: { deptId: number }) {
   const { data: allPositions = [] } = useQuery({
     queryKey: ["positions", "all"],
     queryFn: async () => {
-      const res = await api.get<{ items: PositionItem[] }>("/api/v1/org/positions", { page: 1, pageSize: 1000 })
+      const res = await api.get<{ items: PositionItem[] }>("/api/v1/org/positions?page=1&pageSize=1000")
       return res.items ?? []
     },
     enabled: popoverOpen,

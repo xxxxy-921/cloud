@@ -102,7 +102,7 @@ export function DepartmentSheet({ open, onOpenChange, department }: DepartmentSh
   const { data: users = [] } = useQuery({
     queryKey: ["users", "all"],
     queryFn: async () => {
-      const res = await api.get<{ items: UserOption[] }>("/api/v1/users", { page: 1, pageSize: 1000 })
+      const res = await api.get<{ items: UserOption[] }>("/api/v1/users?page=1&pageSize=1000")
       return res.items ?? []
     },
     enabled: open,
