@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -25,6 +26,7 @@ type decisionToolContext struct {
 	knowledgeSearcher KnowledgeSearcher
 	resolver          *ParticipantResolver
 	knowledgeBaseIDs  []uint
+	actionExecutor    *ActionExecutor
 }
 
 // allDecisionTools returns the complete set of decision domain tools.
@@ -37,6 +39,7 @@ func allDecisionTools() []decisionToolDef {
 		toolSimilarHistory(),
 		toolSLAStatus(),
 		toolListActions(),
+		toolExecuteAction(),
 	}
 }
 
@@ -174,6 +177,41 @@ func toolTicketContext() decisionToolDef {
 				}
 			}
 
+			// Parallel groups — active countersign groups with progress
+			type groupRow struct {
+				ActivityGroupID string
+				Total           int64
+				Completed       int64
+			}
+			var groups []groupRow
+			ctx.tx.Table("itsm_ticket_activities").
+				Select("activity_group_id, COUNT(*) as total, SUM(CASE WHEN status IN ('completed','cancelled') THEN 1 ELSE 0 END) as completed").
+				Where("ticket_id = ? AND activity_group_id != ''", ctx.ticketID).
+				Group("activity_group_id").
+				Find(&groups)
+
+			var activeGroups []map[string]any
+			for _, g := range groups {
+				if g.Total-g.Completed > 0 {
+					// Collect pending activity names
+					var pendingNames []string
+					ctx.tx.Table("itsm_ticket_activities").
+						Where("ticket_id = ? AND activity_group_id = ? AND status NOT IN ('completed','cancelled')",
+							ctx.ticketID, g.ActivityGroupID).
+						Pluck("name", &pendingNames)
+
+					activeGroups = append(activeGroups, map[string]any{
+						"group_id":           g.ActivityGroupID,
+						"total":              g.Total,
+						"completed":          g.Completed,
+						"pending_activities": pendingNames,
+					})
+				}
+			}
+			if len(activeGroups) > 0 {
+				result["parallel_groups"] = activeGroups
+			}
+
 			return json.Marshal(result)
 		},
 	}
@@ -252,7 +290,7 @@ func toolResolveParticipant() decisionToolDef {
 				"type": "object",
 				"properties": map[string]any{
 					"type":            map[string]any{"type": "string", "description": "参与人类型: user|position|department|position_department|requester_manager"},
-					"value":           map[string]any{"type": "string", "description": "类型相关值（user类型为user_id, position类型为position_code等）"},
+					"value":           map[string]any{"type": "string", "description": "类型相关值（user类型为user_id或username, position类型为position_code等）"},
 					"position_code":   map[string]any{"type": "string", "description": "岗位代码（position_department类型时必填）"},
 					"department_code": map[string]any{"type": "string", "description": "部门代码（position_department类型时必填）"},
 				},
@@ -533,6 +571,74 @@ func toolListActions() decisionToolDef {
 			return json.Marshal(map[string]any{
 				"actions": items,
 				"count":   len(items),
+			})
+		},
+	}
+}
+
+// --- Tool: decision.execute_action ---
+
+func toolExecuteAction() decisionToolDef {
+	return decisionToolDef{
+		Def: llm.ToolDef{
+			Name:        "decision.execute_action",
+			Description: "同步执行服务配置的自动化动作（webhook），返回执行结果。用于在决策推理过程中触发自动化操作并观察结果。",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action_id": map[string]any{"type": "integer", "description": "要执行的动作 ID（从 decision.list_actions 获取）"},
+				},
+				"required": []string{"action_id"},
+			},
+		},
+		Handler: func(ctx *decisionToolContext, args json.RawMessage) (json.RawMessage, error) {
+			var params struct {
+				ActionID uint `json:"action_id"`
+			}
+			json.Unmarshal(args, &params)
+
+			if ctx.actionExecutor == nil {
+				return toolError("动作执行器不可用")
+			}
+
+			// Verify action exists and is active
+			var action struct {
+				ID       uint
+				Name     string
+				Code     string
+				IsActive bool
+			}
+			if err := ctx.tx.Table("itsm_service_actions").
+				Where("id = ? AND service_id = ? AND deleted_at IS NULL", params.ActionID, ctx.serviceID).
+				Select("id, name, code, is_active").
+				First(&action).Error; err != nil {
+				return toolError("动作不存在")
+			}
+			if !action.IsActive {
+				return toolError("动作已停用")
+			}
+
+			// Create a placeholder activity for tracking the execution
+			// (ActionExecutor.Execute requires an activityID for recording)
+			err := ctx.actionExecutor.Execute(
+				context.Background(),
+				ctx.ticketID, 0, params.ActionID,
+			)
+
+			if err != nil {
+				return json.Marshal(map[string]any{
+					"success":     false,
+					"action_name": action.Name,
+					"action_code": action.Code,
+					"error":       err.Error(),
+				})
+			}
+
+			return json.Marshal(map[string]any{
+				"success":     true,
+				"action_name": action.Name,
+				"action_code": action.Code,
+				"message":     fmt.Sprintf("动作 [%s] 执行成功", action.Name),
 			})
 		},
 	}

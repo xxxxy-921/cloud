@@ -1520,6 +1520,7 @@ type activityModel struct {
 	Status            string     `gorm:"column:status;size:16;default:pending"`
 	NodeID            string     `gorm:"column:node_id;size:64"`
 	ExecutionMode     string     `gorm:"column:execution_mode;size:16"`
+	ActivityGroupID   string     `gorm:"column:activity_group_id;size:36"`
 	FormSchema        string     `gorm:"column:form_schema;type:text"`
 	FormData          string     `gorm:"column:form_data;type:text"`
 	TransitionOutcome string     `gorm:"column:transition_outcome;size:16"`

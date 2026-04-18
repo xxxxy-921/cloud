@@ -29,4 +29,4 @@
 
 - [x] 5.1 在 `bdd_test.go` 的 `initializeScenario` 中注册 `registerBossSteps(sc, bc)`
 - [x] 5.2 运行 `go build -tags dev ./cmd/server/` 确认编译通过
-- [ ] 5.3 运行 `make test-bdd` 验证全部 4 个 scenario 通过
+- [x] 5.3 运行 `make test-bdd` 验证全部 4 个 scenario 通过

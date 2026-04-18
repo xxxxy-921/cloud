@@ -134,7 +134,9 @@ func (a *ITSMApp) Providers(i do.Injector) {
 		// Engine config provider for fallback assignee
 		configProvider := do.MustInvoke[*EngineConfigService](i)
 
-		return engine.NewSmartEngine(agentProvider, knowledgeSearcher, userProvider, resolver, submitter, configProvider), nil
+		se := engine.NewSmartEngine(agentProvider, knowledgeSearcher, userProvider, resolver, submitter, configProvider)
+		se.SetActionExecutor(engine.NewActionExecutor(db.DB))
+		return se, nil
 	})
 
 	// Services

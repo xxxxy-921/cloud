@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -98,10 +99,11 @@ func ParseSmartServiceConfig(raw string) SmartServiceConfig {
 
 // DecisionPlan is the structured output from the AI agent.
 type DecisionPlan struct {
-	NextStepType string             `json:"next_step_type"` // approve|process|action|notify|form|complete|escalate
-	Activities   []DecisionActivity `json:"activities"`
-	Reasoning    string             `json:"reasoning"`
-	Confidence   float64            `json:"confidence"`
+	NextStepType  string             `json:"next_step_type"`  // approve|process|action|notify|form|complete|escalate
+	ExecutionMode string             `json:"execution_mode"`  // ""|"single"|"parallel"
+	Activities    []DecisionActivity `json:"activities"`
+	Reasoning     string             `json:"reasoning"`
+	Confidence    float64            `json:"confidence"`
 }
 
 // DecisionActivity is a single activity within a decision plan.
@@ -131,6 +133,7 @@ type SmartEngine struct {
 	resolver          *ParticipantResolver
 	scheduler         TaskSubmitter
 	configProvider    EngineConfigProvider
+	actionExecutor    *ActionExecutor
 }
 
 // NewSmartEngine creates a SmartEngine with optional AI dependencies.
@@ -155,6 +158,11 @@ func NewSmartEngine(
 // IsAvailable returns true if the smart engine has AI dependencies.
 func (e *SmartEngine) IsAvailable() bool {
 	return e.agentProvider != nil
+}
+
+// SetActionExecutor injects the action executor for decision.execute_action tool support.
+func (e *SmartEngine) SetActionExecutor(executor *ActionExecutor) {
+	e.actionExecutor = executor
 }
 
 // Start initialises the workflow for a smart-engine ticket.
@@ -216,6 +224,26 @@ func (e *SmartEngine) Progress(ctx context.Context, tx *gorm.DB, params Progress
 
 	e.recordTimeline(tx, params.TicketID, &params.ActivityID, params.OperatorID, "activity_completed",
 		fmt.Sprintf("活动 [%s] 完成，结果: %s", activity.Name, params.Outcome), "")
+
+	// Convergence check: if this activity belongs to a parallel group,
+	// only proceed when all siblings are completed.
+	if activity.ActivityGroupID != "" {
+		var incompleteCount int64
+		tx.Model(&activityModel{}).
+			Where("activity_group_id = ? AND status NOT IN ?", activity.ActivityGroupID,
+				[]string{ActivityCompleted, ActivityCancelled}).
+			Count(&incompleteCount)
+
+		if incompleteCount > 0 {
+			slog.Info("parallel group not yet converged",
+				"ticketID", params.TicketID, "groupID", activity.ActivityGroupID,
+				"remaining", incompleteCount)
+			return nil
+		}
+
+		slog.Info("parallel group converged, triggering next decision",
+			"ticketID", params.TicketID, "groupID", activity.ActivityGroupID)
+	}
 
 	// Submit async task for next decision cycle
 	svcInfo, err := e.loadServiceForTicket(tx, params.TicketID)
@@ -395,6 +423,71 @@ func (e *SmartEngine) handleComplete(tx *gorm.DB, ticketID uint, plan *DecisionP
 
 // executeDecisionPlan creates activities for a high-confidence decision.
 func (e *SmartEngine) executeDecisionPlan(tx *gorm.DB, ticketID uint, plan *DecisionPlan) error {
+	if plan.ExecutionMode == "parallel" {
+		return e.executeParallelPlan(tx, ticketID, plan)
+	}
+	return e.executeSequentialPlan(tx, ticketID, plan)
+}
+
+// executeParallelPlan creates a group of parallel activities sharing the same activity_group_id.
+func (e *SmartEngine) executeParallelPlan(tx *gorm.DB, ticketID uint, plan *DecisionPlan) error {
+	now := time.Now()
+	planJSON := mustJSON(plan)
+	groupID := uuid.New().String()
+
+	var firstActID uint
+	for i, da := range plan.Activities {
+		status := ActivityPending
+		act := &activityModel{
+			TicketID:        ticketID,
+			Name:            decisionActivityName(da),
+			ActivityType:    da.Type,
+			Status:          status,
+			ExecutionMode:   "parallel",
+			ActivityGroupID: groupID,
+			AIDecision:      planJSON,
+			AIReasoning:     plan.Reasoning,
+			AIConfidence:    plan.Confidence,
+			StartedAt:       &now,
+		}
+		if err := tx.Create(act).Error; err != nil {
+			return err
+		}
+
+		if i == 0 {
+			firstActID = act.ID
+			tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("current_activity_id", act.ID)
+		}
+
+		// Create assignment
+		if da.ParticipantID != nil && *da.ParticipantID > 0 {
+			assignment := &assignmentModel{
+				TicketID:        ticketID,
+				ActivityID:      act.ID,
+				ParticipantType: "user",
+				UserID:          da.ParticipantID,
+				AssigneeID:      da.ParticipantID,
+				Status:          "pending",
+				IsCurrent:       true,
+			}
+			tx.Create(assignment)
+		} else if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
+			e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
+		} else if da.Type == "approve" || da.Type == "process" || da.Type == "form" {
+			e.tryFallbackAssignment(tx, ticketID, act.ID)
+		}
+
+		e.recordTimeline(tx, ticketID, &act.ID, 0, "ai_decision_executed",
+			fmt.Sprintf("AI 并签活动：%s（组 %s，信心 %.0f%%）", decisionActivityName(da), groupID[:8], plan.Confidence*100),
+			plan.Reasoning)
+	}
+
+	_ = firstActID
+	return nil
+}
+
+// executeSequentialPlan creates activities sequentially (original behavior).
+func (e *SmartEngine) executeSequentialPlan(tx *gorm.DB, ticketID uint, plan *DecisionPlan) error {
 	now := time.Now()
 	planJSON := mustJSON(plan)
 

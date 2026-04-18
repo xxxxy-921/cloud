@@ -137,6 +137,7 @@ type TicketActivity struct {
 	Status            string     `json:"status" gorm:"size:16;default:pending"`
 	NodeID            string     `json:"nodeId" gorm:"column:node_id;size:64"`
 	ExecutionMode     string     `json:"executionMode" gorm:"column:execution_mode;size:16"`
+	ActivityGroupID   string     `json:"activityGroupId" gorm:"column:activity_group_id;size:36;index"`
 	FormSchema        JSONField  `json:"formSchema" gorm:"column:form_schema;type:text"`
 	FormData          JSONField  `json:"formData" gorm:"column:form_data;type:text"`
 	TransitionOutcome string     `json:"transitionOutcome" gorm:"column:transition_outcome;size:16"`

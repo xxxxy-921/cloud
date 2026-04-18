@@ -52,6 +52,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 		serviceID:         svc.ID,
 		knowledgeSearcher: e.knowledgeSearcher,
 		resolver:          e.resolver,
+		actionExecutor:    e.actionExecutor,
 	}
 
 	// Build tool definitions and handler map
@@ -230,23 +231,25 @@ const agenticToolGuidance = `## 工具使用指引
 
 你可以通过以下工具按需查询信息来辅助决策：
 
-- **decision.ticket_context** — 获取工单完整上下文（表单数据、SLA、活动历史、当前指派、已执行动作）
+- **decision.ticket_context** — 获取工单完整上下文（表单数据、SLA、活动历史、当前指派、已执行动作、并签组状态）
 - **decision.knowledge_search** — 搜索服务关联知识库
 - **decision.resolve_participant** — 按类型解析参与人（user/position/department/position_department/requester_manager）
 - **decision.user_workload** — 查询用户当前工单负载
 - **decision.similar_history** — 查询同服务历史工单的处理模式
 - **decision.sla_status** — 查询 SLA 状态和紧急程度
 - **decision.list_actions** — 查询服务可用的自动化动作
+- **decision.execute_action** — 同步执行服务配置的自动化动作（webhook），返回执行结果。在决策推理过程中直接触发自动化操作并观察结果。
 
 ### 推荐推理步骤
 
-1. 先用 decision.ticket_context 了解完整上下文（注意 activity_history 和 executed_actions）
+1. 先用 decision.ticket_context 了解完整上下文（注意 activity_history、executed_actions 和 parallel_groups）
 2. 用 decision.list_actions 查看是否有可用的自动化动作
 3. 如需查阅处理规范，使用 decision.knowledge_search
-4. 如果协作规范要求执行某个动作（如预检、放行等），选择 next_step_type 为 "action" 并填写对应的 action_id
-5. 如果需要人工审批，用 decision.resolve_participant 解析指派人
-6. 可选：用 decision.user_workload 做负载均衡，用 decision.similar_history 参考历史模式
-7. 最终输出决策 JSON（不调用任何工具）
+4. 如果协作规范要求执行某个动作（如预检、放行等），使用 decision.execute_action 同步执行并获取结果，而非输出 type 为 "action" 的活动
+5. 如果需要多角色并行审批（并签），设置 execution_mode 为 "parallel"，在 activities 中列出所有并行角色
+6. 如果需要人工审批，用 decision.resolve_participant 解析指派人
+7. 可选：用 decision.user_workload 做负载均衡，用 decision.similar_history 参考历史模式
+8. 最终输出决策 JSON（不调用任何工具）
 
 ### 完成判断
 
@@ -257,6 +260,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"```json\n" +
 	"{\n" +
 	"  \"next_step_type\": \"process|approve|action|notify|form|complete|escalate\",\n" +
+	"  \"execution_mode\": \"single|parallel\",\n" +
 	"  \"activities\": [\n" +
 	"    {\n" +
 	"      \"type\": \"process|approve|action|notify|form\",\n" +
@@ -274,6 +278,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"```\n\n" +
 	"字段说明：\n" +
 	"- next_step_type: 下一步类型。\"complete\" 表示流程可以结束。\n" +
+	"- execution_mode: 执行模式。\"single\"（默认）为串行，\"parallel\" 为并签模式——activities 中的多个活动将并行等待处理，全部完成后才推进到下一步。当协作规范要求多角色并行审批时使用 \"parallel\"。\n" +
 	"- activities: 需要创建的活动列表。\n" +
 	"- participant_type: \"user\" 需填 participant_id；\"position_department\" 需填 position_code + department_code。\n" +
 	"- position_code / department_code: 当 participant_type 为 position_department 时，填写岗位编码和部门编码。\n" +

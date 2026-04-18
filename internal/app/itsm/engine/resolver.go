@@ -25,7 +25,12 @@ func (r *ParticipantResolver) Resolve(tx *gorm.DB, ticketID uint, p Participant)
 	case "user":
 		uid, err := strconv.ParseUint(p.Value, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid user ID %q: %w", p.Value, err)
+			// Value is not numeric — try resolving as username
+			var user struct{ ID uint }
+			if dbErr := tx.Table("users").Where("username = ?", p.Value).Select("id").First(&user).Error; dbErr != nil {
+				return nil, fmt.Errorf("user %q not found by ID or username: %w", p.Value, dbErr)
+			}
+			return []uint{user.ID}, nil
 		}
 		return []uint{uint(uid)}, nil
 
