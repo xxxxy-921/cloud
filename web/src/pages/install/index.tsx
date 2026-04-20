@@ -433,7 +433,7 @@ function DatabaseStep({
           <Button
             type="button"
             variant="outline"
-            className="h-9 w-full rounded-xl border-slate-200/70 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
+            className="h-9 w-full rounded-xl text-[13px]"
             onClick={handleTestConnection}
             disabled={testing || !config.host || !config.user || !config.dbname}
           >
@@ -458,13 +458,13 @@ function DatabaseStep({
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl border-slate-200/70 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          className="h-[2.625rem] flex-1 rounded-xl text-sm"
           onClick={onBack}
         >
           {t("site.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl border-0 bg-slate-900 text-sm font-medium tracking-[-0.01em] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,0.06)] hover:bg-slate-800 active:scale-[0.985]"
+          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
           onClick={onNext}
           disabled={!canProceed}
         >
@@ -704,13 +704,13 @@ function SiteInfoStep({
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl border-slate-200/70 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          className="h-[2.625rem] flex-1 rounded-xl text-sm"
           onClick={onBack}
         >
           {t("site.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl border-0 bg-slate-900 text-sm font-medium tracking-[-0.01em] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,0.06)] hover:bg-slate-800 active:scale-[0.985]"
+          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
           onClick={onNext}
           disabled={!config.siteName.trim()}
         >
@@ -841,13 +841,13 @@ function AdminStep({
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl border-slate-200/70 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          className="h-[2.625rem] flex-1 rounded-xl text-sm"
           onClick={onBack}
         >
           {t("admin.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl border-0 bg-slate-900 text-sm font-medium tracking-[-0.01em] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,0.06)] hover:bg-slate-800 active:scale-[0.985]"
+          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
           onClick={onNext}
           disabled={!isValid}
         >
@@ -937,7 +937,7 @@ function CompleteStep({
           </p>
         </div>
         <Button
-          className="h-[2.625rem] w-full rounded-xl border-0 bg-slate-900 text-sm font-medium tracking-[-0.01em] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,0.06)] hover:bg-slate-800 active:scale-[0.985]"
+          className="h-[2.625rem] w-full rounded-xl text-sm tracking-[-0.01em]"
           onClick={() => { window.location.href = "/login" }}
         >
           {t("done.enter")}
@@ -1029,14 +1029,14 @@ function CompleteStep({
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl border-slate-200/70 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          className="h-[2.625rem] flex-1 rounded-xl text-sm"
           onClick={onBack}
           disabled={installing}
         >
           {t("confirm.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl border-0 bg-slate-900 text-sm font-medium tracking-[-0.01em] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,0.06)] hover:bg-slate-800 active:scale-[0.985]"
+          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
           onClick={handleInstall}
           disabled={installing}
         >

@@ -415,6 +415,7 @@ function makeTypedAgentApi(basePath: string) {
           skillIds: data.skillIds ?? [],
           mcpServerIds: data.mcpServerIds ?? [],
           knowledgeBaseIds: data.knowledgeBaseIds ?? [],
+          knowledgeGraphIds: data.knowledgeGraphIds ?? [],
         } satisfies AgentWithBindings;
       }
       return data;
@@ -425,6 +426,7 @@ function makeTypedAgentApi(basePath: string) {
       skillIds?: number[];
       mcpServerIds?: number[];
       knowledgeBaseIds?: number[];
+      knowledgeGraphIds?: number[];
       templateId?: number;
     }) => api.post<AgentInfo>(basePath, data),
 
@@ -433,6 +435,7 @@ function makeTypedAgentApi(basePath: string) {
       skillIds?: number[];
       mcpServerIds?: number[];
       knowledgeBaseIds?: number[];
+      knowledgeGraphIds?: number[];
     }) => api.put<AgentInfo>(`${basePath}/${id}`, data),
 
     delete: (id: number) => api.delete<null>(`${basePath}/${id}`),
