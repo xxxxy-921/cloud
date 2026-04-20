@@ -290,11 +290,6 @@ func (h *InstallHandler) Execute(c *gin.Context) {
 			return
 		}
 	}
-	if err := assignInstallAdminOrgIdentity(db.DB, req.AdminUsername); err != nil {
-		Fail(c, http.StatusInternalServerError, "failed to assign admin org identity: "+err.Error())
-		return
-	}
-
 	// 9. Mark installed
 	if err := seed.SetInstalled(db.DB); err != nil {
 		Fail(c, http.StatusInternalServerError, "failed to mark installed: "+err.Error())
@@ -311,7 +306,7 @@ func (h *InstallHandler) Execute(c *gin.Context) {
 	h.installed = true
 
 	// 11. Hot switch: register all business services and routes
-	if err := h.hotSwitch(cfg, db, enforcer); err != nil {
+	if err := h.hotSwitch(cfg, db, enforcer, req.AdminUsername); err != nil {
 		slog.Error("install: hot switch failed", "error", err)
 		// Installation is complete but hot switch failed — user needs to restart
 		OK(c, gin.H{"restart_required": true})
@@ -330,12 +325,18 @@ func assignInstallAdminOrgIdentity(db *gorm.DB, username string) error {
 	type departmentRow struct{ ID uint }
 	var dept departmentRow
 	if err := db.Table("departments").Where("code = ?", "it").Select("id").First(&dept).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
 		return err
 	}
 
 	type positionRow struct{ ID uint }
 	var pos positionRow
 	if err := db.Table("positions").Where("code = ?", "it_admin").Select("id").First(&pos).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
 		return err
 	}
 
@@ -378,7 +379,7 @@ func upsertInstallAdmin(db *gorm.DB, username, password, email string, roleID ui
 	return nil
 }
 
-func (h *InstallHandler) hotSwitch(cfg *config.MetisConfig, db *database.DB, enforcer *casbin.Enforcer) error {
+func (h *InstallHandler) hotSwitch(cfg *config.MetisConfig, db *database.DB, enforcer *casbin.Enforcer, adminUsername string) error {
 	injector := h.injector
 
 	// Config, DB, and kernel providers already registered in Execute
@@ -401,6 +402,10 @@ func (h *InstallHandler) hotSwitch(cfg *config.MetisConfig, db *database.DB, enf
 		if err := a.Seed(db.DB, enforcer, true); err != nil {
 			slog.Error("install: app seed failed", "app", a.Name(), "error", err)
 		}
+	}
+
+	if err := assignInstallAdminOrgIdentity(db.DB, adminUsername); err != nil {
+		return fmt.Errorf("assign install admin org identity: %w", err)
 	}
 
 	// Resolve handler

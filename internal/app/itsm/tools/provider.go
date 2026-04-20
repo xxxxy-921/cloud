@@ -5,6 +5,8 @@ import (
 	"log/slog"
 
 	"gorm.io/gorm"
+
+	"metis/internal/app/itsm/engine"
 )
 
 // ITSMTool defines a tool that ITSM registers into the ai_tools table.
@@ -17,7 +19,7 @@ type ITSMTool struct {
 
 // AllTools returns the ITSM tool definitions.
 func AllTools() []ITSMTool {
-	return []ITSMTool{
+	tools := []ITSMTool{
 		{
 			Name:        "itsm.service_match",
 			DisplayName: "服务匹配",
@@ -137,6 +139,20 @@ func AllTools() []ITSMTool {
 			}`),
 		},
 	}
+	for _, def := range engine.DecisionToolDefs() {
+		params, err := json.Marshal(def.Parameters)
+		if err != nil {
+			slog.Warn("ITSM tools seed: failed to marshal decision tool schema", "name", def.Name, "error", err)
+			continue
+		}
+		tools = append(tools, ITSMTool{
+			Name:             def.Name,
+			DisplayName:      def.Name,
+			Description:      def.Description,
+			ParametersSchema: params,
+		})
+	}
+	return tools
 }
 
 // SeedTools registers ITSM tool definitions into the ai_tools table.
@@ -173,8 +189,12 @@ func SeedTools(db *gorm.DB) error {
 			slog.Info("ITSM tools seed: updated tool", "name", tool.Name)
 		} else {
 			// Create new
+			toolkit := "itsm"
+			if len(tool.Name) > 9 && tool.Name[:9] == "decision." {
+				toolkit = "decision"
+			}
 			if err := db.Table("ai_tools").Create(map[string]any{
-				"toolkit":           "itsm",
+				"toolkit":           toolkit,
 				"name":              tool.Name,
 				"display_name":      tool.DisplayName,
 				"description":       tool.Description,
@@ -352,6 +372,7 @@ func SeedAgents(db *gorm.DB) error {
 				"decision.similar_history",
 				"decision.sla_status",
 				"decision.list_actions",
+				"decision.execute_action",
 			},
 		},
 	}

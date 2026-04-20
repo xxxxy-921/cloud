@@ -52,6 +52,11 @@ func buildDecisionToolDefs() []llm.ToolDef {
 	return defs
 }
 
+// DecisionToolDefs exposes the persisted builtin decision tool definitions for seed sync.
+func DecisionToolDefs() []llm.ToolDef {
+	return buildDecisionToolDefs()
+}
+
 // --- Tool: decision.ticket_context ---
 
 func toolTicketContext() decisionToolDef {

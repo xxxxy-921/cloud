@@ -33,11 +33,27 @@ func newSeedAlignmentDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open db: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&ServiceCatalog{}, &ServiceDefinition{}, &ServiceAction{}, &SLATemplate{},
+		&ServiceCatalog{}, &ServiceDefinition{}, &ServiceAction{}, &Priority{}, &SLATemplate{},
 		&org.Department{}, &org.Position{}, &org.DepartmentPosition{}, &org.UserPosition{},
-		&coremodel.User{}, &coremodel.Role{}, &coremodel.Menu{}, &coremodel.SystemConfig{}, &aiapp.Agent{},
+		&coremodel.User{}, &coremodel.Role{}, &coremodel.Menu{}, &coremodel.SystemConfig{},
+		&aiapp.Agent{}, &aiapp.Tool{}, &aiapp.AgentTool{},
 	); err != nil {
 		t.Fatalf("migrate db: %v", err)
+	}
+	for _, name := range []string{
+		"general.current_time",
+		"system.current_user_profile",
+	} {
+		tool := aiapp.Tool{
+			Toolkit:     "test",
+			Name:        name,
+			DisplayName: name,
+			Description: "test seed tool",
+			IsActive:    true,
+		}
+		if err := db.Where(aiapp.Tool{Name: name}).FirstOrCreate(&tool).Error; err != nil {
+			t.Fatalf("seed tool %s: %v", name, err)
+		}
 	}
 	return db
 }
@@ -72,11 +88,6 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 	adminRole := coremodel.Role{Name: "Admin", Code: coremodel.RoleAdmin}
 	if err := db.Create(&adminRole).Error; err != nil {
 		t.Fatalf("create admin role: %v", err)
-	}
-	decisionCode := "itsm.decision"
-	decisionAgent := aiapp.Agent{Name: "Decision", Code: &decisionCode, Type: "internal", IsActive: true}
-	if err := db.Create(&decisionAgent).Error; err != nil {
-		t.Fatalf("create decision agent: %v", err)
 	}
 	admin := coremodel.User{Username: "admin", IsActive: true, RoleID: adminRole.ID}
 	if err := db.Create(&admin).Error; err != nil {
@@ -158,6 +169,40 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 			}
 			if strings.Contains(svc.CollaborationSpec, "dba_admin") {
 				t.Fatalf("service %s should not reference legacy dba_admin code", svc.Code)
+			}
+		}
+	})
+
+	t.Run("decision agent gets required tool bindings", func(t *testing.T) {
+		var agent aiapp.Agent
+		if err := db.Where("name = ?", "流程决策智能体").First(&agent).Error; err != nil {
+			t.Fatalf("load decision agent: %v", err)
+		}
+
+		var tools []aiapp.Tool
+		if err := db.Table("ai_tools").
+			Joins("JOIN ai_agent_tools ON ai_agent_tools.tool_id = ai_tools.id").
+			Where("ai_agent_tools.agent_id = ?", agent.ID).
+			Find(&tools).Error; err != nil {
+			t.Fatalf("load decision agent tools: %v", err)
+		}
+
+		have := map[string]bool{}
+		for _, tool := range tools {
+			have[tool.Name] = true
+		}
+		for _, name := range []string{
+			"decision.ticket_context",
+			"decision.knowledge_search",
+			"decision.resolve_participant",
+			"decision.user_workload",
+			"decision.similar_history",
+			"decision.sla_status",
+			"decision.list_actions",
+			"decision.execute_action",
+		} {
+			if !have[name] {
+				t.Fatalf("expected decision agent to bind tool %s", name)
 			}
 		}
 	})
