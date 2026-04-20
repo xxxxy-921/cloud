@@ -5,12 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/samber/do/v2"
 
-	"metis/internal/llm"
-	"metis/internal/pkg/crypto"
 	"metis/internal/scheduler"
 )
 
@@ -24,7 +21,6 @@ type ConceptMapEngine struct {
 	modelRepo    *ModelRepo
 	embeddingSvc *KnowledgeEmbeddingService
 	compileSvc   *KnowledgeCompileService
-	encKey       crypto.EncryptionKey
 	engine       *scheduler.Engine
 }
 
@@ -37,7 +33,6 @@ func NewConceptMapEngine(i do.Injector) (*ConceptMapEngine, error) {
 		modelRepo:    do.MustInvoke[*ModelRepo](i),
 		embeddingSvc: do.MustInvoke[*KnowledgeEmbeddingService](i),
 		compileSvc:   do.MustInvoke[*KnowledgeCompileService](i),
-		encKey:       do.MustInvoke[crypto.EncryptionKey](i),
 		engine:       do.MustInvoke[*scheduler.Engine](i),
 	}
 	// Register this engine for kg:concept_map
@@ -69,7 +64,7 @@ func (e *ConceptMapEngine) Search(ctx context.Context, asset *KnowledgeAsset, qu
 	// Generate query embedding if embedding is configured
 	var queryVec []float32
 	if asset.EmbeddingProviderID != nil && asset.EmbeddingModelID != "" {
-		vec, err := e.generateQueryEmbedding(ctx, asset, query.Query)
+		vec, err := e.embeddingSvc.EmbedQuery(ctx, asset, query.Query)
 		if err != nil {
 			slog.Warn("failed to generate query embedding, falling back to fulltext", "asset_id", asset.ID, "error", err)
 		} else {
@@ -174,41 +169,4 @@ func (e *ConceptMapEngine) enqueueCompile(assetID uint, recompile bool) error {
 		return err
 	}
 	return e.engine.Enqueue("ai-knowledge-compile", json.RawMessage(b))
-}
-
-func (e *ConceptMapEngine) generateQueryEmbedding(ctx context.Context, asset *KnowledgeAsset, query string) ([]float32, error) {
-	if asset.EmbeddingProviderID == nil || asset.EmbeddingModelID == "" {
-		return nil, errEmbeddingNotConfigured
-	}
-
-	// Find provider
-	var provider Provider
-	if err := e.modelRepo.db.First(&provider, *asset.EmbeddingProviderID).Error; err != nil {
-		return nil, fmt.Errorf("find embedding provider: %w", err)
-	}
-
-	apiKey, err := decryptAPIKey(provider.APIKeyEncrypted, e.encKey)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt api key: %w", err)
-	}
-
-	client, err := llm.NewClient(provider.Protocol, provider.BaseURL, apiKey)
-	if err != nil {
-		return nil, fmt.Errorf("create embedding client: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	resp, err := client.Embedding(ctx, llm.EmbeddingRequest{
-		Model: asset.EmbeddingModelID,
-		Input: []string{query},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("embedding API: %w", err)
-	}
-	if len(resp.Embeddings) == 0 {
-		return nil, errEmbeddingEmpty
-	}
-	return resp.Embeddings[0], nil
 }

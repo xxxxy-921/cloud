@@ -129,22 +129,24 @@ async function apiPost<T>(url: string, data: unknown): Promise<T> {
 
 function StepIndicator({ steps, current }: { steps: StepDef[]; current: number }) {
   return (
-    <div className="flex items-start justify-center gap-0">
+    <div className="flex w-full items-start">
       {steps.map((step, i) => {
         const isCompleted = i < current
         const isCurrent = i === current
         return (
-          <div key={step.id} className="flex flex-col items-center gap-1.5">
-            <div className="flex h-7 items-center">
-              {i > 0 && (
-                <div
-                  className={`h-px w-6 sm:w-10 transition-colors duration-300 ${
-                    isCompleted ? "bg-primary/80" : "bg-border/80"
-                  }`}
-                />
-              )}
+          <div key={step.id} className="relative flex min-w-0 flex-1 flex-col items-center gap-1.5">
+            <div className="relative flex h-7 w-full items-center justify-center">
               <div
-                className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold transition-all duration-300 ${
+                className={`absolute top-1/2 h-px -translate-y-1/2 transition-colors duration-300 ${
+                  i === 0
+                    ? "left-1/2 right-0"
+                    : i === steps.length - 1
+                      ? "left-0 right-1/2"
+                      : "inset-x-0"
+                } ${isCompleted ? "bg-primary/80" : "bg-border/80"}`}
+              />
+              <div
+                className={`relative z-10 flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold transition-all duration-300 ${
                   isCompleted
                     ? "bg-primary text-primary-foreground"
                     : isCurrent
@@ -162,7 +164,7 @@ function StepIndicator({ steps, current }: { steps: StepDef[]; current: number }
               </div>
             </div>
             <span
-              className={`text-[11px] font-medium whitespace-nowrap ${
+              className={`w-full px-1 text-center text-[11px] font-medium whitespace-nowrap ${
                 isCurrent ? "text-foreground/78" : isCompleted ? "text-muted-foreground" : "text-muted-foreground/70"
               }`}
             >
@@ -454,17 +456,17 @@ function DatabaseStep({
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl text-sm"
+          className="h-[2.625rem] w-full rounded-xl text-sm"
           onClick={onBack}
         >
           {t("site.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
+          className="h-[2.625rem] w-full rounded-xl text-sm tracking-[-0.01em]"
           onClick={onNext}
           disabled={!canProceed}
         >
@@ -700,17 +702,17 @@ function SiteInfoStep({
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl text-sm"
+          className="h-[2.625rem] w-full rounded-xl text-sm"
           onClick={onBack}
         >
           {t("site.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
+          className="h-[2.625rem] w-full rounded-xl text-sm tracking-[-0.01em]"
           onClick={onNext}
           disabled={!config.siteName.trim()}
         >
@@ -837,17 +839,17 @@ function AdminStep({
         </div>
       </div>
 
-      <div className="flex gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl text-sm"
+          className="h-[2.625rem] w-full rounded-xl text-sm"
           onClick={onBack}
         >
           {t("admin.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
+          className="h-[2.625rem] w-full rounded-xl text-sm tracking-[-0.01em]"
           onClick={onNext}
           disabled={!isValid}
         >
@@ -1025,18 +1027,18 @@ function CompleteStep({
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Button
           type="button"
           variant="outline"
-          className="h-[2.625rem] flex-1 rounded-xl text-sm"
+          className="h-[2.625rem] w-full rounded-xl text-sm"
           onClick={onBack}
           disabled={installing}
         >
           {t("confirm.prev")}
         </Button>
         <Button
-          className="h-[2.625rem] flex-[2] rounded-xl text-sm tracking-[-0.01em]"
+          className="h-[2.625rem] w-full rounded-xl text-sm tracking-[-0.01em]"
           onClick={handleInstall}
           disabled={installing}
         >

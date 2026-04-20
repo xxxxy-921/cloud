@@ -12,30 +12,33 @@ import (
 )
 
 // NaiveChunkEngine implements KnowledgeEngine for the "naive_chunk" RAG type.
-// It splits source documents into fixed-size chunks, embeds them, and stores
-// them in ai_rag_chunks for vector search.
+// It splits source documents into fixed-size chunks, embeds them via the
+// embedding service, and stores them in ai_rag_chunks for vector search.
 type NaiveChunkEngine struct {
-	chunkRepo  *RAGChunkRepo
-	assetRepo  *KnowledgeAssetRepo
-	sourceRepo *KnowledgeSourceRepo
-	logRepo    *KnowledgeLogRepo
-	engine     *scheduler.Engine
+	chunkRepo    *RAGChunkRepo
+	assetRepo    *KnowledgeAssetRepo
+	sourceRepo   *KnowledgeSourceRepo
+	logRepo      *KnowledgeLogRepo
+	embeddingSvc *KnowledgeEmbeddingService
+	engine       *scheduler.Engine
 }
 
 func NewNaiveChunkEngine(i do.Injector) (*NaiveChunkEngine, error) {
 	e := &NaiveChunkEngine{
-		chunkRepo:  do.MustInvoke[*RAGChunkRepo](i),
-		assetRepo:  do.MustInvoke[*KnowledgeAssetRepo](i),
-		sourceRepo: do.MustInvoke[*KnowledgeSourceRepo](i),
-		logRepo:    do.MustInvoke[*KnowledgeLogRepo](i),
-		engine:     do.MustInvoke[*scheduler.Engine](i),
+		chunkRepo:    do.MustInvoke[*RAGChunkRepo](i),
+		assetRepo:    do.MustInvoke[*KnowledgeAssetRepo](i),
+		sourceRepo:   do.MustInvoke[*KnowledgeSourceRepo](i),
+		logRepo:      do.MustInvoke[*KnowledgeLogRepo](i),
+		embeddingSvc: do.MustInvoke[*KnowledgeEmbeddingService](i),
+		engine:       do.MustInvoke[*scheduler.Engine](i),
 	}
 	RegisterEngine(AssetCategoryKB, KBTypeNaiveChunk, e)
 	return e, nil
 }
 
 // Build performs incremental chunking: only processes sources that don't yet
-// have chunks in the store.
+// have chunks in the store. After chunking, generates embeddings for all
+// chunks that are missing vectors.
 func (e *NaiveChunkEngine) Build(ctx context.Context, asset *KnowledgeAsset, sources []*KnowledgeSource) error {
 	var cfg RAGConfig
 	if err := asset.GetConfig(&cfg); err != nil {
@@ -53,6 +56,7 @@ func (e *NaiveChunkEngine) Build(ctx context.Context, asset *KnowledgeAsset, sou
 		return fmt.Errorf("update status: %w", err)
 	}
 
+	// --- Phase 1: Chunking ---
 	totalCreated := 0
 	for _, src := range sources {
 		if src.Content == "" {
@@ -83,6 +87,14 @@ func (e *NaiveChunkEngine) Build(ctx context.Context, asset *KnowledgeAsset, sou
 		}
 	}
 
+	// --- Phase 2: Embedding ---
+	if asset.EmbeddingProviderID != nil && asset.EmbeddingModelID != "" {
+		if err := e.embeddingSvc.GenerateRAGEmbeddings(ctx, asset.ID); err != nil {
+			slog.Error("failed to generate RAG embeddings", "asset_id", asset.ID, "error", err)
+			// Non-fatal: chunks are stored, just without vectors. Text search still works.
+		}
+	}
+
 	// Log
 	_ = e.logRepo.Create(&KnowledgeLog{
 		AssetID:      asset.ID,
@@ -92,8 +104,7 @@ func (e *NaiveChunkEngine) Build(ctx context.Context, asset *KnowledgeAsset, sou
 	})
 
 	// Update status
-	status := AssetStatusReady
-	if err := e.assetRepo.UpdateStatus(asset.ID, status); err != nil {
+	if err := e.assetRepo.UpdateStatus(asset.ID, AssetStatusReady); err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
 
@@ -108,16 +119,76 @@ func (e *NaiveChunkEngine) Rebuild(ctx context.Context, asset *KnowledgeAsset, s
 	return e.Build(ctx, asset, sources)
 }
 
-// Search performs text matching on chunks. Full vector search requires
-// pgvector integration (Phase 9).
+// Search performs vector similarity search if embeddings are available,
+// falling back to text matching otherwise.
 func (e *NaiveChunkEngine) Search(ctx context.Context, asset *KnowledgeAsset, query *RecallQuery) (*RecallResult, error) {
 	topK := query.TopK
 	if topK <= 0 {
 		topK = 5
 	}
 
-	// For now, perform simple text-based search (full vector search in Phase 9)
-	chunks, total, err := e.chunkRepo.ListByAsset(asset.ID, 1, topK*10) // fetch more for filtering
+	// Try vector search if embedding is configured
+	if asset.EmbeddingProviderID != nil && asset.EmbeddingModelID != "" {
+		result, err := e.vectorSearch(ctx, asset, query.Query, topK)
+		if err != nil {
+			slog.Warn("vector search failed, falling back to text", "asset_id", asset.ID, "error", err)
+		} else if len(result.Items) > 0 {
+			return result, nil
+		}
+	}
+
+	// Fallback: text-based search
+	return e.textSearch(asset, query.Query, topK)
+}
+
+// ContentStats returns chunk counts.
+func (e *NaiveChunkEngine) ContentStats(ctx context.Context, asset *KnowledgeAsset) (*ContentStats, error) {
+	count, err := e.chunkRepo.CountByAsset(asset.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &ContentStats{
+		ChunkCount: int(count),
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Search strategies
+// ---------------------------------------------------------------------------
+
+func (e *NaiveChunkEngine) vectorSearch(ctx context.Context, asset *KnowledgeAsset, query string, topK int) (*RecallResult, error) {
+	queryVec, err := e.embeddingSvc.EmbedQuery(ctx, asset, query)
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+
+	matches, err := e.chunkRepo.VectorSearch(asset.ID, queryVec, topK)
+	if err != nil {
+		return nil, fmt.Errorf("vector search: %w", err)
+	}
+
+	result := &RecallResult{
+		Debug: &RecallDebug{
+			Mode:      "vector",
+			TotalHits: len(matches),
+		},
+	}
+	for _, m := range matches {
+		result.Items = append(result.Items, KnowledgeUnit{
+			ID:         fmt.Sprintf("chunk_%d", m.ID),
+			AssetID:    asset.ID,
+			UnitType:   "document_chunk",
+			Content:    m.Content,
+			Summary:    m.Summary,
+			Score:      m.Score,
+			SourceRefs: []uint{m.SourceID},
+		})
+	}
+	return result, nil
+}
+
+func (e *NaiveChunkEngine) textSearch(asset *KnowledgeAsset, query string, topK int) (*RecallResult, error) {
+	chunks, total, err := e.chunkRepo.ListByAsset(asset.ID, 1, topK*10)
 	if err != nil {
 		return nil, fmt.Errorf("list chunks: %w", err)
 	}
@@ -129,15 +200,14 @@ func (e *NaiveChunkEngine) Search(ctx context.Context, asset *KnowledgeAsset, qu
 		},
 	}
 
-	queryLower := strings.ToLower(query.Query)
+	queryLower := strings.ToLower(query)
 	count := 0
 	for _, chunk := range chunks {
 		if count >= topK {
 			break
 		}
-		// Simple text match scoring
 		contentLower := strings.ToLower(chunk.Content)
-		if strings.Contains(contentLower, queryLower) || query.Query == "" {
+		if strings.Contains(contentLower, queryLower) || query == "" {
 			result.Items = append(result.Items, KnowledgeUnit{
 				ID:         fmt.Sprintf("chunk_%d", chunk.ID),
 				AssetID:    asset.ID,
@@ -151,17 +221,6 @@ func (e *NaiveChunkEngine) Search(ctx context.Context, asset *KnowledgeAsset, qu
 	}
 
 	return result, nil
-}
-
-// ContentStats returns chunk counts.
-func (e *NaiveChunkEngine) ContentStats(ctx context.Context, asset *KnowledgeAsset) (*ContentStats, error) {
-	count, err := e.chunkRepo.CountByAsset(asset.ID)
-	if err != nil {
-		return nil, err
-	}
-	return &ContentStats{
-		ChunkCount: int(count),
-	}, nil
 }
 
 // --- Text chunking ---

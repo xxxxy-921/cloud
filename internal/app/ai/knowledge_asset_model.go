@@ -407,6 +407,7 @@ type RAGChunk struct {
 	MetadataJSON  string `json:"-" gorm:"column:metadata;type:text"`
 	ChunkIndex    int    `json:"chunkIndex" gorm:"not null;default:0"`
 	ParentChunkID *uint  `json:"parentChunkId" gorm:"index"`
+	EmbeddingJSON string `json:"-" gorm:"column:embedding;type:text"` // JSON-encoded []float32
 }
 
 func (RAGChunk) TableName() string { return "ai_rag_chunks" }
