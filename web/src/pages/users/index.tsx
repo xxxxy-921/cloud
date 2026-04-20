@@ -152,13 +152,18 @@ export function Component() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{t("users:title")}</h2>
-        <Button size="sm" onClick={handleCreate} disabled={!canCreate}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          {t("users:createUser")}
-        </Button>
+    <div className="workspace-page">
+      <div className="workspace-page-header">
+        <div>
+          <h2 className="workspace-page-title">{t("users:title")}</h2>
+          <p className="workspace-page-description">{t("users:noUsersDescription")}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={handleCreate} disabled={!canCreate}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            {t("users:createUser")}
+          </Button>
+        </div>
       </div>
 
       <DataTableToolbar>

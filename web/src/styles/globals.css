@@ -6,36 +6,42 @@
  */
 
 @theme {
-  --color-background: oklch(0.985 0.002 247);
-  --color-foreground: oklch(0.145 0.02 250);
+  --color-background: oklch(0.982 0.004 247);
+  --color-foreground: oklch(0.17 0.018 252);
 
-  --color-card: oklch(1 0 0);
-  --color-card-foreground: oklch(0.145 0.02 250);
+  --color-card: oklch(0.992 0.004 248);
+  --color-card-foreground: oklch(0.17 0.018 252);
+
+  --color-surface: oklch(0.988 0.004 248);
+  --color-surface-foreground: oklch(0.17 0.018 252);
+  --color-surface-elevated: oklch(0.996 0.003 248);
+  --color-surface-soft: oklch(0.972 0.007 250);
+  --color-surface-tint: oklch(0.967 0.012 258);
 
   --color-primary: oklch(0.50 0.13 264);
   --color-primary-foreground: oklch(0.985 0.002 247);
 
-  --color-secondary: oklch(0.955 0.008 264);
-  --color-secondary-foreground: oklch(0.205 0.02 250);
+  --color-secondary: oklch(0.962 0.01 258);
+  --color-secondary-foreground: oklch(0.245 0.022 252);
 
-  --color-muted: oklch(0.955 0.008 264);
-  --color-muted-foreground: oklch(0.556 0.02 250);
+  --color-muted: oklch(0.958 0.008 252);
+  --color-muted-foreground: oklch(0.565 0.018 252);
 
-  --color-accent: oklch(0.955 0.008 264);
-  --color-accent-foreground: oklch(0.205 0.02 250);
+  --color-accent: oklch(0.958 0.014 260);
+  --color-accent-foreground: oklch(0.245 0.022 252);
 
   --color-destructive: oklch(0.577 0.245 27.33);
   --color-destructive-foreground: oklch(0.985 0.002 247);
 
-  --color-border: oklch(0.91 0.005 250);
-  --color-input: oklch(0.91 0.005 250);
+  --color-border: oklch(0.905 0.008 252);
+  --color-input: oklch(0.905 0.008 252);
   --color-ring: oklch(0.50 0.13 264);
 
-  --color-sidebar: oklch(0.975 0.002 247);
-  --color-sidebar-foreground: oklch(0.345 0.02 250);
-  --color-sidebar-accent: oklch(0.95 0.02 264);
-  --color-sidebar-accent-foreground: oklch(0.345 0.04 264);
-  --color-sidebar-border: oklch(0.915 0.008 250);
+  --color-sidebar: oklch(0.978 0.005 248);
+  --color-sidebar-foreground: oklch(0.33 0.018 252);
+  --color-sidebar-accent: oklch(0.95 0.02 260);
+  --color-sidebar-accent-foreground: oklch(0.27 0.04 264);
+  --color-sidebar-border: oklch(0.91 0.008 252);
 
   --radius: 0.75rem;
   --radius-xs: calc(var(--radius) * 0.5);
@@ -60,6 +66,11 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    background-image:
+      radial-gradient(circle at top left, oklch(0.93 0.022 264 / 0.22), transparent 24%),
+      radial-gradient(circle at bottom right, oklch(0.95 0.015 220 / 0.2), transparent 22%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 249, 252, 0.98));
+    background-attachment: fixed;
   }
 
   /* Breathing interaction: 200ms transitions on interactive elements */
@@ -81,6 +92,53 @@
       radial-gradient(circle at top left, oklch(0.93 0.03 264 / 0.36), transparent 28%),
       radial-gradient(circle at bottom right, oklch(0.95 0.02 220 / 0.46), transparent 26%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 249, 252, 0.98));
+  }
+
+  .workspace-shell-bg {
+    background-color: color-mix(in oklab, var(--color-background) 88%, white);
+    background-image:
+      radial-gradient(circle at top left, oklch(0.93 0.024 264 / 0.18), transparent 24%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(247, 249, 252, 0.92));
+  }
+
+  .workspace-panel {
+    border: 1px solid color-mix(in oklab, white 54%, var(--color-border));
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.62));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.82),
+      0 22px 54px -36px rgba(15, 23, 42, 0.22);
+    backdrop-filter: blur(18px);
+  }
+
+  .workspace-surface {
+    border: 1px solid color-mix(in oklab, white 48%, var(--color-border));
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.72));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.86),
+      0 16px 40px -30px rgba(15, 23, 42, 0.16);
+    backdrop-filter: blur(14px);
+  }
+
+  .workspace-page {
+    @apply space-y-5;
+  }
+
+  .workspace-page-header {
+    @apply flex flex-col gap-3 rounded-[1.5rem] px-5 py-5 sm:px-6 sm:py-6 lg:flex-row lg:items-start lg:justify-between;
+    border: 1px solid color-mix(in oklab, white 52%, var(--color-border));
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.54));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.82),
+      0 20px 48px -34px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(16px);
+  }
+
+  .workspace-page-title {
+    @apply text-[1.375rem] font-semibold tracking-[-0.03em] text-foreground sm:text-[1.5rem];
+  }
+
+  .workspace-page-description {
+    @apply mt-1 max-w-2xl text-sm leading-6 text-muted-foreground;
   }
 
   .auth-grid {

@@ -14,7 +14,7 @@ function DataTableCard({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-card",
+        "workspace-surface overflow-hidden rounded-[1.5rem]",
         className
       )}
       {...props}
@@ -26,7 +26,7 @@ function DataTableToolbar({ className, ...props }: React.ComponentProps<"div">) 
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between",
+        "workspace-surface flex flex-col gap-3 rounded-[1.35rem] px-4 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-5",
         className
       )}
       {...props}

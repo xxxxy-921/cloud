@@ -207,13 +207,13 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "fixed left-0 top-14 bottom-0 z-20 flex border-r border-sidebar-border",
-        "bg-sidebar/80 backdrop-blur-2xl",
+        "fixed left-0 top-14 bottom-0 z-20 flex border-r border-sidebar-border/80",
+        "bg-sidebar/68 backdrop-blur-2xl",
         "transition-all duration-200",
       )}
     >
       {/* Tier 1: Icon Rail */}
-      <nav className="flex w-12 flex-col items-center gap-1 border-r border-sidebar-border py-3">
+      <nav className="flex w-12 flex-col items-center gap-1 border-r border-sidebar-border/80 py-3">
         {navApps.map((app) => {
           const Icon = getIcon(app.icon)
           const isActive = activeApp?.id === app.id
@@ -223,10 +223,10 @@ export function Sidebar() {
                 <button
                   onClick={() => navigate(app.path)}
                   className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-200",
+                    "flex h-9 w-9 items-center justify-center rounded-xl transition-colors duration-200",
                     isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground hover:bg-black/[0.04]",
+                      ? "bg-sidebar-accent/88 text-sidebar-accent-foreground shadow-[0_14px_28px_-18px_hsl(var(--primary)/0.55)]"
+                      : "text-sidebar-foreground hover:bg-white/60",
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -275,10 +275,10 @@ export function Sidebar() {
                   key={item.id}
                   onClick={() => navigate(item.path || "/")}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors duration-200",
+                    "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm transition-colors duration-200",
                     isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                      : "text-sidebar-foreground hover:bg-black/[0.04]",
+                      ? "bg-sidebar-accent/82 text-sidebar-accent-foreground font-medium shadow-[0_12px_24px_-18px_hsl(var(--primary)/0.45)]"
+                      : "text-sidebar-foreground hover:bg-white/58",
                   )}
                 >
                   <Icon className="h-4 w-4 shrink-0" />

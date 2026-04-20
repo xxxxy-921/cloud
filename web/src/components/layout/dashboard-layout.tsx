@@ -13,7 +13,7 @@ export function DashboardLayout() {
   const isChatSessionRoute = /^\/ai\/chat\/\d+/.test(location.pathname)
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="workspace-shell-bg min-h-screen">
       <TopNav />
       <Sidebar />
       <main
@@ -24,8 +24,8 @@ export function DashboardLayout() {
         )}
       >
         <div className={cn(
-          "flex flex-col h-full",
-          !isChatSessionRoute && "p-6",
+          "flex h-full flex-col",
+          !isChatSessionRoute && "p-4 sm:p-5 lg:p-6",
         )}>
           <Outlet />
         </div>
