@@ -3,13 +3,12 @@ import { useParams, Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  ArrowLeft, Pencil, Zap, RefreshCw, Plus, Search,
+  Pencil, Zap, RefreshCw, Plus, Search,
   Star, Trash2, Cpu,
 } from "lucide-react"
 import { usePermission } from "@/hooks/use-permission"
 import { api, type PaginatedResponse } from "@/lib/api"
 import { toast } from "sonner"
-import { cn } from "@/lib/utils"
 import { formatDateTime } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,6 +51,12 @@ const STATUS_VARIANTS: Record<string, "default" | "secondary" | "outline" | "des
 
 const TYPE_ORDER = ["llm", "embed", "rerank", "tts", "stt", "image", ""] as const
 
+function getModelTypeSummary(provider: ProviderItem) {
+  return TYPE_ORDER
+    .filter((type) => type && (provider.modelTypeCounts?.[type] ?? 0) > 0)
+    .map((type) => ({ type, count: provider.modelTypeCounts[type] }))
+}
+
 function groupByType(models: ModelItem[]) {
   const groups: Record<string, ModelItem[]> = {}
   for (const m of models) {
@@ -60,6 +65,12 @@ function groupByType(models: ModelItem[]) {
     arr.push(m)
   }
   return TYPE_ORDER.filter((t) => groups[t]).map((t) => ({ type: t, items: groups[t] }))
+}
+
+function getEmptyTypeGroups() {
+  return TYPE_ORDER
+    .filter((type) => type)
+    .map((type) => ({ type, items: [] as ModelItem[] }))
 }
 
 // ─── Provider Info Section ──────────────────────────────────────────────────
@@ -85,81 +96,68 @@ function ProviderInfoSection({
 }) {
   const { t } = useTranslation(["ai", "common"])
   const brand = getProviderBrand(provider.type)
+  const typeSummary = getModelTypeSummary(provider)
 
   return (
-    <div className="rounded-xl border bg-card">
-      <div className={cn("h-1 w-full rounded-t-xl", brand.stripe)} />
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div
-              className={cn(
-                "flex h-12 w-12 shrink-0 items-center justify-center rounded-lg text-sm font-bold",
-                brand.avatarBg,
-              )}
-            >
-              {brand.avatarText}
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold">{provider.name}</h2>
-              <p className="text-sm text-muted-foreground">{provider.baseUrl}</p>
-            </div>
+    <section className="space-y-4 border-b pb-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="flex min-w-0 items-start gap-4">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border bg-muted/35 text-sm font-bold text-foreground/80">
+            {brand.avatarText}
           </div>
-          <div className="flex items-center gap-2">
-            {canTest && (
-              <Button variant="outline" size="sm" disabled={isTesting} onClick={onTest}>
-                <Zap className="mr-1.5 h-3.5 w-3.5" />
-                {isTesting ? t("ai:providers.testing") : t("ai:providers.testConnection")}
-              </Button>
-            )}
-            <Button variant="outline" size="sm" disabled={isSyncing} onClick={onSync}>
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              {isSyncing ? t("ai:providers.syncing") : t("ai:providers.syncModels")}
-            </Button>
-            {canUpdate && (
-              <Button variant="outline" size="sm" onClick={onEdit}>
-                <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                {t("common:edit")}
-              </Button>
-            )}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-semibold leading-tight">{provider.name}</h2>
+              <Badge variant="outline" className="rounded-full px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {t(`ai:types.${provider.type}`, provider.type)}
+              </Badge>
+            </div>
+            <p className="mt-1.5 text-sm leading-6 text-muted-foreground">{provider.baseUrl}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
+              <div className="flex items-center gap-1.5">
+                <StatusDot status={provider.status} loading={isTesting} />
+                <span>{t(`ai:statusLabels.${provider.status}`, provider.status)}</span>
+              </div>
+              <span>{t("ai:providers.protocol")}: {provider.protocol}</span>
+              <span>{t("ai:providers.healthCheckedAt")}: {provider.healthCheckedAt ? formatDateTime(provider.healthCheckedAt) : "—"}</span>
+              <span>{t("ai:providers.modelCount")}: {provider.modelCount}</span>
+            </div>
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
-          <div>
-            <p className="text-xs text-muted-foreground">{t("ai:providers.type")}</p>
-            <Badge variant="outline" className="mt-1">{t(`ai:types.${provider.type}`, provider.type)}</Badge>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t("ai:providers.protocol")}</p>
-            <p className="mt-1 text-sm">{provider.protocol}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t("ai:providers.status")}</p>
-            <div className="mt-1 flex items-center gap-1.5">
-              <StatusDot status={provider.status} loading={isTesting} />
-              <Badge variant={STATUS_VARIANTS[provider.status] ?? "secondary"}>
-                {t(`ai:statusLabels.${provider.status}`, provider.status)}
-              </Badge>
-            </div>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t("ai:providers.apiKey")}</p>
-            <p className="mt-1 font-mono text-sm">{provider.apiKeyMasked || "—"}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t("ai:providers.healthCheckedAt")}</p>
-            <p className="mt-1 text-sm">
-              {provider.healthCheckedAt ? formatDateTime(provider.healthCheckedAt) : "—"}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t("ai:providers.modelCount")}</p>
-            <p className="mt-1 text-sm">{provider.modelCount}</p>
-          </div>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          {canTest && (
+            <Button variant="outline" size="sm" disabled={isTesting} onClick={onTest}>
+              <Zap className="mr-1.5 h-3.5 w-3.5" />
+              {isTesting ? t("ai:providers.testing") : t("ai:providers.testConnection")}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" disabled={isSyncing} onClick={onSync}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            {isSyncing ? t("ai:providers.syncing") : t("ai:providers.syncModels")}
+          </Button>
+          {canUpdate && (
+            <Button variant="outline" size="sm" onClick={onEdit}>
+              <Pencil className="mr-1.5 h-3.5 w-3.5" />
+              {t("common:edit")}
+            </Button>
+          )}
         </div>
       </div>
-    </div>
+
+      <div className="flex flex-wrap gap-2 pl-[3.75rem]">
+        {typeSummary.length > 0 ? typeSummary.map(({ type, count }) => (
+          <Badge key={type} variant="outline" className="h-6 rounded-full px-2 text-[11px] font-normal text-muted-foreground">
+            <span>{t(`ai:modelTypes.${type}`, type)}</span>
+            <span className="ml-1 rounded-full bg-background px-1.5 py-0.5 font-medium tabular-nums text-foreground">
+              {count}
+            </span>
+          </Badge>
+        )) : (
+          <p className="pl-[3.75rem] text-sm text-muted-foreground">{t("ai:models.empty")}</p>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -196,7 +194,7 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
     )
   }, [allModels, searchKeyword])
 
-  const groups = groupByType(filteredModels)
+  const groups = filteredModels.length > 0 ? groupByType(filteredModels) : getEmptyTypeGroups()
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.delete(`/api/v1/ai/models/${id}`),
@@ -249,34 +247,39 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
         <div className="px-5 py-8 text-center text-sm text-muted-foreground">
           {t("common:loading")}
         </div>
-      ) : allModels.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 px-5 py-10 text-center">
-          <Cpu className="h-10 w-10 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground">{t("ai:models.empty")}</p>
-          <p className="text-xs text-muted-foreground/70">{t("ai:models.emptyHint")}</p>
-        </div>
-      ) : groups.length === 0 ? (
-        <div className="px-5 py-8 text-center text-sm text-muted-foreground">
-          {t("ai:models.empty")}
-        </div>
       ) : (
-        <div className="divide-y">
+        <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
           {groups.map(({ type, items }) => (
-            <div key={type}>
-              <div className="px-5 py-2 bg-muted/40">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  {type ? t(`ai:modelTypes.${type}`) : t("ai:modelTypes.unclassified")}
-                  <span className="ml-1.5 text-muted-foreground/60 font-normal normal-case">({items.length})</span>
-                </span>
+            <section key={type} className="overflow-hidden rounded-xl border bg-background/60">
+              <div className="flex items-center justify-between border-b bg-muted/25 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">
+                    {type ? t(`ai:modelTypes.${type}`) : t("ai:modelTypes.unclassified")}
+                  </span>
+                  <Badge variant="outline" className="h-5 rounded-full px-1.5 text-[10px] font-medium text-muted-foreground">
+                    {items.length}
+                  </Badge>
+                </div>
+                {type && provider.modelTypeCounts?.[type] ? (
+                  <span className="text-[11px] text-muted-foreground">
+                    {provider.modelTypeCounts[type]} {t("ai:providers.modelCount")}
+                  </span>
+                ) : null}
               </div>
-              <Table>
+              {items.length === 0 ? (
+                <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 px-4 py-8 text-center">
+                  <Cpu className="h-8 w-8 text-muted-foreground/35" />
+                  <p className="text-sm text-muted-foreground">{t("ai:models.empty")}</p>
+                </div>
+              ) : (
+                <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="min-w-[160px]">{t("ai:models.displayName")}</TableHead>
-                    <TableHead className="w-[140px]">{t("ai:models.modelId")}</TableHead>
+                    <TableHead className="w-[120px]">{t("ai:models.modelId")}</TableHead>
                     <TableHead className="w-[70px]">{t("ai:models.status")}</TableHead>
-                    <TableHead className="w-[50px]">{t("ai:models.isDefault")}</TableHead>
-                    <DataTableActionsHead className="min-w-[140px]">{t("common:actions")}</DataTableActionsHead>
+                    <TableHead className="w-[48px]">{t("ai:models.isDefault")}</TableHead>
+                    <DataTableActionsHead className="min-w-[132px]">{t("common:actions")}</DataTableActionsHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -298,7 +301,7 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="px-2"
+                              className="px-2 text-xs"
                               disabled={setDefaultMutation.isPending}
                               onClick={() => setDefaultMutation.mutate(m.id)}
                             >
@@ -310,7 +313,7 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="px-2"
+                              className="px-2 text-xs"
                               onClick={() => { setEditingModel(m); setModelFormOpen(true) }}
                             >
                               <Pencil className="mr-1 h-3.5 w-3.5" />
@@ -323,7 +326,7 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="px-2 text-destructive hover:text-destructive"
+                                  className="px-2 text-xs text-destructive hover:text-destructive"
                                 >
                                   <Trash2 className="mr-1 h-3.5 w-3.5" />
                                   {t("common:delete")}
@@ -353,8 +356,9 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
-            </div>
+                </Table>
+              )}
+            </section>
           ))}
         </div>
       )}
@@ -439,15 +443,6 @@ export function Component() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" asChild>
-          <Link to="/ai/providers">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
-        <h2 className="text-lg font-semibold">{provider.name}</h2>
-      </div>
-
       <ProviderInfoSection
         provider={provider}
         canUpdate={canUpdate}
