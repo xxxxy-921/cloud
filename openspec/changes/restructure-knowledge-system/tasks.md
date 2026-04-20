@@ -1,10 +1,10 @@
 ## 1. 数据模型与迁移
 
-- [ ] 1.1 创建 `ai_knowledge_assets` 统一资产表（id, name, description, category, type, status, config, compile_model_id, embedding_provider_id, embedding_model_id, auto_build, source_count, timestamps），替代现有 `ai_knowledge_bases`
-- [ ] 1.2 创建独立 `ai_knowledge_sources` 素材表（id, title, format, content, source_url, crawl_depth, url_pattern, file_name, byte_size, extract_status, content_hash, error_message, timestamps），去掉 `kb_id` 外键
-- [ ] 1.3 创建 `ai_knowledge_asset_sources` 关联表（asset_id, source_id），实现 M:N 引用
-- [ ] 1.4 创建 `ai_rag_chunks` 表（id, asset_id, source_id, content, summary, metadata JSON, embedding vector, chunk_index, parent_chunk_id, timestamps）用于 RAG 知识库存储
-- [ ] 1.5 扩展 Agent 绑定：新增 `ai_agent_knowledge_graphs` 关联表，保留 `ai_agent_knowledge_bases`，两者均引用 `ai_knowledge_assets` 但按 category 过滤
+- [x] 1.1 创建 `ai_knowledge_assets` 统一资产表（id, name, description, category, type, status, config, compile_model_id, embedding_provider_id, embedding_model_id, auto_build, source_count, timestamps），替代现有 `ai_knowledge_bases`
+- [x] 1.2 创建独立 `ai_knowledge_sources` 素材表（id, title, format, content, source_url, crawl_depth, url_pattern, file_name, byte_size, extract_status, content_hash, error_message, timestamps），去掉 `kb_id` 外键
+- [x] 1.3 创建 `ai_knowledge_asset_sources` 关联表（asset_id, source_id），实现 M:N 引用
+- [x] 1.4 创建 `ai_rag_chunks` 表（id, asset_id, source_id, content, summary, metadata JSON, embedding vector, chunk_index, parent_chunk_id, timestamps）用于 RAG 知识库存储
+- [x] 1.5 扩展 Agent 绑定：新增 `ai_agent_knowledge_graphs` 关联表，保留 `ai_agent_knowledge_bases`，两者均引用 `ai_knowledge_assets` 但按 category 过滤
 - [ ] 1.6 编写数据迁移脚本：将现有 `ai_knowledge_bases` 记录转为 `category=kg, type=concept_map` 的资产；将现有 `ai_knowledge_sources` 迁移到独立素材表并建立关联；FalkorDB 图名从 `kb_<id>` 重命名为 `kg_<id>`
 
 ## 2. 后端核心抽象层

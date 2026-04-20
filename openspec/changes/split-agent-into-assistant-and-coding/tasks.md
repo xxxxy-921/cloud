@@ -7,8 +7,8 @@
 
 ## 2. Backend Typed Handlers
 
-- [ ] 2.1 Create `assistant_agent_handler.go` with `AssistantAgentHandler` struct wrapping `AgentService` + `AgentRepo`, implementing Create/List/Get/Update/Delete/ListTemplates — all forcing `type=assistant`
-- [ ] 2.2 Create `coding_agent_handler.go` with `CodingAgentHandler` struct wrapping `AgentService` + `AgentRepo`, implementing Create/List/Get/Update/Delete/ListTemplates — all forcing `type=coding`
+- [x] 2.1 Create `assistant_agent_handler.go` with `AssistantAgentHandler` struct wrapping `AgentService` + `AgentRepo`, implementing Create/List/Get/Update/Delete/ListTemplates — all forcing `type=assistant`
+- [x] 2.2 Create `coding_agent_handler.go` with `CodingAgentHandler` struct wrapping `AgentService` + `AgentRepo`, implementing Create/List/Get/Update/Delete/ListTemplates — all forcing `type=coding`
 - [ ] 2.3 Register DI providers for `AssistantAgentHandler` and `CodingAgentHandler` in `app.go` Providers()
 
 ## 3. Backend Typed Routes
