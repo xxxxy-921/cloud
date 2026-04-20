@@ -42,6 +42,11 @@ func (a *AIApp) Models() []any {
 }
 
 func (a *AIApp) Seed(db *gorm.DB, enforcer *casbin.Enforcer, _ bool) error {
+	// One-time data migration from legacy knowledge tables
+	if err := MigrateKnowledgeData(db); err != nil {
+		slog.Error("knowledge data migration failed", "error", err)
+		// Non-fatal: don't block startup
+	}
 	return seedAI(db, enforcer)
 }
 

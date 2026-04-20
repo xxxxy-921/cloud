@@ -18,8 +18,12 @@ func NewSysConfig(i do.Injector) (*SysConfigRepo, error) {
 
 func (r *SysConfigRepo) Get(key string) (*model.SystemConfig, error) {
 	var cfg model.SystemConfig
-	if err := r.db.Where("\"key\" = ?", key).First(&cfg).Error; err != nil {
-		return nil, err
+	result := r.db.Where("\"key\" = ?", key).Limit(1).Find(&cfg)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, ErrNotFound
 	}
 	return &cfg, nil
 }

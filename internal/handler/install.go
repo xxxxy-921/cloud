@@ -290,15 +290,15 @@ func (h *InstallHandler) Execute(c *gin.Context) {
 			return
 		}
 	}
-	// 9. Mark installed
-	if err := seed.SetInstalled(db.DB); err != nil {
-		Fail(c, http.StatusInternalServerError, "failed to mark installed: "+err.Error())
+	// 9. Write config file before marking installed so restart state stays consistent.
+	if err := cfg.Save(h.configPath); err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to write config: "+err.Error())
 		return
 	}
 
-	// 10. Write config file
-	if err := cfg.Save(h.configPath); err != nil {
-		Fail(c, http.StatusInternalServerError, "failed to write config: "+err.Error())
+	// 10. Mark installed
+	if err := seed.SetInstalled(db.DB); err != nil {
+		Fail(c, http.StatusInternalServerError, "failed to mark installed: "+err.Error())
 		return
 	}
 
@@ -400,7 +400,7 @@ func (h *InstallHandler) hotSwitch(cfg *config.MetisConfig, db *database.DB, enf
 	for _, a := range app.All() {
 		a.Providers(injector)
 		if err := a.Seed(db.DB, enforcer, true); err != nil {
-			slog.Error("install: app seed failed", "app", a.Name(), "error", err)
+			return fmt.Errorf("seed app %s: %w", a.Name(), err)
 		}
 	}
 
@@ -420,7 +420,9 @@ func (h *InstallHandler) hotSwitch(cfg *config.MetisConfig, db *database.DB, enf
 		}
 		return cfg.Value
 	})
-	telemetry.Init(context.Background(), otelCfg)
+	if _, err := telemetry.Init(context.Background(), otelCfg); err != nil {
+		return fmt.Errorf("initialize opentelemetry: %w", err)
+	}
 
 	// Register business routes
 	h.engine.Use(otelgin.Middleware("metis"))

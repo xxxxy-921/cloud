@@ -1,14 +1,26 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
+	"metis/internal/config"
+	"metis/internal/database"
 	"metis/internal/model"
 	"metis/internal/pkg/token"
+	"metis/internal/repository"
+	"metis/internal/service"
 )
 
 type testDepartment struct {
@@ -138,5 +150,73 @@ func TestAssignInstallAdminOrgIdentity_WaitsForOrgSeedData(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 user position after org seed, got %d", count)
+	}
+}
+
+func TestExecuteDoesNotMarkInstalledWhenConfigSaveFails(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	gin.SetMode(gin.TestMode)
+
+	tmpDir := t.TempDir()
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(origWD)
+	})
+	blockedPath := filepath.Join(tmpDir, "missing", "config.yml")
+
+	injector := do.New()
+	r := gin.New()
+	do.ProvideNamedValue(injector, "configPath", blockedPath)
+	do.ProvideValue(injector, token.NewBlacklist())
+
+	db, err := database.Open("sqlite", "metis.db?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatalf("open install db: %v", err)
+	}
+	t.Cleanup(func() { db.Shutdown() })
+
+	do.ProvideValue(injector, &config.MetisConfig{DBDriver: "sqlite", DBDSN: "unused"})
+	do.ProvideValue(injector, db)
+	do.Provide(injector, repository.NewSysConfig)
+	do.Provide(injector, service.NewSysConfig)
+
+	h := NewInstall(injector, r, func(do.Injector) {})
+	h.RegisterInstallRoutes(r)
+
+	body, err := json.Marshal(map[string]any{
+		"db_driver":      "sqlite",
+		"site_name":      "Metis",
+		"locale":         "zh-CN",
+		"timezone":       "UTC",
+		"admin_username": "admin",
+		"admin_password": "Password123!",
+		"admin_email":    "admin@example.com",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/install/execute", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when config save fails, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var cfg model.SystemConfig
+	err = db.DB.Where("\"key\" = ?", "app.installed").First(&cfg).Error
+	if err == nil {
+		t.Fatalf("expected app.installed to remain unset when config save fails")
+	}
+	if err != gorm.ErrRecordNotFound {
+		t.Fatalf("expected record not found for app.installed, got %v", err)
 	}
 }
