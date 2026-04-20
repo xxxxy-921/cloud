@@ -117,6 +117,8 @@
   },
   "menu": {
     "ai:agent:list": "Agent",
+    "ai:assistant-agent:list": "助手智能体",
+    "ai:coding-agent:list": "编码智能体",
     "ai:knowledge:list": "知识库",
     "ai:tool:list": "内建工具",
     "ai:mcp:list": "MCP 服务",

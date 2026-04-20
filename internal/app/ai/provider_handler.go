@@ -15,6 +15,9 @@ import (
 	"metis/internal/llm"
 )
 
+// pid is a shorthand for parsing the :id path parameter as uint.
+func pid(c *gin.Context) (uint, bool) { return handler.ParseUintParam(c, "id") }
+
 type ProviderHandler struct {
 	svc       *ProviderService
 	repo      *ProviderRepo
@@ -87,8 +90,11 @@ func (h *ProviderHandler) List(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Get(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	p, err := h.svc.Get(uint(id))
+	id, ok := pid(c)
+	if !ok {
+		return
+	}
+	p, err := h.svc.Get(id)
 	if err != nil {
 		if errors.Is(err, ErrProviderNotFound) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
@@ -110,14 +116,17 @@ type updateProviderReq struct {
 }
 
 func (h *ProviderHandler) Update(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, ok := pid(c)
+	if !ok {
+		return
+	}
 	var req updateProviderReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		handler.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	p, err := h.svc.Update(uint(id), req.Name, req.Type, req.BaseURL, req.APIKey)
+	p, err := h.svc.Update(id, req.Name, req.Type, req.BaseURL, req.APIKey)
 	if err != nil {
 		if errors.Is(err, ErrProviderNotFound) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
@@ -138,15 +147,18 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Delete(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	if err := h.svc.Delete(uint(id)); err != nil {
+	id, ok := pid(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.Delete(id); err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	c.Set("audit_action", "provider.delete")
 	c.Set("audit_resource", "ai_provider")
-	c.Set("audit_resource_id", c.Param("id"))
+	c.Set("audit_resource_id", strconv.FormatUint(uint64(id), 10))
 
 	handler.OK(c, nil)
 }

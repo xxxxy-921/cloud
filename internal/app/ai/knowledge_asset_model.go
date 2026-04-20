@@ -8,22 +8,30 @@ import (
 	"metis/internal/model"
 )
 
-// ----- Errors -----
+// =====================================================================
+// Errors
+// =====================================================================
 
 var (
-	ErrAssetNotFound   = errors.New("knowledge asset not found")
-	ErrSourceNotFound2 = errors.New("knowledge source not found") // renamed to avoid conflict during migration
-	ErrChunkNotFound   = errors.New("knowledge chunk not found")
+	ErrAssetNotFound          = errors.New("knowledge asset not found")
+	ErrSourceNotFound         = errors.New("knowledge source not found")
+	ErrChunkNotFound          = errors.New("knowledge chunk not found")
+	errEmbeddingNotConfigured = errors.New("embedding not configured for this knowledge base")
+	errEmbeddingEmpty         = errors.New("embedding API returned empty result")
 )
 
-// ----- Asset category -----
+// =====================================================================
+// Asset category
+// =====================================================================
 
 const (
 	AssetCategoryKB = "kb" // NaiveRAG knowledge base
 	AssetCategoryKG = "kg" // Knowledge graph
 )
 
-// ----- Asset types (strategies) -----
+// =====================================================================
+// Asset types (strategies)
+// =====================================================================
 
 // Knowledge base types
 const (
@@ -41,7 +49,9 @@ const (
 	KGTypeEventGraph     = "event_graph"
 )
 
-// ----- Asset status -----
+// =====================================================================
+// Asset status
+// =====================================================================
 
 const (
 	AssetStatusIdle     = "idle"
@@ -51,7 +61,42 @@ const (
 	AssetStatusStale    = "stale" // source changed, needs rebuild
 )
 
-// ----- Build stages -----
+// Legacy compile status aliases — used by existing compile/embedding services
+// until they are fully migrated.
+const (
+	CompileStatusIdle      = AssetStatusIdle
+	CompileStatusCompiling = AssetStatusBuilding
+	CompileStatusCompleted = AssetStatusReady
+	CompileStatusError     = AssetStatusError
+)
+
+// =====================================================================
+// Source formats
+// =====================================================================
+
+const (
+	SourceFormatMarkdown = "markdown"
+	SourceFormatText     = "text"
+	SourceFormatPDF      = "pdf"
+	SourceFormatDocx     = "docx"
+	SourceFormatXlsx     = "xlsx"
+	SourceFormatPptx     = "pptx"
+	SourceFormatURL      = "url"
+)
+
+// =====================================================================
+// Source extract statuses
+// =====================================================================
+
+const (
+	ExtractStatusPending   = "pending"
+	ExtractStatusCompleted = "completed"
+	ExtractStatusError     = "error"
+)
+
+// =====================================================================
+// Build / compile stages
+// =====================================================================
 
 // RAG build stages
 const (
@@ -63,23 +108,59 @@ const (
 	BuildStageIdle      = "idle"
 )
 
-// Graph compile stages (keep compat with existing)
+// Graph compile stages (legacy aliases kept for existing compile service)
 const (
-	GraphStagePreparing  = "preparing"
-	GraphStageMapping    = "mapping"
-	GraphStageCallingLLM = "calling_llm"
-	GraphStageWriting    = "writing_nodes"
-	GraphStageEmbedding  = "generating_embeddings"
-	GraphStageCompleted  = "completed"
-	GraphStageIdle       = "idle"
+	CompileStagePreparing            = "preparing"
+	CompileStageMapping              = "mapping"
+	CompileStageCallingLLM           = "calling_llm"
+	CompileStageWritingNodes         = "writing_nodes"
+	CompileStageGeneratingEmbeddings = "generating_embeddings"
+	CompileStageCompleted            = "completed"
+	CompileStageIdle                 = "idle"
 )
+
+// =====================================================================
+// Knowledge node / edge types
+// =====================================================================
+
+const (
+	NodeTypeConcept = "concept"
+)
+
+const (
+	EdgeRelationRelated     = "related"
+	EdgeRelationContradicts = "contradicts"
+)
+
+// =====================================================================
+// Knowledge log actions
+// =====================================================================
+
+const (
+	KnowledgeLogCompile   = "compile"
+	KnowledgeLogRecompile = "recompile"
+	KnowledgeLogCrawl     = "crawl"
+	KnowledgeLogLint      = "lint"
+)
+
+// Legacy compile method constant — used by existing compile service.
+const (
+	CompileMethodKnowledgeGraph = "knowledge_graph"
+)
+
+// =====================================================================
+// ProgressCounter — shared by build progress
+// =====================================================================
+
+type ProgressCounter struct {
+	Total int `json:"total"`
+	Done  int `json:"done"`
+}
 
 // =====================================================================
 // KnowledgeAsset — unified table for both KB and KG
 // =====================================================================
 
-// KnowledgeAsset is the unified entity for knowledge bases (NaiveRAG) and
-// knowledge graphs. The `Category` field determines which engine processes it.
 type KnowledgeAsset struct {
 	model.BaseModel
 	Name                string     `json:"name" gorm:"size:128;not null"`
@@ -87,21 +168,18 @@ type KnowledgeAsset struct {
 	Category            string     `json:"category" gorm:"size:8;not null;index"` // kb | kg
 	Type                string     `json:"type" gorm:"size:32;not null"`          // naive_chunk, concept_map, …
 	Status              string     `json:"status" gorm:"size:16;not null;default:idle"`
-	ConfigData          string     `json:"-" gorm:"column:config;type:text"` // JSON, type-specific
-	CompileModelID      *uint      `json:"compileModelId" gorm:"index"`      // LLM model (kg only)
+	ConfigData          string     `json:"-" gorm:"column:config;type:text"`
+	CompileModelID      *uint      `json:"compileModelId" gorm:"index"`
 	EmbeddingProviderID *uint      `json:"embeddingProviderId" gorm:"index"`
 	EmbeddingModelID    string     `json:"embeddingModelId" gorm:"size:128"`
 	AutoBuild           bool       `json:"autoBuild" gorm:"not null;default:false"`
 	SourceCount         int        `json:"sourceCount" gorm:"not null;default:0"`
 	BuiltAt             *time.Time `json:"builtAt"`
-	ProgressData        string     `json:"-" gorm:"column:build_progress;type:text"` // JSON
+	ProgressData        string     `json:"-" gorm:"column:build_progress;type:text"`
 }
 
 func (KnowledgeAsset) TableName() string { return "ai_knowledge_assets" }
 
-// ----- Config helpers -----
-
-// GetConfig unmarshals the JSON config into the given target.
 func (a *KnowledgeAsset) GetConfig(target any) error {
 	if a.ConfigData == "" {
 		return nil
@@ -109,7 +187,6 @@ func (a *KnowledgeAsset) GetConfig(target any) error {
 	return json.Unmarshal([]byte(a.ConfigData), target)
 }
 
-// SetConfig marshals the given config to JSON and stores it.
 func (a *KnowledgeAsset) SetConfig(cfg any) error {
 	if cfg == nil {
 		a.ConfigData = ""
@@ -122,8 +199,6 @@ func (a *KnowledgeAsset) SetConfig(cfg any) error {
 	a.ConfigData = string(data)
 	return nil
 }
-
-// ----- Progress helpers -----
 
 // BuildProgress tracks real-time build/compile progress.
 type BuildProgress struct {
@@ -159,40 +234,6 @@ func (a *KnowledgeAsset) SetBuildProgress(p *BuildProgress) error {
 	return nil
 }
 
-// ----- Graph-specific config (backward compat with CompileConfig) -----
-
-// GraphConfig holds configurable parameters for knowledge graph compilation.
-type GraphConfig struct {
-	TargetContentLength int `json:"targetContentLength"` // default 4000
-	MinContentLength    int `json:"minContentLength"`    // default 200
-	MaxChunkSize        int `json:"maxChunkSize"`        // 0 = auto
-}
-
-func DefaultGraphConfig() GraphConfig {
-	return GraphConfig{
-		TargetContentLength: 4000,
-		MinContentLength:    200,
-		MaxChunkSize:        0,
-	}
-}
-
-// ----- RAG-specific config -----
-
-// RAGConfig holds configurable parameters for RAG knowledge base building.
-type RAGConfig struct {
-	ChunkSize    int `json:"chunkSize"`    // target chunk size in chars, default 512
-	ChunkOverlap int `json:"chunkOverlap"` // overlap between chunks, default 64
-}
-
-func DefaultRAGConfig() RAGConfig {
-	return RAGConfig{
-		ChunkSize:    512,
-		ChunkOverlap: 64,
-	}
-}
-
-// ----- Response DTO -----
-
 type KnowledgeAssetResponse struct {
 	ID                  uint            `json:"id"`
 	Name                string          `json:"name"`
@@ -208,13 +249,11 @@ type KnowledgeAssetResponse struct {
 	SourceCount         int             `json:"sourceCount"`
 	BuiltAt             *time.Time      `json:"builtAt"`
 	BuildProgress       *BuildProgress  `json:"buildProgress,omitempty"`
-	// Dynamic counts (filled by handler)
-	NodeCount  int `json:"nodeCount,omitempty"`
-	EdgeCount  int `json:"edgeCount,omitempty"`
-	ChunkCount int `json:"chunkCount,omitempty"`
-
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	NodeCount           int             `json:"nodeCount,omitempty"`
+	EdgeCount           int             `json:"edgeCount,omitempty"`
+	ChunkCount          int             `json:"chunkCount,omitempty"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
 }
 
 func (a *KnowledgeAsset) ToResponse() KnowledgeAssetResponse {
@@ -244,13 +283,47 @@ func (a *KnowledgeAsset) ToResponse() KnowledgeAssetResponse {
 }
 
 // =====================================================================
-// KnowledgeSource — independent source pool (no kb_id foreign key)
+// GraphConfig — graph-specific compile config
 // =====================================================================
 
-// KnowledgeSource2 is the new independent source entity.
-// Named with suffix "2" to avoid conflict during migration; will be renamed
-// after old KnowledgeSource is removed.
-type KnowledgeSource2 struct {
+type GraphConfig struct {
+	TargetContentLength int `json:"targetContentLength"`
+	MinContentLength    int `json:"minContentLength"`
+	MaxChunkSize        int `json:"maxChunkSize"`
+}
+
+func DefaultGraphConfig() GraphConfig {
+	return GraphConfig{
+		TargetContentLength: 4000,
+		MinContentLength:    200,
+		MaxChunkSize:        0,
+	}
+}
+
+// --- Legacy aliases for existing compile service ---
+
+type CompileConfig = GraphConfig
+
+func DefaultCompileConfig() CompileConfig { return DefaultGraphConfig() }
+
+// =====================================================================
+// RAGConfig — RAG-specific build config
+// =====================================================================
+
+type RAGConfig struct {
+	ChunkSize    int `json:"chunkSize"`
+	ChunkOverlap int `json:"chunkOverlap"`
+}
+
+func DefaultRAGConfig() RAGConfig {
+	return RAGConfig{ChunkSize: 512, ChunkOverlap: 64}
+}
+
+// =====================================================================
+// KnowledgeSource — independent source pool
+// =====================================================================
+
+type KnowledgeSource struct {
 	model.BaseModel
 	ParentID      *uint      `json:"parentId" gorm:"index"`
 	Title         string     `json:"title" gorm:"size:256;not null"`
@@ -269,9 +342,9 @@ type KnowledgeSource2 struct {
 	ErrorMessage  string     `json:"errorMessage" gorm:"type:text"`
 }
 
-func (KnowledgeSource2) TableName() string { return "ai_knowledge_sources_v2" }
+func (KnowledgeSource) TableName() string { return "ai_knowledge_sources" }
 
-type KnowledgeSource2Response struct {
+type KnowledgeSourceResponse struct {
 	ID            uint       `json:"id"`
 	ParentID      *uint      `json:"parentId"`
 	Title         string     `json:"title"`
@@ -285,13 +358,13 @@ type KnowledgeSource2Response struct {
 	ByteSize      int64      `json:"byteSize"`
 	ExtractStatus string     `json:"extractStatus"`
 	ErrorMessage  string     `json:"errorMessage,omitempty"`
-	RefCount      int        `json:"refCount"` // how many assets reference this source
+	RefCount      int        `json:"refCount"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	UpdatedAt     time.Time  `json:"updatedAt"`
 }
 
-func (s *KnowledgeSource2) ToResponse() KnowledgeSource2Response {
-	return KnowledgeSource2Response{
+func (s *KnowledgeSource) ToResponse() KnowledgeSourceResponse {
+	return KnowledgeSourceResponse{
 		ID:            s.ID,
 		ParentID:      s.ParentID,
 		Title:         s.Title,
@@ -311,7 +384,7 @@ func (s *KnowledgeSource2) ToResponse() KnowledgeSource2Response {
 }
 
 // =====================================================================
-// KnowledgeAssetSource — M:N association between assets and sources
+// KnowledgeAssetSource — M:N association
 // =====================================================================
 
 type KnowledgeAssetSource struct {
@@ -322,20 +395,18 @@ type KnowledgeAssetSource struct {
 func (KnowledgeAssetSource) TableName() string { return "ai_knowledge_asset_sources" }
 
 // =====================================================================
-// RAGChunk — chunk storage for NaiveRAG knowledge bases
+// RAGChunk — chunk storage for NaiveRAG
 // =====================================================================
 
-// RAGChunk stores a document chunk produced by a RAG knowledge base build.
 type RAGChunk struct {
 	model.BaseModel
 	AssetID       uint   `json:"assetId" gorm:"not null;index"`
 	SourceID      uint   `json:"sourceId" gorm:"not null;index"`
 	Content       string `json:"content" gorm:"type:longtext;not null"`
 	Summary       string `json:"summary" gorm:"type:text"`
-	MetadataJSON  string `json:"-" gorm:"column:metadata;type:text"` // JSON
+	MetadataJSON  string `json:"-" gorm:"column:metadata;type:text"`
 	ChunkIndex    int    `json:"chunkIndex" gorm:"not null;default:0"`
 	ParentChunkID *uint  `json:"parentChunkId" gorm:"index"`
-	// Embedding stored via pgvector or similar; column managed by migration
 }
 
 func (RAGChunk) TableName() string { return "ai_rag_chunks" }
@@ -371,7 +442,7 @@ func (c *RAGChunk) ToResponse() RAGChunkResponse {
 }
 
 // =====================================================================
-// AgentKnowledgeGraph — M:N binding between Agent and KG assets
+// AgentKnowledgeGraph — M:N binding Agent ↔ KG
 // =====================================================================
 
 type AgentKnowledgeGraph struct {
@@ -382,16 +453,113 @@ type AgentKnowledgeGraph struct {
 func (AgentKnowledgeGraph) TableName() string { return "ai_agent_knowledge_graphs" }
 
 // =====================================================================
-// KnowledgeLog2 — compile/build log for new asset model
+// KnowledgeNode — FalkorDB graph node (NOT a GORM model)
 // =====================================================================
 
-type KnowledgeLog2 struct {
+type KnowledgeNode struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Summary     string `json:"summary"`
+	Content     string `json:"content"`
+	NodeType    string `json:"nodeType"`
+	SourceIDs   string `json:"sourceIds"`
+	Keywords    string `json:"keywords"`
+	CitationMap string `json:"citationMap"`
+	CompiledAt  int64  `json:"compiledAt"`
+}
+
+type KnowledgeNodeResponse struct {
+	ID          string          `json:"id"`
+	Title       string          `json:"title"`
+	Summary     string          `json:"summary"`
+	Content     string          `json:"content,omitempty"`
+	HasContent  bool            `json:"hasContent"`
+	NodeType    string          `json:"nodeType"`
+	SourceIDs   json.RawMessage `json:"sourceIds"`
+	Keywords    json.RawMessage `json:"keywords"`
+	CitationMap json.RawMessage `json:"citationMap,omitempty"`
+	EdgeCount   int             `json:"edgeCount"`
+	CompiledAt  int64           `json:"compiledAt"`
+	Score       float64         `json:"score,omitempty"`
+}
+
+func (n *KnowledgeNode) ToResponse() KnowledgeNodeResponse {
+	sourceIDs := json.RawMessage(n.SourceIDs)
+	if len(sourceIDs) == 0 || string(sourceIDs) == "" {
+		sourceIDs = json.RawMessage("[]")
+	}
+	keywords := json.RawMessage(n.Keywords)
+	if len(keywords) == 0 || string(keywords) == "" {
+		keywords = json.RawMessage("[]")
+	}
+	var citationMap json.RawMessage
+	if n.CitationMap != "" {
+		citationMap = json.RawMessage(n.CitationMap)
+	}
+	return KnowledgeNodeResponse{
+		ID:          n.ID,
+		Title:       n.Title,
+		Summary:     n.Summary,
+		Content:     n.Content,
+		HasContent:  n.Content != "",
+		NodeType:    n.NodeType,
+		SourceIDs:   sourceIDs,
+		Keywords:    keywords,
+		CitationMap: citationMap,
+		CompiledAt:  n.CompiledAt,
+	}
+}
+
+// =====================================================================
+// KnowledgeEdge — FalkorDB graph edge (NOT a GORM model)
+// =====================================================================
+
+type KnowledgeEdge struct {
+	FromNodeID  string `json:"fromNodeId"`
+	ToNodeID    string `json:"toNodeId"`
+	Relation    string `json:"relation"`
+	Description string `json:"description"`
+}
+
+type KnowledgeEdgeResponse struct {
+	FromNodeID  string `json:"fromNodeId"`
+	ToNodeID    string `json:"toNodeId"`
+	Relation    string `json:"relation"`
+	Description string `json:"description,omitempty"`
+}
+
+func (e *KnowledgeEdge) ToResponse() KnowledgeEdgeResponse {
+	return KnowledgeEdgeResponse{
+		FromNodeID:  e.FromNodeID,
+		ToNodeID:    e.ToNodeID,
+		Relation:    e.Relation,
+		Description: e.Description,
+	}
+}
+
+// =====================================================================
+// KnowledgeLog — build/compile log
+// =====================================================================
+
+type CascadeDetail struct {
+	NodeTitle    string `json:"nodeTitle"`
+	UpdateType   string `json:"updateType"`
+	Reason       string `json:"reason"`
+	SourcesAdded []uint `json:"sourcesAdded,omitempty"`
+}
+
+type CascadeLog struct {
+	PrimaryNodes   []string        `json:"primaryNodes"`
+	CascadeUpdates []CascadeDetail `json:"cascadeUpdates"`
+}
+
+type KnowledgeLog struct {
 	ID             uint      `json:"id" gorm:"primaryKey"`
 	AssetID        uint      `json:"assetId" gorm:"not null;index"`
 	Action         string    `json:"action" gorm:"size:32;not null"`
 	ModelID        string    `json:"modelId" gorm:"size:128"`
-	ItemsCreated   int       `json:"itemsCreated"` // nodes or chunks
-	ItemsUpdated   int       `json:"itemsUpdated"`
+	NodesCreated   int       `json:"nodesCreated"`
+	NodesUpdated   int       `json:"nodesUpdated"`
 	EdgesCreated   int       `json:"edgesCreated"`
 	LintIssues     int       `json:"lintIssues"`
 	Details        string    `json:"details" gorm:"type:text"`
@@ -400,13 +568,12 @@ type KnowledgeLog2 struct {
 	CreatedAt      time.Time `json:"createdAt" gorm:"index"`
 }
 
-func (KnowledgeLog2) TableName() string { return "ai_knowledge_logs_v2" }
+func (KnowledgeLog) TableName() string { return "ai_knowledge_logs" }
 
 // =====================================================================
 // Unified recall protocol
 // =====================================================================
 
-// KnowledgeUnit is the standard output unit returned by all engines.
 type KnowledgeUnit struct {
 	ID         string          `json:"id"`
 	AssetID    uint            `json:"assetId"`
@@ -419,7 +586,6 @@ type KnowledgeUnit struct {
 	Score      float64         `json:"score,omitempty"`
 }
 
-// KnowledgeRelation is an optional relation returned by graph engines.
 type KnowledgeRelation struct {
 	FromUnitID  string  `json:"fromUnitId"`
 	ToUnitID    string  `json:"toUnitId"`
@@ -428,7 +594,6 @@ type KnowledgeRelation struct {
 	Weight      float64 `json:"weight,omitempty"`
 }
 
-// RecallResult is the unified search response from any engine.
 type RecallResult struct {
 	Items     []KnowledgeUnit     `json:"items"`
 	Relations []KnowledgeRelation `json:"relations,omitempty"`
@@ -436,16 +601,147 @@ type RecallResult struct {
 	Debug     *RecallDebug        `json:"debug,omitempty"`
 }
 
-// SourceRef references an original source document.
 type SourceRef struct {
 	SourceID uint   `json:"sourceId"`
 	Title    string `json:"title"`
 	Format   string `json:"format"`
 }
 
-// RecallDebug contains optional debug information for search results.
 type RecallDebug struct {
-	Mode        string  `json:"mode"` // vector, fulltext, hybrid, graph_expand
+	Mode        string  `json:"mode"`
 	TotalHits   int     `json:"totalHits"`
 	TimeTakenMs float64 `json:"timeTakenMs,omitempty"`
+}
+
+// =====================================================================
+// Legacy KnowledgeBase — kept temporarily for existing compile/handler code
+// Will be removed after full migration.
+// =====================================================================
+
+type KnowledgeBase struct {
+	model.BaseModel
+	Name                string     `json:"name" gorm:"size:128;not null"`
+	Description         string     `json:"description" gorm:"type:text"`
+	CompileStatus       string     `json:"compileStatus" gorm:"size:16;not null;default:idle"`
+	CompileMethod       string     `json:"compileMethod" gorm:"size:64;not null;default:knowledge_graph"`
+	CompileModelID      *uint      `json:"compileModelId" gorm:"index"`
+	CompileConfigData   string     `json:"-" gorm:"column:compile_config;type:text"`
+	EmbeddingProviderID *uint      `json:"embeddingProviderId" gorm:"index"`
+	EmbeddingModelID    string     `json:"embeddingModelId" gorm:"size:128"`
+	CompiledAt          *time.Time `json:"compiledAt"`
+	AutoCompile         bool       `json:"autoCompile" gorm:"not null;default:false"`
+	SourceCount         int        `json:"sourceCount" gorm:"not null;default:0"`
+	CompileProgressData string     `json:"-" gorm:"type:text"`
+}
+
+func (KnowledgeBase) TableName() string { return "ai_knowledge_bases" }
+
+// CompileProgress tracks real-time compilation progress (legacy).
+type CompileProgress struct {
+	Stage       string          `json:"stage"`
+	Sources     ProgressCounter `json:"sources"`
+	Nodes       ProgressCounter `json:"nodes"`
+	Embeddings  ProgressCounter `json:"embeddings"`
+	CurrentItem string          `json:"currentItem"`
+	StartedAt   int64           `json:"startedAt"`
+}
+
+func (kb *KnowledgeBase) GetCompileConfig() CompileConfig {
+	if kb.CompileConfigData == "" {
+		return DefaultCompileConfig()
+	}
+	var cfg CompileConfig
+	if err := json.Unmarshal([]byte(kb.CompileConfigData), &cfg); err != nil {
+		return DefaultCompileConfig()
+	}
+	if cfg.TargetContentLength <= 0 {
+		cfg.TargetContentLength = 4000
+	}
+	if cfg.MinContentLength <= 0 {
+		cfg.MinContentLength = 200
+	}
+	return cfg
+}
+
+func (kb *KnowledgeBase) SetCompileConfig(cfg *CompileConfig) error {
+	if cfg == nil {
+		kb.CompileConfigData = ""
+		return nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	kb.CompileConfigData = string(data)
+	return nil
+}
+
+func (kb *KnowledgeBase) GetCompileProgress() *CompileProgress {
+	if kb.CompileProgressData == "" {
+		return nil
+	}
+	var progress CompileProgress
+	if err := json.Unmarshal([]byte(kb.CompileProgressData), &progress); err != nil {
+		return nil
+	}
+	return &progress
+}
+
+func (kb *KnowledgeBase) SetCompileProgress(progress *CompileProgress) error {
+	if progress == nil {
+		kb.CompileProgressData = ""
+		return nil
+	}
+	data, err := json.Marshal(progress)
+	if err != nil {
+		return err
+	}
+	kb.CompileProgressData = string(data)
+	return nil
+}
+
+type KnowledgeBaseResponse struct {
+	ID                  uint             `json:"id"`
+	Name                string           `json:"name"`
+	Description         string           `json:"description"`
+	CompileStatus       string           `json:"compileStatus"`
+	CompileMethod       string           `json:"compileMethod"`
+	CompileModelID      *uint            `json:"compileModelId"`
+	CompileConfig       *CompileConfig   `json:"compileConfig,omitempty"`
+	EmbeddingProviderID *uint            `json:"embeddingProviderId"`
+	EmbeddingModelID    string           `json:"embeddingModelId"`
+	CompiledAt          *time.Time       `json:"compiledAt"`
+	AutoCompile         bool             `json:"autoCompile"`
+	SourceCount         int              `json:"sourceCount"`
+	NodeCount           int              `json:"nodeCount"`
+	EdgeCount           int              `json:"edgeCount"`
+	CompileProgress     *CompileProgress `json:"compileProgress,omitempty"`
+	CreatedAt           time.Time        `json:"createdAt"`
+	UpdatedAt           time.Time        `json:"updatedAt"`
+}
+
+func (kb *KnowledgeBase) ToResponse() KnowledgeBaseResponse {
+	resp := KnowledgeBaseResponse{
+		ID:                  kb.ID,
+		Name:                kb.Name,
+		Description:         kb.Description,
+		CompileStatus:       kb.CompileStatus,
+		CompileMethod:       kb.CompileMethod,
+		CompileModelID:      kb.CompileModelID,
+		EmbeddingProviderID: kb.EmbeddingProviderID,
+		EmbeddingModelID:    kb.EmbeddingModelID,
+		CompiledAt:          kb.CompiledAt,
+		AutoCompile:         kb.AutoCompile,
+		SourceCount:         kb.SourceCount,
+		CreatedAt:           kb.CreatedAt,
+		UpdatedAt:           kb.UpdatedAt,
+	}
+	if kb.CompileConfigData != "" {
+		cfg := kb.GetCompileConfig()
+		resp.CompileConfig = &cfg
+	}
+	if progress := kb.GetCompileProgress(); progress != nil {
+		resp.CompileProgress = progress
+	}
+	return resp
 }

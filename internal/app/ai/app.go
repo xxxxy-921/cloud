@@ -27,12 +27,16 @@ func (a *AIApp) Name() string { return "ai" }
 func (a *AIApp) Models() []any {
 	return []any{
 		&Provider{}, &AIModel{}, &AILog{},
-		&KnowledgeBase{}, &KnowledgeSource{}, &KnowledgeLog{},
+		// Knowledge (new unified model)
+		&KnowledgeAsset{}, &KnowledgeSource{}, &KnowledgeAssetSource{},
+		&RAGChunk{}, &KnowledgeLog{},
+		// Legacy knowledge table (kept for migration)
+		&KnowledgeBase{},
 		// Tool registry
 		&Tool{}, &MCPServer{}, &Skill{},
 		&AgentTool{}, &AgentMCPServer{}, &AgentSkill{},
 		// Agent runtime
-		&Agent{}, &AgentTemplate{}, &AgentKnowledgeBase{},
+		&Agent{}, &AgentTemplate{}, &AgentKnowledgeBase{}, &AgentKnowledgeGraph{},
 		&AgentSession{}, &SessionMessage{}, &AgentMemory{},
 	}
 }

@@ -11,10 +11,10 @@ import (
 type KnowledgeEngine interface {
 	// Build processes associated sources and creates indexed content
 	// (chunks for RAG, nodes/edges for graphs). Incremental by default.
-	Build(ctx context.Context, asset *KnowledgeAsset, sources []*KnowledgeSource2) error
+	Build(ctx context.Context, asset *KnowledgeAsset, sources []*KnowledgeSource) error
 
 	// Rebuild deletes all existing content and rebuilds from scratch.
-	Rebuild(ctx context.Context, asset *KnowledgeAsset, sources []*KnowledgeSource2) error
+	Rebuild(ctx context.Context, asset *KnowledgeAsset, sources []*KnowledgeSource) error
 
 	// Search queries the indexed content and returns unified results.
 	Search(ctx context.Context, asset *KnowledgeAsset, query *RecallQuery) (*RecallResult, error)

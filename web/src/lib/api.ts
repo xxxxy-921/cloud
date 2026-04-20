@@ -438,6 +438,54 @@ export const agentApi = {
   templates: () => api.get<AgentTemplate[]>('/api/v1/ai/agents/templates'),
 };
 
+function makeTypedAgentApi(basePath: string) {
+  return {
+    list: (params?: { page?: number; pageSize?: number; keyword?: string }) => {
+      const p = new URLSearchParams();
+      if (params?.page) p.set('page', String(params.page));
+      if (params?.pageSize) p.set('pageSize', String(params.pageSize));
+      if (params?.keyword) p.set('keyword', params.keyword);
+      return api.get<PaginatedResponse<AgentInfo>>(`${basePath}?${p}`);
+    },
+
+    get: async (id: number) => {
+      const data = await api.get<AgentWithBindings | AgentDetailResponse>(`${basePath}/${id}`);
+      if ('agent' in data) {
+        return {
+          ...data.agent,
+          toolIds: data.toolIds ?? [],
+          skillIds: data.skillIds ?? [],
+          mcpServerIds: data.mcpServerIds ?? [],
+          knowledgeBaseIds: data.knowledgeBaseIds ?? [],
+        } satisfies AgentWithBindings;
+      }
+      return data;
+    },
+
+    create: (data: Partial<AgentInfo> & {
+      toolIds?: number[];
+      skillIds?: number[];
+      mcpServerIds?: number[];
+      knowledgeBaseIds?: number[];
+      templateId?: number;
+    }) => api.post<AgentInfo>(basePath, data),
+
+    update: (id: number, data: Partial<AgentInfo> & {
+      toolIds?: number[];
+      skillIds?: number[];
+      mcpServerIds?: number[];
+      knowledgeBaseIds?: number[];
+    }) => api.put<AgentInfo>(`${basePath}/${id}`, data),
+
+    delete: (id: number) => api.delete<null>(`${basePath}/${id}`),
+
+    templates: () => api.get<AgentTemplate[]>(`${basePath}/templates`),
+  };
+}
+
+export const assistantAgentApi = makeTypedAgentApi('/api/v1/ai/assistant-agents');
+export const codingAgentApi = makeTypedAgentApi('/api/v1/ai/coding-agents');
+
 export const sessionApi = {
   list: (params?: { page?: number; pageSize?: number; agentId?: number }) => {
     const p = new URLSearchParams();

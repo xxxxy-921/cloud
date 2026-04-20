@@ -29,9 +29,9 @@
 
 ## 5. Frontend API Layer
 
-- [ ] 5.1 Define `AssistantAgentInfo` and `CodingAgentInfo` TypeScript interfaces (extending shared `AgentBase`) in `web/src/lib/api.ts`
-- [ ] 5.2 Create `assistantAgentApi` object pointing to `/api/v1/ai/assistant-agents` with list/get/create/update/delete/templates methods
-- [ ] 5.3 Create `codingAgentApi` object pointing to `/api/v1/ai/coding-agents` with list/get/create/update/delete/templates methods
+- [x] 5.1 Define `AssistantAgentInfo` and `CodingAgentInfo` TypeScript interfaces (extending shared `AgentBase`) in `web/src/lib/api.ts`
+- [x] 5.2 Create `assistantAgentApi` object pointing to `/api/v1/ai/assistant-agents` with list/get/create/update/delete/templates methods
+- [x] 5.3 Create `codingAgentApi` object pointing to `/api/v1/ai/coding-agents` with list/get/create/update/delete/templates methods
 
 ## 6. Frontend Shared Components
 
