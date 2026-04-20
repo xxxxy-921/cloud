@@ -49,6 +49,10 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 
 	p, err := h.svc.Create(req.Name, req.Type, req.BaseURL, req.APIKey)
 	if err != nil {
+		if errors.Is(err, ErrInvalidProviderType) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -137,6 +141,10 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, ErrProviderNotFound) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, ErrInvalidProviderType) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())

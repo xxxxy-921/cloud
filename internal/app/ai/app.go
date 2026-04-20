@@ -10,6 +10,7 @@ import (
 
 	"metis/internal/app"
 	"metis/internal/app/node"
+	"metis/internal/handler"
 	"metis/internal/scheduler"
 	"metis/internal/service"
 )
@@ -171,7 +172,7 @@ func (a *AIApp) Routes(api *gin.RouterGroup) {
 	api.GET("/ai/knowledge/types", func(c *gin.Context) {
 		category := c.Query("category")
 		types := ListAssetTypes(category)
-		c.JSON(200, types)
+		handler.OK(c, types)
 	})
 
 	// Knowledge — graph assets (KG)

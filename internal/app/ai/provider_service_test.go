@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -47,6 +48,23 @@ func TestProviderService_Create_Anthropic(t *testing.T) {
 
 	if p.Protocol != "anthropic" {
 		t.Errorf("protocol: expected %q, got %q", "anthropic", p.Protocol)
+	}
+}
+
+func TestProviderService_RejectsInvalidType(t *testing.T) {
+	db := setupTestDB(t)
+	svc := newProviderServiceForTest(t, db)
+
+	if _, err := svc.Create("Bad", "bad-provider", "https://example.com", "key"); !errors.Is(err, ErrInvalidProviderType) {
+		t.Fatalf("expected ErrInvalidProviderType on create, got %v", err)
+	}
+
+	p, err := svc.Create("OpenAI", ProviderTypeOpenAI, "https://api.openai.com/v1", "key")
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	if _, err := svc.Update(p.ID, "Bad", "bad-provider", "https://example.com", ""); !errors.Is(err, ErrInvalidProviderType) {
+		t.Fatalf("expected ErrInvalidProviderType on update, got %v", err)
 	}
 }
 

@@ -166,6 +166,10 @@ func (h *ModelHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.svc.Update(m); err != nil {
+		if errors.Is(err, ErrInvalidType) || errors.Is(err, ErrInvalidStatus) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}

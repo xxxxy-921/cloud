@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -174,35 +175,36 @@ func TestAgentService_GetAccessible_HidesPrivateAgentFromOthers(t *testing.T) {
 func TestAgentService_UpdateBindings_And_GetBindings(t *testing.T) {
 	db := setupTestDB(t)
 	svc := newAgentServiceForTest(t, db)
+	toolIDs, skillIDs, mcpIDs, kbIDs, kgIDs := seedAgentBindingTargets(t, db)
 
 	modelID := uint(1)
 	a := &Agent{Name: "Agent", Type: AgentTypeAssistant, ModelID: &modelID, CreatedBy: 1}
 	_ = svc.Create(a)
 
-	err := svc.UpdateBindings(a.ID, []uint{1, 2}, []uint{3}, []uint{4}, []uint{5}, []uint{6})
+	err := svc.UpdateBindings(a.ID, []uint{toolIDs[0], toolIDs[1], toolIDs[0]}, skillIDs[:1], mcpIDs[:1], kbIDs[:1], kgIDs[:1])
 	if err != nil {
 		t.Fatalf("update bindings: %v", err)
 	}
 
-	toolIDs, skillIDs, mcpIDs, kbIDs, kgIDs, err := svc.GetBindings(a.ID)
+	toolIDs, skillIDs, mcpIDs, kbIDs, kgIDs, err = svc.GetBindings(a.ID)
 	if err != nil {
 		t.Fatalf("get bindings: %v", err)
 	}
 
-	if len(toolIDs) != 2 || toolIDs[0] != 1 || toolIDs[1] != 2 {
-		t.Errorf("toolIDs: expected [1 2], got %v", toolIDs)
+	if len(toolIDs) != 2 {
+		t.Errorf("toolIDs: expected 2 unique IDs, got %v", toolIDs)
 	}
-	if len(skillIDs) != 1 || skillIDs[0] != 3 {
-		t.Errorf("skillIDs: expected [3], got %v", skillIDs)
+	if len(skillIDs) != 1 {
+		t.Errorf("skillIDs: expected 1 ID, got %v", skillIDs)
 	}
-	if len(mcpIDs) != 1 || mcpIDs[0] != 4 {
-		t.Errorf("mcpIDs: expected [4], got %v", mcpIDs)
+	if len(mcpIDs) != 1 {
+		t.Errorf("mcpIDs: expected 1 ID, got %v", mcpIDs)
 	}
-	if len(kbIDs) != 1 || kbIDs[0] != 5 {
-		t.Errorf("kbIDs: expected [5], got %v", kbIDs)
+	if len(kbIDs) != 1 {
+		t.Errorf("kbIDs: expected 1 ID, got %v", kbIDs)
 	}
-	if len(kgIDs) != 1 || kgIDs[0] != 6 {
-		t.Errorf("kgIDs: expected [6], got %v", kgIDs)
+	if len(kgIDs) != 1 {
+		t.Errorf("kgIDs: expected 1 ID, got %v", kgIDs)
 	}
 
 	// Replace with empty
@@ -210,6 +212,34 @@ func TestAgentService_UpdateBindings_And_GetBindings(t *testing.T) {
 	toolIDs, _, _, _, _, _ = svc.GetBindings(a.ID)
 	if len(toolIDs) != 0 {
 		t.Errorf("toolIDs after clear: expected [], got %v", toolIDs)
+	}
+}
+
+func TestAgentService_UpdateBindings_RejectsInvalidIDAtomically(t *testing.T) {
+	db := setupTestDB(t)
+	svc := newAgentServiceForTest(t, db)
+	toolIDs, _, _, _, _ := seedAgentBindingTargets(t, db)
+
+	modelID := uint(1)
+	a := &Agent{Name: "Agent", Type: AgentTypeAssistant, ModelID: &modelID, CreatedBy: 1}
+	if err := svc.Create(a); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := svc.UpdateBindings(a.ID, toolIDs[:1], nil, nil, nil, nil); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+
+	err := svc.UpdateBindings(a.ID, []uint{999999}, nil, nil, nil, nil)
+	if !errors.Is(err, ErrInvalidBinding) {
+		t.Fatalf("expected ErrInvalidBinding, got %v", err)
+	}
+
+	loadedToolIDs, _, _, _, _, err := svc.GetBindings(a.ID)
+	if err != nil {
+		t.Fatalf("get bindings: %v", err)
+	}
+	if len(loadedToolIDs) != 1 || loadedToolIDs[0] != toolIDs[0] {
+		t.Fatalf("binding should be unchanged, got %v", loadedToolIDs)
 	}
 }
 

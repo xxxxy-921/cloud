@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { BindingCheckboxList, type BindingItem } from "./binding-checkbox-list"
+import { BindingSelectorSection, type BindingGroup, type BindingItem } from "./binding-checkbox-list"
 
 interface ProviderItem {
   id: number
@@ -32,6 +32,7 @@ interface ToolkitGroup {
   toolkit: string
   tools: BindingItem[]
 }
+
 
 const agentSchema = z.object({
   name: z.string().min(1).max(128),
@@ -159,12 +160,10 @@ export function AgentForm({ agentType, agent, onSubmit }: AgentFormProps) {
   })
 
   // Fetch binding lists
-  const { data: toolItems = [], isLoading: toolsLoading } = useQuery({
+  const { data: toolGroups = [], isLoading: toolsLoading } = useQuery({
     queryKey: ["ai-agent-binding-tools"],
     queryFn: () =>
-      api.get<{ items: ToolkitGroup[] }>("/api/v1/ai/tools").then((r) =>
-        (r?.items ?? []).flatMap((g) => g.tools)
-      ),
+      api.get<{ items: ToolkitGroup[] }>("/api/v1/ai/tools").then((r) => r?.items ?? []),
   })
 
   const { data: mcpItems = [], isLoading: mcpLoading } = useQuery({
@@ -195,6 +194,15 @@ export function AgentForm({ agentType, agent, onSubmit }: AgentFormProps) {
     form.setValue("providerId", value)
     form.setValue("modelId", undefined)
   }
+
+  const toolBindingGroups = useMemo<BindingGroup[]>(() => {
+    return toolGroups.map((group) => ({
+      key: group.toolkit,
+      title: t(`ai:tools.toolkits.${group.toolkit}.name`),
+      description: t(`ai:tools.toolkits.${group.toolkit}.description`),
+      items: group.tools,
+    }))
+  }, [toolGroups, t])
 
   return (
     <Form {...form}>
@@ -388,51 +396,57 @@ export function AgentForm({ agentType, agent, onSubmit }: AgentFormProps) {
           </Card>
         )}
 
-        {/* === Tool Bindings === */}
-        <Card>
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">{t("ai:agents.bindings")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <BindingCheckboxList
-                title={t("ai:agents.tools")}
-                items={toolItems}
-                isLoading={toolsLoading}
-                value={form.watch("toolIds")}
-                onChange={(ids) => form.setValue("toolIds", ids)}
-              />
-              <BindingCheckboxList
-                title={t("ai:agents.mcpServers")}
-                items={mcpItems}
-                isLoading={mcpLoading}
-                value={form.watch("mcpServerIds")}
-                onChange={(ids) => form.setValue("mcpServerIds", ids)}
-              />
-              <BindingCheckboxList
-                title={t("ai:agents.skills")}
-                items={skillItems}
-                isLoading={skillsLoading}
-                value={form.watch("skillIds")}
-                onChange={(ids) => form.setValue("skillIds", ids)}
-              />
-              <BindingCheckboxList
-                title={t("ai:agents.knowledgeBases")}
-                items={kbItems}
-                isLoading={kbLoading}
-                value={form.watch("knowledgeBaseIds")}
-                onChange={(ids) => form.setValue("knowledgeBaseIds", ids)}
-              />
-              <BindingCheckboxList
-                title="知识图谱"
-                items={kgItems}
-                isLoading={kgLoading}
-                value={form.watch("knowledgeGraphIds")}
-                onChange={(ids) => form.setValue("knowledgeGraphIds", ids)}
-              />
-            </div>
-          </CardContent>
-        </Card>
+        {/* === Capability Bindings === */}
+        <BindingSelectorSection
+          title={t("ai:agents.tools")}
+          description={t("ai:agents.toolsDescription")}
+          sheetTitle={t("ai:agents.selectTools")}
+          sheetDescription={t("ai:agents.toolsSheetDescription")}
+          groups={toolBindingGroups}
+          isLoading={toolsLoading}
+          value={form.watch("toolIds")}
+          onChange={(ids) => form.setValue("toolIds", ids)}
+        />
+        <BindingSelectorSection
+          title={t("ai:agents.mcpServers")}
+          description={t("ai:agents.mcpServersDescription")}
+          sheetTitle={t("ai:agents.selectMcpServers")}
+          sheetDescription={t("ai:agents.mcpServersDescription")}
+          items={mcpItems}
+          isLoading={mcpLoading}
+          value={form.watch("mcpServerIds")}
+          onChange={(ids) => form.setValue("mcpServerIds", ids)}
+        />
+        <BindingSelectorSection
+          title={t("ai:agents.skills")}
+          description={t("ai:agents.skillsDescription")}
+          sheetTitle={t("ai:agents.selectSkills")}
+          sheetDescription={t("ai:agents.skillsDescription")}
+          items={skillItems}
+          isLoading={skillsLoading}
+          value={form.watch("skillIds")}
+          onChange={(ids) => form.setValue("skillIds", ids)}
+        />
+        <BindingSelectorSection
+          title={t("ai:agents.knowledgeBases")}
+          description={t("ai:agents.knowledgeBasesDescription")}
+          sheetTitle={t("ai:agents.selectKnowledgeBases")}
+          sheetDescription={t("ai:agents.knowledgeBasesDescription")}
+          items={kbItems}
+          isLoading={kbLoading}
+          value={form.watch("knowledgeBaseIds")}
+          onChange={(ids) => form.setValue("knowledgeBaseIds", ids)}
+        />
+        <BindingSelectorSection
+          title={t("ai:agents.knowledgeGraphs")}
+          description={t("ai:agents.knowledgeGraphsDescription")}
+          sheetTitle={t("ai:agents.selectKnowledgeGraphs")}
+          sheetDescription={t("ai:agents.knowledgeGraphsDescription")}
+          items={kgItems}
+          isLoading={kgLoading}
+          value={form.watch("knowledgeGraphIds")}
+          onChange={(ids) => form.setValue("knowledgeGraphIds", ids)}
+        />
 
         {/* === Prompts (always visible) === */}
         <Card>

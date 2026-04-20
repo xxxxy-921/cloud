@@ -17,6 +17,7 @@ var (
 	ErrModelRequired           = errors.New("model_id is required for assistant agent")
 	ErrRuntimeRequired         = errors.New("runtime is required for coding agent")
 	ErrCodeRequired            = errors.New("code is required for internal agent")
+	ErrInvalidBinding          = errors.New("invalid agent binding")
 )
 
 var ValidAgentTypes = map[string]bool{
@@ -41,6 +42,14 @@ type AgentService struct {
 	repo *AgentRepo
 }
 
+type AgentBindings struct {
+	ToolIDs           []uint
+	SkillIDs          []uint
+	MCPServerIDs      []uint
+	KnowledgeBaseIDs  []uint
+	KnowledgeGraphIDs []uint
+}
+
 func NewAgentService(i do.Injector) (*AgentService, error) {
 	return &AgentService{
 		repo: do.MustInvoke[*AgentRepo](i),
@@ -48,26 +57,27 @@ func NewAgentService(i do.Injector) (*AgentService, error) {
 }
 
 func (s *AgentService) Create(a *Agent) error {
-	if !ValidAgentTypes[a.Type] {
-		return ErrInvalidAgentType
+	if err := s.validateForCreate(a); err != nil {
+		return err
 	}
-	if err := s.validateByType(a); err != nil {
+	return s.repo.Create(a)
+}
+
+func (s *AgentService) CreateWithBindings(a *Agent, bindings AgentBindings) error {
+	if err := s.validateForCreate(a); err != nil {
+		return err
+	}
+	normalized, err := s.normalizeBindings(bindings)
+	if err != nil {
 		return err
 	}
 
-	// Check name uniqueness
-	if _, err := s.repo.FindByName(a.Name); err == nil {
-		return ErrAgentNameConflict
-	}
-
-	// Check code uniqueness for internal agents
-	if a.Code != nil && *a.Code != "" {
-		if _, err := s.repo.FindByCode(*a.Code); err == nil {
-			return ErrAgentCodeConflict
+	return s.repo.DB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(a).Error; err != nil {
+			return err
 		}
-	}
-
-	return s.repo.Create(a)
+		return s.repo.replaceBindingsInTx(tx, a.ID, normalized)
+	})
 }
 
 func (s *AgentService) Get(id uint) (*Agent, error) {
@@ -119,6 +129,23 @@ func (s *AgentService) Update(a *Agent) error {
 		return err
 	}
 	return s.repo.Update(a)
+}
+
+func (s *AgentService) UpdateWithBindings(a *Agent, bindings AgentBindings) error {
+	if err := s.validateByType(a); err != nil {
+		return err
+	}
+	normalized, err := s.normalizeBindings(bindings)
+	if err != nil {
+		return err
+	}
+
+	return s.repo.DB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(a).Error; err != nil {
+			return err
+		}
+		return s.repo.replaceBindingsInTx(tx, a.ID, normalized)
+	})
 }
 
 func (s *AgentService) Delete(id uint) error {
@@ -208,19 +235,19 @@ func (s *AgentService) ListTemplatesByType(agentType string) ([]AgentTemplate, e
 
 // UpdateBindings replaces all bindings for the given agent
 func (s *AgentService) UpdateBindings(agentID uint, toolIDs, skillIDs, mcpIDs, kbIDs, kgIDs []uint) error {
-	if err := s.repo.ReplaceToolBindings(agentID, toolIDs); err != nil {
+	bindings, err := s.normalizeBindings(AgentBindings{
+		ToolIDs:           toolIDs,
+		SkillIDs:          skillIDs,
+		MCPServerIDs:      mcpIDs,
+		KnowledgeBaseIDs:  kbIDs,
+		KnowledgeGraphIDs: kgIDs,
+	})
+	if err != nil {
 		return err
 	}
-	if err := s.repo.ReplaceSkillBindings(agentID, skillIDs); err != nil {
-		return err
-	}
-	if err := s.repo.ReplaceMCPServerBindings(agentID, mcpIDs); err != nil {
-		return err
-	}
-	if err := s.repo.ReplaceKnowledgeBaseBindings(agentID, kbIDs); err != nil {
-		return err
-	}
-	return s.repo.ReplaceKnowledgeGraphBindings(agentID, kgIDs)
+	return s.repo.DB().Transaction(func(tx *gorm.DB) error {
+		return s.repo.replaceBindingsInTx(tx, agentID, bindings)
+	})
 }
 
 // GetBindings returns all binding IDs for an agent
@@ -248,4 +275,100 @@ func (s *AgentService) GetBindings(agentID uint) (toolIDs, skillIDs, mcpIDs, kbI
 // ListTemplates returns all agent templates
 func (s *AgentService) ListTemplates() ([]AgentTemplate, error) {
 	return s.repo.ListTemplates()
+}
+
+func (s *AgentService) validateForCreate(a *Agent) error {
+	if !ValidAgentTypes[a.Type] {
+		return ErrInvalidAgentType
+	}
+	if err := s.validateByType(a); err != nil {
+		return err
+	}
+	if _, err := s.repo.FindByName(a.Name); err == nil {
+		return ErrAgentNameConflict
+	}
+	if a.Code != nil && *a.Code != "" {
+		if _, err := s.repo.FindByCode(*a.Code); err == nil {
+			return ErrAgentCodeConflict
+		}
+	}
+	return nil
+}
+
+func (s *AgentService) normalizeBindings(bindings AgentBindings) (AgentBindings, error) {
+	var err error
+	normalized := AgentBindings{}
+	if normalized.ToolIDs, err = uniqueUintIDs(bindings.ToolIDs); err != nil {
+		return AgentBindings{}, err
+	}
+	if normalized.SkillIDs, err = uniqueUintIDs(bindings.SkillIDs); err != nil {
+		return AgentBindings{}, err
+	}
+	if normalized.MCPServerIDs, err = uniqueUintIDs(bindings.MCPServerIDs); err != nil {
+		return AgentBindings{}, err
+	}
+	if normalized.KnowledgeBaseIDs, err = uniqueUintIDs(bindings.KnowledgeBaseIDs); err != nil {
+		return AgentBindings{}, err
+	}
+	if normalized.KnowledgeGraphIDs, err = uniqueUintIDs(bindings.KnowledgeGraphIDs); err != nil {
+		return AgentBindings{}, err
+	}
+
+	db := s.repo.DB()
+	if err := ensureIDsExist(db, &Tool{}, normalized.ToolIDs, ""); err != nil {
+		return AgentBindings{}, err
+	}
+	if err := ensureIDsExist(db, &Skill{}, normalized.SkillIDs, ""); err != nil {
+		return AgentBindings{}, err
+	}
+	if err := ensureIDsExist(db, &MCPServer{}, normalized.MCPServerIDs, ""); err != nil {
+		return AgentBindings{}, err
+	}
+	if err := ensureIDsExist(db, &KnowledgeAsset{}, normalized.KnowledgeBaseIDs, AssetCategoryKB); err != nil {
+		return AgentBindings{}, err
+	}
+	if err := ensureIDsExist(db, &KnowledgeAsset{}, normalized.KnowledgeGraphIDs, AssetCategoryKG); err != nil {
+		return AgentBindings{}, err
+	}
+
+	return normalized, nil
+}
+
+func uniqueUintIDs(ids []uint) ([]uint, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uint]struct{}, len(ids))
+	unique := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			return nil, ErrInvalidBinding
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique, nil
+}
+
+func ensureIDsExist(db *gorm.DB, model any, ids []uint, category string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	query := db.Model(model).Where("id IN ?", ids)
+	if category != "" {
+		query = query.Where("category = ?", category)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count != int64(len(ids)) {
+		return ErrInvalidBinding
+	}
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"metis/internal/database"
+	"metis/internal/model"
 	"metis/internal/pkg/crypto"
 )
 
@@ -112,6 +113,58 @@ func newKnowledgeSourceServiceForTest(t *testing.T, db *gorm.DB) *KnowledgeSourc
 		sourceRepo: &KnowledgeSourceRepo{db: &database.DB{DB: db}},
 		assetRepo:  &KnowledgeAssetRepo{db: &database.DB{DB: db}},
 	}
+}
+
+func seedAgentBindingTargets(t *testing.T, db *gorm.DB) (toolIDs, skillIDs, mcpIDs, kbIDs, kgIDs []uint) {
+	t.Helper()
+
+	tools := []Tool{
+		{Name: "tool_a", DisplayName: "Tool A", ParametersSchema: model.JSONText("{}"), IsActive: true},
+		{Name: "tool_b", DisplayName: "Tool B", ParametersSchema: model.JSONText("{}"), IsActive: true},
+	}
+	for i := range tools {
+		if err := db.Create(&tools[i]).Error; err != nil {
+			t.Fatalf("seed tool: %v", err)
+		}
+		toolIDs = append(toolIDs, tools[i].ID)
+	}
+
+	skills := []Skill{
+		{Name: "skill_a", DisplayName: "Skill A", SourceType: SkillSourceUpload, IsActive: true},
+	}
+	for i := range skills {
+		if err := db.Create(&skills[i]).Error; err != nil {
+			t.Fatalf("seed skill: %v", err)
+		}
+		skillIDs = append(skillIDs, skills[i].ID)
+	}
+
+	mcps := []MCPServer{
+		{Name: "mcp_a", Transport: MCPTransportSSE, URL: "https://example.com/sse", AuthType: AuthTypeNone, IsActive: true},
+	}
+	for i := range mcps {
+		if err := db.Create(&mcps[i]).Error; err != nil {
+			t.Fatalf("seed mcp: %v", err)
+		}
+		mcpIDs = append(mcpIDs, mcps[i].ID)
+	}
+
+	assets := []KnowledgeAsset{
+		{Name: "kb_a", Category: AssetCategoryKB, Type: KBTypeNaiveChunk, Status: AssetStatusIdle},
+		{Name: "kg_a", Category: AssetCategoryKG, Type: KGTypeConceptMap, Status: AssetStatusIdle},
+	}
+	for i := range assets {
+		if err := db.Create(&assets[i]).Error; err != nil {
+			t.Fatalf("seed knowledge asset: %v", err)
+		}
+		if assets[i].Category == AssetCategoryKB {
+			kbIDs = append(kbIDs, assets[i].ID)
+		} else {
+			kgIDs = append(kgIDs, assets[i].ID)
+		}
+	}
+
+	return toolIDs, skillIDs, mcpIDs, kbIDs, kgIDs
 }
 
 // stubKnowledgeGraphRepo is a minimal stub for KnowledgeGraphRepo used in tests.

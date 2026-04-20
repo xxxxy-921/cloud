@@ -52,10 +52,23 @@ var ValidModelTypes = map[string]bool{
 	ModelTypeOther: true,
 }
 
+// ValidModelStatuses is the set of valid lifecycle status strings for models.
+var ValidModelStatuses = map[string]bool{
+	ModelStatusActive:     true,
+	ModelStatusDeprecated: true,
+}
+
 // ValidCapabilities for LLM models.
 var ValidCapabilities = map[string]bool{
 	"vision": true, "tool_use": true, "reasoning": true,
 	"coding": true, "long_context": true,
+}
+
+// ValidProviderTypes is the set of provider types supported by the AI module.
+var ValidProviderTypes = map[string]bool{
+	ProviderTypeOpenAI:    true,
+	ProviderTypeAnthropic: true,
+	ProviderTypeOllama:    true,
 }
 
 // ProtocolForType returns the LLM protocol for a provider type.

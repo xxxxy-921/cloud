@@ -18,6 +18,7 @@ import (
 var (
 	ErrModelNotFound = errors.New("model not found")
 	ErrInvalidType   = errors.New("invalid model type")
+	ErrInvalidStatus = errors.New("invalid model status")
 )
 
 type ModelService struct {
@@ -35,11 +36,8 @@ func NewModelService(i do.Injector) (*ModelService, error) {
 }
 
 func (s *ModelService) Create(m *AIModel) error {
-	if m.Type != "" && !ValidModelTypes[m.Type] {
-		return ErrInvalidType
-	}
-	if m.Type != ModelTypeLLM {
-		m.Capabilities = model.JSONText("[]")
+	if err := normalizeModel(m); err != nil {
+		return err
 	}
 	return s.repo.Create(m)
 }
@@ -56,10 +54,23 @@ func (s *ModelService) Get(id uint) (*AIModel, error) {
 }
 
 func (s *ModelService) Update(m *AIModel) error {
+	if err := normalizeModel(m); err != nil {
+		return err
+	}
+	return s.repo.Update(m)
+}
+
+func normalizeModel(m *AIModel) error {
+	if m.Type != "" && !ValidModelTypes[m.Type] {
+		return ErrInvalidType
+	}
+	if m.Status != "" && !ValidModelStatuses[m.Status] {
+		return ErrInvalidStatus
+	}
 	if m.Type != ModelTypeLLM {
 		m.Capabilities = model.JSONText("[]")
 	}
-	return s.repo.Update(m)
+	return nil
 }
 
 func (s *ModelService) Delete(id uint) error {

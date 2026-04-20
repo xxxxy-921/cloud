@@ -91,27 +91,19 @@ func (h *AgentHandler) Create(c *gin.Context) {
 		a.Visibility = AgentVisibilityTeam
 	}
 
-	if err := h.svc.Create(a); err != nil {
+	if err := h.svc.CreateWithBindings(a, agentBindingsFromCreateReq(req)); err != nil {
 		if errors.Is(err, ErrAgentNameConflict) || errors.Is(err, ErrAgentCodeConflict) {
 			handler.Fail(c, http.StatusConflict, err.Error())
 			return
 		}
 		if errors.Is(err, ErrInvalidAgentType) || errors.Is(err, ErrModelRequired) ||
 			errors.Is(err, ErrRuntimeRequired) || errors.Is(err, ErrNodeRequired) ||
-			errors.Is(err, ErrCodeRequired) {
+			errors.Is(err, ErrCodeRequired) || errors.Is(err, ErrInvalidBinding) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
-	}
-
-	// Update bindings
-	if len(req.ToolIDs) > 0 || len(req.SkillIDs) > 0 || len(req.MCPServerIDs) > 0 || len(req.KnowledgeBaseIDs) > 0 || len(req.KnowledgeGraphIDs) > 0 {
-		if err := h.svc.UpdateBindings(a.ID, req.ToolIDs, req.SkillIDs, req.MCPServerIDs, req.KnowledgeBaseIDs, req.KnowledgeGraphIDs); err != nil {
-			handler.Fail(c, http.StatusInternalServerError, err.Error())
-			return
-		}
 	}
 
 	c.Set("audit_action", "agent.create")
@@ -241,13 +233,8 @@ func (h *AgentHandler) Update(c *gin.Context) {
 	a.Workspace = req.Workspace
 	a.Instructions = req.Instructions
 
-	if err := h.svc.Update(a); err != nil {
+	if err := h.svc.UpdateWithBindings(a, agentBindingsFromUpdateReq(req)); err != nil {
 		handler.Fail(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := h.svc.UpdateBindings(a.ID, req.ToolIDs, req.SkillIDs, req.MCPServerIDs, req.KnowledgeBaseIDs, req.KnowledgeGraphIDs); err != nil {
-		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -320,5 +307,25 @@ func (h *AgentHandler) agentWithBindings(a *Agent) gin.H {
 		"mcpServerIds":      mcpIDs,
 		"knowledgeBaseIds":  kbIDs,
 		"knowledgeGraphIds": kgIDs,
+	}
+}
+
+func agentBindingsFromCreateReq(req createAgentReq) AgentBindings {
+	return AgentBindings{
+		ToolIDs:           req.ToolIDs,
+		SkillIDs:          req.SkillIDs,
+		MCPServerIDs:      req.MCPServerIDs,
+		KnowledgeBaseIDs:  req.KnowledgeBaseIDs,
+		KnowledgeGraphIDs: req.KnowledgeGraphIDs,
+	}
+}
+
+func agentBindingsFromUpdateReq(req updateAgentReq) AgentBindings {
+	return AgentBindings{
+		ToolIDs:           req.ToolIDs,
+		SkillIDs:          req.SkillIDs,
+		MCPServerIDs:      req.MCPServerIDs,
+		KnowledgeBaseIDs:  req.KnowledgeBaseIDs,
+		KnowledgeGraphIDs: req.KnowledgeGraphIDs,
 	}
 }

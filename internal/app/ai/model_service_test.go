@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"gorm.io/gorm"
@@ -70,6 +71,29 @@ func TestModelService_Update(t *testing.T) {
 	}
 	if loaded.InputPrice != 0.005 {
 		t.Errorf("inputPrice: expected %f, got %f", 0.005, loaded.InputPrice)
+	}
+}
+
+func TestModelService_UpdateRejectsInvalidTypeAndStatus(t *testing.T) {
+	db := setupTestDB(t)
+	providerSvc := newProviderServiceForTest(t, db)
+	svc := newModelServiceForTest(t, db)
+
+	p := seedProvider(t, db, providerSvc, ProviderTypeOpenAI)
+	m := &AIModel{ModelID: "gpt-4", DisplayName: "GPT-4", ProviderID: p.ID, Type: ModelTypeLLM}
+	if err := svc.Create(m); err != nil {
+		t.Fatalf("create model: %v", err)
+	}
+
+	m.Type = "invalid"
+	if err := svc.Update(m); !errors.Is(err, ErrInvalidType) {
+		t.Fatalf("expected ErrInvalidType, got %v", err)
+	}
+
+	m.Type = ModelTypeLLM
+	m.Status = "invalid"
+	if err := svc.Update(m); !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("expected ErrInvalidStatus, got %v", err)
 	}
 }
 

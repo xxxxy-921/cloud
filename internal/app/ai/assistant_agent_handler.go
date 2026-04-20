@@ -60,24 +60,17 @@ func (h *AssistantAgentHandler) Create(c *gin.Context) {
 		a.Visibility = AgentVisibilityTeam
 	}
 
-	if err := h.svc.Create(a); err != nil {
+	if err := h.svc.CreateWithBindings(a, agentBindingsFromCreateReq(req)); err != nil {
 		if errors.Is(err, ErrAgentNameConflict) || errors.Is(err, ErrAgentCodeConflict) {
 			handler.Fail(c, http.StatusConflict, err.Error())
 			return
 		}
-		if errors.Is(err, ErrInvalidAgentType) || errors.Is(err, ErrModelRequired) {
+		if errors.Is(err, ErrInvalidAgentType) || errors.Is(err, ErrModelRequired) || errors.Is(err, ErrInvalidBinding) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
-	}
-
-	if len(req.ToolIDs) > 0 || len(req.SkillIDs) > 0 || len(req.MCPServerIDs) > 0 || len(req.KnowledgeBaseIDs) > 0 || len(req.KnowledgeGraphIDs) > 0 {
-		if err := h.svc.UpdateBindings(a.ID, req.ToolIDs, req.SkillIDs, req.MCPServerIDs, req.KnowledgeBaseIDs, req.KnowledgeGraphIDs); err != nil {
-			handler.Fail(c, http.StatusInternalServerError, err.Error())
-			return
-		}
 	}
 
 	c.Set("audit_action", "assistant-agent.create")
@@ -177,13 +170,8 @@ func (h *AssistantAgentHandler) Update(c *gin.Context) {
 	a.MaxTurns = req.MaxTurns
 	a.Instructions = req.Instructions
 
-	if err := h.svc.Update(a); err != nil {
+	if err := h.svc.UpdateWithBindings(a, agentBindingsFromUpdateReq(req)); err != nil {
 		handler.Fail(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := h.svc.UpdateBindings(a.ID, req.ToolIDs, req.SkillIDs, req.MCPServerIDs, req.KnowledgeBaseIDs, req.KnowledgeGraphIDs); err != nil {
-		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 

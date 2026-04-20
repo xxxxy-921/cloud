@@ -12,4 +12,4 @@
 
 - [x] 2.1 运行 `cd web && bun run build` 确认编译通过
 - [x] 2.2 运行 `cd web && bun run lint` 确认无 lint 问题
-- [ ] 2.3 更新 DESIGN.md：将安静视觉语言记录为新基线，标记毛玻璃风格为废弃模式
+- [x] 2.3 更新 DESIGN.md：将安静视觉语言记录为新基线，标记毛玻璃风格为废弃模式

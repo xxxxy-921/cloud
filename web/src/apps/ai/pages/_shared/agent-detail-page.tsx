@@ -1,7 +1,8 @@
+import { useState, useMemo } from "react"
 import { useParams, useNavigate, Link } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Bot, BrainCircuit, Code2, Pencil, Trash2, MessageSquare, Loader2 } from "lucide-react"
+import { ArrowLeft, BookOpen, Bot, BrainCircuit, ChevronRight, Code2, Loader2, MessageSquare, Package, Pencil, Plug, Share2, Trash2, Wrench } from "lucide-react"
 import { sessionApi, api, type AgentWithBindings, type AgentSession, type PaginatedResponse } from "@/lib/api"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -15,7 +16,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { formatDateTime } from "@/lib/utils"
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle,
+} from "@/components/ui/sheet"
+import { cn, formatDateTime } from "@/lib/utils"
 
 const TYPE_ICON: Record<string, typeof Bot> = {
   assistant: BrainCircuit,
@@ -43,34 +47,171 @@ interface NamedItem {
   id: number
   name: string
   displayName?: string
+  description?: string
 }
 
-function useBindingNames(ids: number[], queryKey: string[], endpoint: string) {
+interface ToolkitGroup {
+  toolkit: string
+  tools: NamedItem[]
+}
+
+const BINDING_ROWS = [
+  { key: "tools", icon: Wrench, labelKey: "ai:agents.tools" },
+  { key: "mcp", icon: Plug, labelKey: "ai:agents.mcpServers" },
+  { key: "skills", icon: Package, labelKey: "ai:agents.skills" },
+  { key: "kb", icon: BookOpen, labelKey: "ai:agents.knowledgeBases" },
+  { key: "kg", icon: Share2, labelKey: "ai:agents.knowledgeGraphs" },
+] as const
+
+function AgentBindingsCard({ agent }: { agent: AgentWithBindings }) {
   const { t } = useTranslation(["ai"])
-  const { data: items = [] } = useQuery({
-    queryKey,
+  const [openType, setOpenType] = useState<string | null>(null)
+
+  const { data: toolGroups = [] } = useQuery({
+    queryKey: ["ai-agent-binding-tools"],
     queryFn: () =>
-      api.get<PaginatedResponse<NamedItem>>(endpoint).then((r) => r?.items ?? []),
-    enabled: ids.length > 0,
+      api.get<{ items: ToolkitGroup[] }>("/api/v1/ai/tools").then((r) => r?.items ?? []),
   })
-  return ids.map((id) => {
-    const item = items.find((i) => i.id === id)
-    if (!item) return `#${id}`
-    return t(`ai:tools.toolDefs.${item.name}.name`, { defaultValue: item.displayName || item.name })
+
+  const { data: mcpItems = [] } = useQuery({
+    queryKey: ["ai-binding-mcp-servers"],
+    queryFn: () =>
+      api.get<PaginatedResponse<NamedItem>>("/api/v1/ai/mcp-servers?pageSize=100").then((r) => r?.items ?? []),
   })
-}
 
-function BindingBadges({ ids, queryKey, endpoint }: { ids: number[]; queryKey: string[]; endpoint: string }) {
-  const names = useBindingNames(ids, queryKey, endpoint)
+  const { data: skillItems = [] } = useQuery({
+    queryKey: ["ai-binding-skills"],
+    queryFn: () =>
+      api.get<PaginatedResponse<NamedItem>>("/api/v1/ai/skills?pageSize=100").then((r) => r?.items ?? []),
+  })
 
-  if (ids.length === 0) return <span className="text-sm text-muted-foreground">-</span>
+  const { data: kbItems = [] } = useQuery({
+    queryKey: ["ai-binding-knowledge-bases"],
+    queryFn: () =>
+      api.get<PaginatedResponse<NamedItem>>("/api/v1/ai/knowledge-bases?pageSize=100").then((r) => r?.items ?? []),
+  })
+
+  const { data: kgItems = [] } = useQuery({
+    queryKey: ["ai-binding-knowledge-graphs"],
+    queryFn: () =>
+      api.get<PaginatedResponse<NamedItem>>("/api/v1/ai/knowledge/graphs?pageSize=100").then((r) => r?.items ?? []),
+  })
+
+  const idsMap = useMemo<Record<string, number[]>>(() => ({
+    tools: agent.toolIds,
+    mcp: agent.mcpServerIds,
+    skills: agent.skillIds,
+    kb: agent.knowledgeBaseIds,
+    kg: agent.knowledgeGraphIds,
+  }), [agent.toolIds, agent.mcpServerIds, agent.skillIds, agent.knowledgeBaseIds, agent.knowledgeGraphIds])
+
+  const sheetData = useMemo(() => {
+    if (!openType) return { title: "", groups: null as { title: string; items: { name: string; description?: string }[] }[] | null, items: [] as { name: string; description?: string }[] }
+
+    const row = BINDING_ROWS.find((r) => r.key === openType)!
+    const ids = idsMap[openType] ?? []
+    const label = t(row.labelKey)
+    const title = `${label}（${ids.length}）`
+
+    if (openType === "tools") {
+      const boundGroups = toolGroups
+        .map((g) => ({
+          title: t(`ai:tools.toolkits.${g.toolkit}.name`),
+          items: g.tools
+            .filter((tool) => ids.includes(tool.id))
+            .map((tool) => ({
+              name: t(`ai:tools.toolDefs.${tool.name}.name`, { defaultValue: tool.displayName || tool.name }),
+              description: tool.description
+                ? t(`ai:tools.toolDefs.${tool.name}.description`, { defaultValue: tool.description })
+                : undefined,
+            })),
+        }))
+        .filter((g) => g.items.length > 0)
+      return { title, groups: boundGroups, items: [] }
+    }
+
+    const sourceMap: Record<string, NamedItem[]> = { mcp: mcpItems, skills: skillItems, kb: kbItems, kg: kgItems }
+    const source = sourceMap[openType] ?? []
+    const items = source
+      .filter((item) => ids.includes(item.id))
+      .map((item) => ({ name: item.displayName || item.name, description: item.description }))
+    return { title, groups: null, items }
+  }, [openType, toolGroups, mcpItems, skillItems, kbItems, kgItems, idsMap, t])
 
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {names.map((name, i) => (
-        <Badge key={ids[i]} variant="outline">{name}</Badge>
-      ))}
-    </div>
+    <>
+      <Card>
+        <CardHeader className="pb-4">
+          <CardTitle className="text-base">{t("ai:agents.bindings")}</CardTitle>
+        </CardHeader>
+        <CardContent className="divide-y divide-border/45">
+          {BINDING_ROWS.map((row) => {
+            const Icon = row.icon
+            const ids = idsMap[row.key]
+            return (
+              <button
+                key={row.key}
+                type="button"
+                onClick={() => ids.length > 0 && setOpenType(row.key)}
+                className={cn(
+                  "flex w-full items-center gap-3 py-3.5 text-left transition-colors first:pt-0 last:pb-0",
+                  ids.length > 0 ? "cursor-pointer hover:text-foreground" : "cursor-default opacity-50"
+                )}
+              >
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/55 bg-background/70 text-primary">
+                  <Icon className="size-4" />
+                </div>
+                <span className="flex-1 text-sm font-medium">{t(row.labelKey)}</span>
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {t("ai:agents.itemCount", { count: ids.length })}
+                </span>
+                <ChevronRight className="size-4 text-muted-foreground" />
+              </button>
+            )
+          })}
+        </CardContent>
+      </Card>
+
+      <Sheet open={openType !== null} onOpenChange={(open) => { if (!open) setOpenType(null) }}>
+        <SheetContent side="right" className="w-full sm:max-w-md">
+          <SheetHeader className="border-b border-border/50 pb-4">
+            <SheetTitle>{sheetData.title}</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            {sheetData.groups ? (
+              <div className="space-y-6">
+                {sheetData.groups.map((group) => (
+                  <div key={group.title} className="space-y-3">
+                    <h4 className="text-sm font-semibold text-foreground">{group.title}</h4>
+                    <div className="space-y-2">
+                      {group.items.map((item, i) => (
+                        <div key={i} className="rounded-xl border border-border/55 bg-background/30 px-4 py-3">
+                          <p className="text-sm font-medium text-foreground">{item.name}</p>
+                          {item.description && (
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.description}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sheetData.items.map((item, i) => (
+                  <div key={i} className="rounded-xl border border-border/55 bg-background/30 px-4 py-3">
+                    <p className="text-sm font-medium text-foreground">{item.name}</p>
+                    {item.description && (
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.description}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
   )
 }
 
@@ -162,30 +303,7 @@ function AgentConfiguration({ agent }: { agent: AgentWithBindings }) {
         </Card>
       )}
 
-      {/* Bindings */}
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">{t("ai:agents.bindings")}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("ai:agents.tools")}</h4>
-            <BindingBadges ids={agent.toolIds} queryKey={["ai-agent-detail-tools"]} endpoint="/api/v1/ai/tools?pageSize=100" />
-          </div>
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("ai:agents.mcpServers")}</h4>
-            <BindingBadges ids={agent.mcpServerIds} queryKey={["ai-binding-mcp-servers"]} endpoint="/api/v1/ai/mcp-servers?pageSize=100" />
-          </div>
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("ai:agents.skills")}</h4>
-            <BindingBadges ids={agent.skillIds} queryKey={["ai-binding-skills"]} endpoint="/api/v1/ai/skills?pageSize=100" />
-          </div>
-          <div>
-            <h4 className="text-sm font-medium mb-2">{t("ai:agents.knowledgeBases")}</h4>
-            <BindingBadges ids={agent.knowledgeBaseIds} queryKey={["ai-binding-knowledge-bases"]} endpoint="/api/v1/ai/knowledge-bases?pageSize=100" />
-          </div>
-        </CardContent>
-      </Card>
+      <AgentBindingsCard agent={agent} />
 
       {/* Instructions */}
       {agent.instructions && (

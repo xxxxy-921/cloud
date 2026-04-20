@@ -1,6 +1,19 @@
+import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { BookOpen, ChevronRight, Code, Globe, Loader2, Search, Wrench } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Loader2 } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
+import { cn } from "@/lib/utils"
 
 export interface BindingItem {
   id: number
@@ -9,71 +22,349 @@ export interface BindingItem {
   description?: string
 }
 
-interface BindingCheckboxListProps {
+export interface BindingGroup {
+  key: string
   title: string
+  description: string
   items: BindingItem[]
+}
+
+interface BindingSelectorSectionProps {
+  title: string
+  description: string
+  groups?: BindingGroup[]
+  items?: BindingItem[]
   isLoading: boolean
   value: number[]
   onChange: (ids: number[]) => void
+  sheetTitle?: string
+  sheetDescription?: string
+  emphasize?: boolean
 }
 
-export function BindingCheckboxList({ title, items, isLoading, value, onChange }: BindingCheckboxListProps) {
-  const { t } = useTranslation(["ai"])
+interface ResolvedBindingItem {
+  id: number
+  name: string
+  description?: string
+}
 
-  function resolveLabel(item: BindingItem) {
-    const name = t(`ai:tools.toolDefs.${item.name}.name`, { defaultValue: item.displayName || item.name })
-    const description = item.description
-      ? t(`ai:tools.toolDefs.${item.name}.description`, { defaultValue: item.description })
-      : undefined
-    return { name, description }
-  }
+interface ResolvedBindingGroup {
+  key: string
+  title: string
+  description: string
+  items: ResolvedBindingItem[]
+}
+
+const TOOLKIT_ICONS: Record<string, React.ElementType> = {
+  knowledge: BookOpen,
+  network: Globe,
+  code: Code,
+}
+
+export function BindingSelectorSection({
+  title,
+  description,
+  groups,
+  items,
+  isLoading,
+  value,
+  onChange,
+  sheetTitle,
+  sheetDescription,
+  emphasize = false,
+}: BindingSelectorSectionProps) {
+  const { t } = useTranslation(["ai", "common"])
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+
+  const resolvedItems = useMemo<ResolvedBindingItem[]>(() => {
+    return (items ?? []).map((item) => ({
+      id: item.id,
+      name: t(`ai:tools.toolDefs.${item.name}.name`, { defaultValue: item.displayName || item.name }),
+      description: item.description
+        ? t(`ai:tools.toolDefs.${item.name}.description`, { defaultValue: item.description })
+        : undefined,
+    }))
+  }, [items, t])
+
+  const resolvedGroups = useMemo<ResolvedBindingGroup[]>(() => {
+    return (groups ?? []).map((group) => ({
+      key: group.key,
+      title: group.title,
+      description: group.description,
+      items: group.items.map((item) => ({
+        id: item.id,
+        name: t(`ai:tools.toolDefs.${item.name}.name`, { defaultValue: item.displayName || item.name }),
+        description: item.description
+          ? t(`ai:tools.toolDefs.${item.name}.description`, { defaultValue: item.description })
+          : undefined,
+      })),
+    }))
+  }, [groups, t])
+
+  const selectedItems = useMemo(() => {
+    const source = resolvedGroups.length > 0 ? resolvedGroups.flatMap((group) => group.items) : resolvedItems
+    return source.filter((item) => value.includes(item.id))
+  }, [resolvedGroups, resolvedItems, value])
+
+  const filteredItems = useMemo(() => {
+    const trimmed = query.trim().toLowerCase()
+    if (!trimmed) return resolvedItems
+    return resolvedItems.filter((item) => `${item.name} ${item.description || ""}`.toLowerCase().includes(trimmed))
+  }, [query, resolvedItems])
+
+  const filteredGroups = useMemo(() => {
+    const trimmed = query.trim().toLowerCase()
+    if (!trimmed) return resolvedGroups
+    return resolvedGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => `${item.name} ${item.description || ""}`.toLowerCase().includes(trimmed)),
+      }))
+      .filter((group) => group.items.length > 0)
+  }, [query, resolvedGroups])
 
   function toggle(id: number) {
     if (value.includes(id)) {
-      onChange(value.filter((v) => v !== id))
-    } else {
-      onChange([...value, id])
+      onChange(value.filter((itemId) => itemId !== id))
+      return
     }
+    onChange([...value, id])
+  }
+
+  function clearSelection() {
+    onChange([])
   }
 
   return (
-    <div className="space-y-2">
-      <p className="text-sm font-medium">{title}</p>
-      <div className="rounded-md border max-h-48 overflow-y-auto">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-6">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+    <>
+      <section className="space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-foreground">{title}</h3>
+              <Badge variant={value.length > 0 ? "default" : "outline"}>
+                {t("ai:agents.selectedCount", { count: value.length })}
+              </Badge>
+            </div>
+            <p className="text-sm leading-6 text-muted-foreground">{description}</p>
           </div>
-        ) : items.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {t("ai:agents.noItems")}
-          </p>
-        ) : (
-          <div>
-            {items.map((item) => {
-              const resolved = resolveLabel(item)
+          {resolvedGroups.length === 0 && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)} className="shrink-0">
+              {t("ai:agents.manageSelection")}
+              <ChevronRight className="size-4" />
+            </Button>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="flex min-h-24 items-center justify-center rounded-[1rem] border border-dashed border-border/55 bg-background/20">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : resolvedGroups.length > 0 ? (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {resolvedGroups.map((group) => {
+              const groupSelected = group.items.filter((item) => value.includes(item.id))
+              const Icon = TOOLKIT_ICONS[group.key] ?? Wrench
               return (
-              <label
-                key={String(item.id)}
-                className="flex items-center gap-3 px-3 py-2 hover:bg-muted/50 cursor-pointer"
-              >
-                <Checkbox
-                  id={`binding-${title}-${item.id}`}
-                  checked={value.includes(item.id)}
-                  onCheckedChange={() => toggle(item.id)}
-                />
-                <div className="min-w-0 flex-1">
-                  <span className="text-sm">{resolved.name}</span>
-                  {resolved.description && (
-                    <p className="text-xs text-muted-foreground truncate">{resolved.description}</p>
+                <button
+                  key={group.key}
+                  type="button"
+                  onClick={() => setOpen(true)}
+                  className={cn(
+                    "group rounded-[1.1rem] border border-border/60 bg-background/30 px-4 py-4 text-left transition-colors hover:border-border/90 hover:bg-accent/20",
+                    emphasize && "first:border-primary/25 first:bg-primary/[0.035]"
                   )}
-                </div>
-              </label>
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/55 bg-background/70 text-primary">
+                        <Icon className="size-5" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">{group.title}</p>
+                          <Badge variant={groupSelected.length > 0 ? "default" : "outline"}>
+                            {groupSelected.length}/{group.items.length}
+                          </Badge>
+                        </div>
+                        <p className="text-sm leading-6 text-muted-foreground">{group.description}</p>
+                      </div>
+                    </div>
+                    <span className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full border border-border/60 bg-background/70 text-muted-foreground transition-colors group-hover:text-foreground">
+                      <ChevronRight className="size-4" />
+                    </span>
+                  </div>
+
+                  <div className="mt-4 border-t border-border/45 pt-4">
+                    {groupSelected.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t("ai:agents.clickToSelect")}</p>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap gap-2">
+                          {groupSelected.slice(0, 4).map((item) => (
+                            <Badge key={item.id} variant="outline">
+                              {item.name}
+                            </Badge>
+                          ))}
+                          {groupSelected.length > 4 && <Badge variant="secondary">+{groupSelected.length - 4}</Badge>}
+                        </div>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          {groupSelected[0]?.description || t("ai:agents.manageInSheet")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </button>
               )
             })}
           </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className={cn(
+              "group w-full rounded-[1.1rem] border border-border/60 bg-background/30 px-4 py-4 text-left transition-colors hover:border-border/90 hover:bg-accent/20",
+              emphasize && "border-primary/25 bg-primary/[0.04]"
+            )}
+          >
+            {selectedItems.length === 0 ? (
+              <div className="flex min-h-24 items-center justify-center rounded-[0.9rem] border border-dashed border-border/55 bg-background/25 text-center">
+                <p className="text-sm text-muted-foreground">{t("ai:agents.clickToSelect")}</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {selectedItems.slice(0, 5).map((item) => (
+                    <Badge key={item.id} variant="outline">
+                      {item.name}
+                    </Badge>
+                  ))}
+                  {selectedItems.length > 5 && <Badge variant="secondary">+{selectedItems.length - 5}</Badge>}
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {selectedItems[0]?.description || t("ai:agents.manageInSheet")}
+                </p>
+              </div>
+            )}
+          </button>
         )}
-      </div>
-    </div>
+      </section>
+
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-xl">
+          <SheetHeader className="border-b border-border/50 pb-4">
+            <SheetTitle>{sheetTitle || title}</SheetTitle>
+            <SheetDescription>{sheetDescription || description}</SheetDescription>
+          </SheetHeader>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4">
+            <div className="mt-1 flex items-center gap-2 rounded-xl border border-border/60 bg-background/55 px-3 py-2">
+              <Search className="size-4 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("common:search")}
+                className="h-auto border-0 bg-transparent px-0 py-0 shadow-none focus-visible:ring-0"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-border/55 bg-background/30 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">{t("ai:agents.currentSelection")}</p>
+                <p className="text-xs text-muted-foreground">{t("ai:agents.selectedCount", { count: value.length })}</p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={clearSelection} disabled={value.length === 0}>
+                {t("ai:agents.clearSelection")}
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              {isLoading ? (
+                <div className="flex h-full min-h-48 items-center justify-center rounded-[1rem] border border-dashed border-border/55 bg-background/20">
+                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : resolvedGroups.length > 0 ? (
+                <div className="space-y-6">
+                  {filteredGroups.map((group) => (
+                    <div key={group.key} className="space-y-3">
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-semibold text-foreground">{group.title}</h4>
+                        <p className="text-xs leading-5 text-muted-foreground">{group.description}</p>
+                      </div>
+                      <div className="space-y-3">
+                        {group.items.map((item) => {
+                          const checked = value.includes(item.id)
+                          return (
+                            <label
+                              key={item.id}
+                              className={cn(
+                                "flex cursor-pointer items-start gap-3 rounded-[1rem] border px-4 py-3 transition-colors hover:border-border/90 hover:bg-accent/24",
+                                checked ? "border-primary/30 bg-primary/[0.06]" : "border-border/55 bg-background/42"
+                              )}
+                            >
+                              <Checkbox checked={checked} onCheckedChange={() => toggle(item.id)} className="mt-0.5" />
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
+                                  {checked && <Badge variant="default">{t("ai:agents.selected")}</Badge>}
+                                </div>
+                                <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                  {item.description || t("ai:agents.noItemDescription")}
+                                </p>
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : filteredItems.length === 0 ? (
+                <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 rounded-[1rem] border border-dashed border-border/55 bg-background/20 px-6 text-center">
+                  <p className="text-sm font-medium text-foreground">{t("ai:agents.noMatchingItems")}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">{t("ai:agents.noItemsHint")}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredItems.map((item) => {
+                    const checked = value.includes(item.id)
+                    return (
+                      <label
+                        key={item.id}
+                        className={cn(
+                          "flex cursor-pointer items-start gap-3 rounded-[1rem] border px-4 py-3 transition-colors hover:border-border/90 hover:bg-accent/24",
+                          checked ? "border-primary/30 bg-primary/[0.06]" : "border-border/55 bg-background/42"
+                        )}
+                      >
+                        <Checkbox checked={checked} onCheckedChange={() => toggle(item.id)} className="mt-0.5" />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
+                            {checked && <Badge variant="default">{t("ai:agents.selected")}</Badge>}
+                          </div>
+                          <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">
+                            {item.description || t("ai:agents.noItemDescription")}
+                          </p>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <SheetFooter className="px-4">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              {t("common:close")}
+            </Button>
+            <Button type="button" onClick={() => setOpen(false)}>
+              {t("common:confirm")}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    </>
   )
 }

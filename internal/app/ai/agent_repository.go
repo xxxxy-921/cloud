@@ -136,57 +136,25 @@ func (r *AgentRepo) Delete(id uint) error {
 
 func (r *AgentRepo) ReplaceToolBindings(agentID uint, toolIDs []uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("agent_id = ?", agentID).Delete(&AgentTool{}).Error; err != nil {
-			return err
-		}
-		for _, tid := range toolIDs {
-			if err := tx.Create(&AgentTool{AgentID: agentID, ToolID: tid}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return r.replaceToolBindingsInTx(tx, agentID, toolIDs)
 	})
 }
 
 func (r *AgentRepo) ReplaceSkillBindings(agentID uint, skillIDs []uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("agent_id = ?", agentID).Delete(&AgentSkill{}).Error; err != nil {
-			return err
-		}
-		for _, sid := range skillIDs {
-			if err := tx.Create(&AgentSkill{AgentID: agentID, SkillID: sid}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return r.replaceSkillBindingsInTx(tx, agentID, skillIDs)
 	})
 }
 
 func (r *AgentRepo) ReplaceMCPServerBindings(agentID uint, mcpIDs []uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("agent_id = ?", agentID).Delete(&AgentMCPServer{}).Error; err != nil {
-			return err
-		}
-		for _, mid := range mcpIDs {
-			if err := tx.Create(&AgentMCPServer{AgentID: agentID, MCPServerID: mid}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return r.replaceMCPServerBindingsInTx(tx, agentID, mcpIDs)
 	})
 }
 
 func (r *AgentRepo) ReplaceKnowledgeBaseBindings(agentID uint, kbIDs []uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("agent_id = ?", agentID).Delete(&AgentKnowledgeBase{}).Error; err != nil {
-			return err
-		}
-		for _, kid := range kbIDs {
-			if err := tx.Create(&AgentKnowledgeBase{AgentID: agentID, KnowledgeBaseID: kid}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return r.replaceKnowledgeBaseBindingsInTx(tx, agentID, kbIDs)
 	})
 }
 
@@ -240,15 +208,7 @@ func (r *AgentRepo) GetKnowledgeBaseIDs(agentID uint) ([]uint, error) {
 
 func (r *AgentRepo) ReplaceKnowledgeGraphBindings(agentID uint, kgIDs []uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("agent_id = ?", agentID).Delete(&AgentKnowledgeGraph{}).Error; err != nil {
-			return err
-		}
-		for _, kid := range kgIDs {
-			if err := tx.Create(&AgentKnowledgeGraph{AgentID: agentID, KnowledgeGraphID: kid}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return r.replaceKnowledgeGraphBindingsInTx(tx, agentID, kgIDs)
 	})
 }
 
@@ -299,4 +259,84 @@ func (r *AgentRepo) HasRunningSessions(agentID uint) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *AgentRepo) DB() *gorm.DB {
+	return r.db.DB
+}
+
+func (r *AgentRepo) replaceBindingsInTx(tx *gorm.DB, agentID uint, bindings AgentBindings) error {
+	if err := r.replaceToolBindingsInTx(tx, agentID, bindings.ToolIDs); err != nil {
+		return err
+	}
+	if err := r.replaceSkillBindingsInTx(tx, agentID, bindings.SkillIDs); err != nil {
+		return err
+	}
+	if err := r.replaceMCPServerBindingsInTx(tx, agentID, bindings.MCPServerIDs); err != nil {
+		return err
+	}
+	if err := r.replaceKnowledgeBaseBindingsInTx(tx, agentID, bindings.KnowledgeBaseIDs); err != nil {
+		return err
+	}
+	return r.replaceKnowledgeGraphBindingsInTx(tx, agentID, bindings.KnowledgeGraphIDs)
+}
+
+func (r *AgentRepo) replaceToolBindingsInTx(tx *gorm.DB, agentID uint, toolIDs []uint) error {
+	if err := tx.Where("agent_id = ?", agentID).Delete(&AgentTool{}).Error; err != nil {
+		return err
+	}
+	for _, tid := range toolIDs {
+		if err := tx.Create(&AgentTool{AgentID: agentID, ToolID: tid}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *AgentRepo) replaceSkillBindingsInTx(tx *gorm.DB, agentID uint, skillIDs []uint) error {
+	if err := tx.Where("agent_id = ?", agentID).Delete(&AgentSkill{}).Error; err != nil {
+		return err
+	}
+	for _, sid := range skillIDs {
+		if err := tx.Create(&AgentSkill{AgentID: agentID, SkillID: sid}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *AgentRepo) replaceMCPServerBindingsInTx(tx *gorm.DB, agentID uint, mcpIDs []uint) error {
+	if err := tx.Where("agent_id = ?", agentID).Delete(&AgentMCPServer{}).Error; err != nil {
+		return err
+	}
+	for _, mid := range mcpIDs {
+		if err := tx.Create(&AgentMCPServer{AgentID: agentID, MCPServerID: mid}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *AgentRepo) replaceKnowledgeBaseBindingsInTx(tx *gorm.DB, agentID uint, kbIDs []uint) error {
+	if err := tx.Where("agent_id = ?", agentID).Delete(&AgentKnowledgeBase{}).Error; err != nil {
+		return err
+	}
+	for _, kid := range kbIDs {
+		if err := tx.Create(&AgentKnowledgeBase{AgentID: agentID, KnowledgeBaseID: kid}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *AgentRepo) replaceKnowledgeGraphBindingsInTx(tx *gorm.DB, agentID uint, kgIDs []uint) error {
+	if err := tx.Where("agent_id = ?", agentID).Delete(&AgentKnowledgeGraph{}).Error; err != nil {
+		return err
+	}
+	for _, kid := range kgIDs {
+		if err := tx.Create(&AgentKnowledgeGraph{AgentID: agentID, KnowledgeGraphID: kid}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
