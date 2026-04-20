@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Pencil, Zap, RefreshCw, Plus, Search,
-  Star, Trash2, Cpu,
+  Star, Trash2, Cpu, ChevronLeft, ChevronRight,
 } from "lucide-react"
 import { usePermission } from "@/hooks/use-permission"
 import { api, type PaginatedResponse } from "@/lib/api"
@@ -33,7 +33,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import {
-  DataTableActions,
   DataTableActionsCell,
   DataTableActionsHead,
 } from "@/components/ui/data-table"
@@ -72,6 +71,8 @@ function getEmptyTypeGroups() {
     .filter((type) => type)
     .map((type) => ({ type, items: [] as ModelItem[] }))
 }
+
+const PAGE_SIZE = 5
 
 // ─── Provider Info Section ──────────────────────────────────────────────────
 
@@ -168,7 +169,9 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
   const queryClient = useQueryClient()
   const [modelFormOpen, setModelFormOpen] = useState(false)
   const [editingModel, setEditingModel] = useState<ModelItem | null>(null)
+  const [creatingType, setCreatingType] = useState<string | null>(null)
   const [searchKeyword, setSearchKeyword] = useState("")
+  const [pageByType, setPageByType] = useState<Record<string, number>>({})
 
   const canCreateModel = usePermission("ai:model:create")
   const canUpdateModel = usePermission("ai:model:update")
@@ -182,9 +185,9 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
         `/api/v1/ai/models?providerId=${provider.id}&pageSize=100`,
       ),
   })
-  const allModels = data?.items ?? []
 
   const filteredModels = useMemo(() => {
+    const allModels = data?.items ?? []
     if (!searchKeyword) return allModels
     const kw = searchKeyword.toLowerCase()
     return allModels.filter(
@@ -192,7 +195,7 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
         m.displayName.toLowerCase().includes(kw) ||
         m.modelId.toLowerCase().includes(kw),
     )
-  }, [allModels, searchKeyword])
+  }, [data?.items, searchKeyword])
 
   const groups = filteredModels.length > 0 ? groupByType(filteredModels) : getEmptyTypeGroups()
 
@@ -216,30 +219,16 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
   })
 
   return (
-    <div className="rounded-xl border bg-card">
-      <div className="flex items-center justify-between border-b px-5 py-3">
-        <h3 className="text-sm font-semibold">{t("ai:models.title")}</h3>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder={t("ai:models.searchPlaceholder")}
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
-              className="h-8 w-48 pl-8 text-xs"
-            />
-          </div>
-          {canCreateModel && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8"
-              onClick={() => { setEditingModel(null); setModelFormOpen(true) }}
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" />
-              {t("ai:models.create")}
-            </Button>
-          )}
+    <div className="space-y-4">
+      <div className="flex items-center justify-end">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder={t("ai:models.searchPlaceholder")}
+            value={searchKeyword}
+            onChange={(e) => setSearchKeyword(e.target.value)}
+            className="h-8 w-52 pl-8 text-xs"
+          />
         </div>
       </div>
 
@@ -248,9 +237,9 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
           {t("common:loading")}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {groups.map(({ type, items }) => (
-            <section key={type} className="overflow-hidden rounded-xl border bg-background/60">
+            <section key={type} className="flex h-[420px] flex-col overflow-hidden rounded-xl border bg-card">
               <div className="flex items-center justify-between border-b bg-muted/25 px-4 py-3">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">
@@ -260,103 +249,152 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
                     {items.length}
                   </Badge>
                 </div>
-                {type && provider.modelTypeCounts?.[type] ? (
-                  <span className="text-[11px] text-muted-foreground">
-                    {provider.modelTypeCounts[type]} {t("ai:providers.modelCount")}
-                  </span>
-                ) : null}
+                <div className="flex items-center gap-2">
+                  {canCreateModel && type ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => {
+                        setEditingModel(null)
+                        setCreatingType(type)
+                        setModelFormOpen(true)
+                      }}
+                    >
+                      <Plus className="mr-1 h-3.5 w-3.5" />
+                      {t("ai:models.create")}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               {items.length === 0 ? (
-                <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 px-4 py-8 text-center">
+                <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center">
                   <Cpu className="h-8 w-8 text-muted-foreground/35" />
                   <p className="text-sm text-muted-foreground">{t("ai:models.empty")}</p>
                 </div>
               ) : (
-                <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="min-w-[160px]">{t("ai:models.displayName")}</TableHead>
-                    <TableHead className="w-[120px]">{t("ai:models.modelId")}</TableHead>
-                    <TableHead className="w-[70px]">{t("ai:models.status")}</TableHead>
-                    <TableHead className="w-[48px]">{t("ai:models.isDefault")}</TableHead>
-                    <DataTableActionsHead className="min-w-[132px]">{t("common:actions")}</DataTableActionsHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((m) => (
-                    <TableRow key={m.id}>
-                      <TableCell className="font-medium">{m.displayName}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{m.modelId}</TableCell>
-                      <TableCell>
-                        <Badge variant={STATUS_VARIANTS[m.status] ?? "secondary"}>
-                          {t(`ai:statusLabels.${m.status}`, m.status)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {m.isDefault && <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
-                      </TableCell>
-                      <DataTableActionsCell>
-                        <DataTableActions>
-                          {canSetDefault && !m.isDefault && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="px-2 text-xs"
-                              disabled={setDefaultMutation.isPending}
-                              onClick={() => setDefaultMutation.mutate(m.id)}
-                            >
-                              <Star className="mr-1 h-3.5 w-3.5" />
-                              {t("ai:models.setDefault")}
-                            </Button>
-                          )}
-                          {canUpdateModel && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="px-2 text-xs"
-                              onClick={() => { setEditingModel(m); setModelFormOpen(true) }}
-                            >
-                              <Pencil className="mr-1 h-3.5 w-3.5" />
-                              {t("common:edit")}
-                            </Button>
-                          )}
-                          {canDeleteModel && (
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="px-2 text-xs text-destructive hover:text-destructive"
-                                >
-                                  <Trash2 className="mr-1 h-3.5 w-3.5" />
-                                  {t("common:delete")}
-                                </Button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>{t("ai:models.deleteTitle")}</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    {t("ai:models.deleteDesc", { name: m.displayName })}
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>{t("common:cancel")}</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={() => deleteMutation.mutate(m.id)}
-                                    disabled={deleteMutation.isPending}
-                                  >
-                                    {t("ai:models.confirmDelete")}
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          )}
-                        </DataTableActions>
-                      </DataTableActionsCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-                </Table>
+                (() => {
+                  const page = pageByType[type] ?? 1
+                  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE))
+                  const safePage = Math.min(page, totalPages)
+                  const pageItems = items.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+                  return (
+                    <>
+                      <div className="flex-1 overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="min-w-[148px]">{t("ai:models.displayName")}</TableHead>
+                              <TableHead className="w-[110px]">{t("ai:models.modelId")}</TableHead>
+                              <TableHead className="w-[68px]">{t("ai:models.status")}</TableHead>
+                              <TableHead className="w-[44px] text-center">{t("ai:models.isDefault")}</TableHead>
+                              <DataTableActionsHead className="w-[104px] text-right">{t("common:actions")}</DataTableActionsHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {pageItems.map((m) => (
+                              <TableRow key={m.id}>
+                                <TableCell className="font-medium">{m.displayName}</TableCell>
+                                <TableCell className="font-mono text-xs text-muted-foreground">{m.modelId}</TableCell>
+                                <TableCell>
+                                  <Badge variant={STATUS_VARIANTS[m.status] ?? "secondary"}>
+                                    {t(`ai:statusLabels.${m.status}`, m.status)}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  {m.isDefault && <Star className="mx-auto h-4 w-4 fill-yellow-500 text-yellow-500" />}
+                                </TableCell>
+                                <DataTableActionsCell className="text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    {canSetDefault && !m.isDefault && (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        disabled={setDefaultMutation.isPending}
+                                        onClick={() => setDefaultMutation.mutate(m.id)}
+                                      >
+                                        <Star className="h-3.5 w-3.5" />
+                                      </Button>
+                                    )}
+                                    {canUpdateModel && (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        onClick={() => {
+                                          setEditingModel(m)
+                                          setCreatingType(null)
+                                          setModelFormOpen(true)
+                                        }}
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </Button>
+                                    )}
+                                    {canDeleteModel && (
+                                      <AlertDialog>
+                                        <AlertDialogTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 text-destructive hover:text-destructive"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </Button>
+                                        </AlertDialogTrigger>
+                                        <AlertDialogContent>
+                                          <AlertDialogHeader>
+                                            <AlertDialogTitle>{t("ai:models.deleteTitle")}</AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                              {t("ai:models.deleteDesc", { name: m.displayName })}
+                                            </AlertDialogDescription>
+                                          </AlertDialogHeader>
+                                          <AlertDialogFooter>
+                                            <AlertDialogCancel>{t("common:cancel")}</AlertDialogCancel>
+                                            <AlertDialogAction
+                                              onClick={() => deleteMutation.mutate(m.id)}
+                                              disabled={deleteMutation.isPending}
+                                            >
+                                              {t("ai:models.confirmDelete")}
+                                            </AlertDialogAction>
+                                          </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                      </AlertDialog>
+                                    )}
+                                  </div>
+                                </DataTableActionsCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <div className="flex items-center justify-between border-t px-4 py-2.5 text-xs text-muted-foreground">
+                        <span>{safePage} / {totalPages}</span>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            disabled={safePage <= 1}
+                            onClick={() => setPageByType((prev) => ({ ...prev, [type]: Math.max(1, safePage - 1) }))}
+                          >
+                            <ChevronLeft className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            disabled={safePage >= totalPages}
+                            onClick={() => setPageByType((prev) => ({ ...prev, [type]: Math.min(totalPages, safePage + 1) }))}
+                          >
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    </>
+                  )
+                })()
               )}
             </section>
           ))}
@@ -368,6 +406,7 @@ function ModelManagementSection({ provider }: { provider: ProviderItem }) {
         onOpenChange={setModelFormOpen}
         model={editingModel}
         defaultProviderId={provider.id}
+        defaultType={creatingType ?? undefined}
       />
     </div>
   )
