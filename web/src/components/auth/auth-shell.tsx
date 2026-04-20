@@ -7,19 +7,24 @@ interface AuthShellProps {
   aside?: ReactNode
   children: ReactNode
   className?: string
+  fullHeight?: boolean
 }
 
-export function AuthShell({ aside, children, className }: AuthShellProps) {
+export function AuthShell({ aside, children, className, fullHeight = true }: AuthShellProps) {
   return (
-    <div className="auth-shell-bg relative min-h-dvh overflow-hidden lg:h-dvh">
+    <div className={cn("auth-shell-bg relative min-h-dvh overflow-hidden", fullHeight && "lg:h-dvh")}>
       <div className="auth-grid pointer-events-none absolute inset-0" />
       <div className="auth-orb-primary pointer-events-none absolute left-[8%] top-[10%] h-72 w-72 rounded-full blur-3xl" />
       <div className="auth-orb-secondary pointer-events-none absolute bottom-[8%] right-[10%] h-80 w-80 rounded-full blur-3xl" />
 
-      <div className="relative mx-auto flex min-h-dvh w-full max-w-[1560px] items-stretch px-3 py-3 sm:px-4 sm:py-4 lg:h-dvh lg:px-7 lg:py-7">
+      <div className={cn(
+        "relative mx-auto flex min-h-dvh w-full max-w-[1560px] items-stretch px-3 py-3 sm:px-4 sm:py-4 lg:px-7",
+        fullHeight ? "lg:h-dvh lg:py-7" : "lg:py-5"
+      )}>
         <div
           className={cn(
-            "auth-stage relative grid w-full grid-cols-1 overflow-hidden rounded-[1.75rem] sm:rounded-[2rem] lg:h-full",
+            "auth-stage relative grid w-full grid-cols-1 overflow-hidden rounded-[1.75rem] sm:rounded-[2rem]",
+            fullHeight && "lg:h-full",
             aside && "lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,30rem)]",
             className
           )}
@@ -31,8 +36,9 @@ export function AuthShell({ aside, children, className }: AuthShellProps) {
           ) : null}
 
           <main className={cn(
-            "flex min-h-full items-center justify-center px-4 py-5 sm:px-6 sm:py-6 lg:justify-end lg:px-10 lg:py-10 xl:px-14",
-            aside && "lg:bg-transparent"
+            "flex min-h-full justify-center px-4 py-5 sm:px-6 sm:py-6 lg:px-10 xl:px-14",
+            fullHeight ? "items-center lg:py-10" : "items-start lg:py-7",
+            aside ? "lg:justify-end lg:bg-transparent" : "lg:justify-center"
           )}>
             {children}
           </main>

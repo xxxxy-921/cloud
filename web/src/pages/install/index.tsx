@@ -1172,7 +1172,7 @@ export default function InstallPage() {
   }
 
   return (
-    <AuthShell>
+    <AuthShell fullHeight={false}>
       <div className="w-full max-w-[30rem]">
         <div className="auth-panel-glass rounded-[1.75rem] px-6 py-6 sm:px-8 sm:py-8">
           <div className="mb-7">

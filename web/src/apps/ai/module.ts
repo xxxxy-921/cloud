@@ -17,7 +17,11 @@ registerApp({
     },
     {
       label: "knowledge",
-      items: [{ permission: "ai:knowledge:list" }],
+      items: [
+        { permission: "ai:knowledge-source:list" },
+        { permission: "ai:knowledge-base:list" },
+        { permission: "ai:knowledge-graph:list" },
+      ],
     },
     {
       label: "tools",
@@ -56,6 +60,32 @@ registerApp({
         {
           path: ":id",
           lazy: () => import("./pages/knowledge/[id]"),
+        },
+        {
+          path: "bases",
+          children: [
+            {
+              index: true,
+              lazy: () => import("./pages/knowledge/bases/index"),
+            },
+            {
+              path: ":id",
+              lazy: () => import("./pages/knowledge/bases/[id]"),
+            },
+          ],
+        },
+        {
+          path: "graphs",
+          children: [
+            {
+              index: true,
+              lazy: () => import("./pages/knowledge/graphs/index"),
+            },
+            {
+              path: ":id",
+              lazy: () => import("./pages/knowledge/graphs/[id]"),
+            },
+          ],
         },
       ],
     },
