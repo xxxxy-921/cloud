@@ -145,6 +145,25 @@ func (h *ServiceDefHandler) Get(c *gin.Context) {
 	handler.OK(c, svc.ToResponse())
 }
 
+func (h *ServiceDefHandler) HealthCheck(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	result, err := h.svc.HealthCheck(id)
+	if err != nil {
+		if errors.Is(err, ErrServiceDefNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handler.OK(c, result)
+}
+
 type UpdateServiceDefRequest struct {
 	Name              *string    `json:"name" binding:"omitempty,max=128"`
 	Code              *string    `json:"code" binding:"omitempty,max=64"`

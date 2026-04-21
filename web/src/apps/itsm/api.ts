@@ -321,6 +321,12 @@ export interface TicketItem {
   slaResponseDeadline: string | null
   slaResolutionDeadline: string | null
   finishedAt: string | null
+  smartState?: "terminal" | "ai_disabled" | "waiting_ai_confirmation" | "action_running" | "waiting_human" | "ai_reasoning" | "ai_decided" | string
+  currentOwnerType?: string
+  currentOwnerName?: string
+  nextStepSummary?: string
+  canAct?: boolean
+  canOverride?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -435,9 +441,11 @@ export interface TimelineItem {
   id: number
   ticketId: number
   eventType: string
+  message: string
   content: string
   operatorId: number
   operatorName: string
+  details: unknown
   metadata: unknown
   reasoning: string
   createdAt: string
@@ -463,7 +471,12 @@ export interface ActivityItem {
   transitionOutcome: string
   aiDecision: string | null
   aiReasoning: string | null
-  confidence: number | null
+  aiConfidence: number | null
+  evidence?: unknown[]
+  toolCalls?: unknown[]
+  knowledgeHits?: unknown[]
+  actionExecutions?: unknown[]
+  riskFlags?: unknown[]
   overriddenBy: number | null
   canAct: boolean
   startedAt: string | null
@@ -695,6 +708,25 @@ export interface WorkflowGenerateResponse {
 
 export function generateWorkflow(data: { serviceId: number; collaborationSpec: string }) {
   return api.post<WorkflowGenerateResponse>("/api/v1/itsm/workflows/generate", data)
+}
+
+// ─── Service Health ─────────────────────────────────────
+
+export interface ServiceHealthItem {
+  key: string
+  label: string
+  status: "pass" | "warn" | "fail"
+  message: string
+}
+
+export interface ServiceHealthCheck {
+  serviceId: number
+  status: "pass" | "warn" | "fail"
+  items: ServiceHealthItem[]
+}
+
+export function fetchServiceHealth(serviceId: number) {
+  return api.get<ServiceHealthCheck>(`/api/v1/itsm/services/${serviceId}/health`)
 }
 
 // ─── Process Variables ──────────────────────────────────

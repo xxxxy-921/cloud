@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -146,6 +147,101 @@ func (s *ServiceDefService) Delete(id uint) error {
 
 func (s *ServiceDefService) List(params ServiceDefListParams) ([]ServiceDefinition, int64, error) {
 	return s.repo.List(params)
+}
+
+type ServiceHealthItem struct {
+	Key     string `json:"key"`
+	Label   string `json:"label"`
+	Status  string `json:"status"` // pass | warn | fail
+	Message string `json:"message"`
+}
+
+type ServiceHealthCheck struct {
+	ServiceID uint                `json:"serviceId"`
+	Status    string              `json:"status"` // pass | warn | fail
+	Items     []ServiceHealthItem `json:"items"`
+}
+
+func (s *ServiceDefService) HealthCheck(id uint) (*ServiceHealthCheck, error) {
+	svc, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	check := &ServiceHealthCheck{ServiceID: id, Status: "pass"}
+	add := func(key, label, status, message string) {
+		check.Items = append(check.Items, ServiceHealthItem{Key: key, Label: label, Status: status, Message: message})
+		if status == "fail" {
+			check.Status = "fail"
+		} else if status == "warn" && check.Status == "pass" {
+			check.Status = "warn"
+		}
+	}
+
+	if svc.EngineType == "classic" {
+		if len(svc.WorkflowJSON) == 0 {
+			add("workflow", "流程定义", "fail", "经典引擎必须配置可执行工作流")
+		} else if err := validateWorkflowJSON(json.RawMessage(svc.WorkflowJSON)); err != nil {
+			add("workflow", "流程定义", "fail", err.Error())
+		} else {
+			add("workflow", "流程定义", "pass", "工作流结构校验通过")
+		}
+		return check, nil
+	}
+
+	if strings.TrimSpace(svc.CollaborationSpec) == "" {
+		add("collaboration_spec", "协作规范", "fail", "智能引擎需要协作规范作为决策策略")
+	} else {
+		add("collaboration_spec", "协作规范", "pass", "协作规范已配置")
+	}
+
+	if svc.AgentID == nil || *svc.AgentID == 0 {
+		add("service_agent", "服务 Agent", "fail", "智能服务未绑定 Agent")
+	} else if err := s.validateAgent(svc.AgentID); err != nil {
+		add("service_agent", "服务 Agent", "fail", "绑定的 Agent 不存在或未启用")
+	} else {
+		add("service_agent", "服务 Agent", "pass", "服务 Agent 可用")
+	}
+
+	var decisionAgentID string
+	_ = s.db.Table("system_configs").Where("\"key\" = ?", "itsm.engine.decision.agent_id").Select("value").Scan(&decisionAgentID).Error
+	if strings.TrimSpace(decisionAgentID) == "" || decisionAgentID == "0" {
+		add("decision_agent", "决策 Agent", "fail", "全局决策 Agent 未配置")
+	} else {
+		add("decision_agent", "决策 Agent", "pass", "全局决策 Agent 已配置")
+	}
+
+	if len(svc.WorkflowJSON) == 0 {
+		add("reference_path", "参考路径", "warn", "未生成参考路径；direct_first 会降级为纯 AI 推理")
+	} else {
+		add("reference_path", "参考路径", "pass", "已配置参考路径/策略草图")
+	}
+
+	var activeActions int64
+	s.db.Model(&ServiceAction{}).Where("service_id = ? AND is_active = ?", id, true).Count(&activeActions)
+	if activeActions == 0 {
+		add("actions", "自动化动作", "warn", "未配置自动化动作；如流程需要预检/放行，请先配置动作")
+	} else {
+		add("actions", "自动化动作", "pass", fmt.Sprintf("已配置 %d 个可用动作", activeActions))
+	}
+
+	var parsedDocs int64
+	s.db.Model(&ServiceKnowledgeDocument{}).Where("service_id = ? AND parse_status = ?", id, "completed").Count(&parsedDocs)
+	if parsedDocs == 0 {
+		add("knowledge", "知识库", "warn", "未关联已解析知识文档；AI 将主要依赖协作规范和工单上下文")
+	} else {
+		add("knowledge", "知识库", "pass", fmt.Sprintf("已关联 %d 个可检索知识文档", parsedDocs))
+	}
+
+	var fallback string
+	_ = s.db.Table("system_configs").Where("\"key\" = ?", "itsm.engine.general.fallback_assignee").Select("value").Scan(&fallback).Error
+	if strings.TrimSpace(fallback) == "" || fallback == "0" {
+		add("fallback", "兜底处理人", "warn", "未配置兜底处理人；参与者解析失败时需要管理员接管")
+	} else {
+		add("fallback", "兜底处理人", "pass", "兜底处理人已配置")
+	}
+
+	add("permissions", "权限与接管", "warn", "请确认审批人、管理员接管权限已按角色分配")
+	return check, nil
 }
 
 // validateWorkflowJSON runs the engine validator and wraps errors.

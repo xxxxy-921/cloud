@@ -200,18 +200,18 @@ type TicketTimeline struct {
 func (TicketTimeline) TableName() string { return "itsm_ticket_timelines" }
 
 type TicketTimelineResponse struct {
-	ID         uint      `json:"id"`
-	TicketID   uint      `json:"ticketId"`
-	ActivityID *uint     `json:"activityId"`
-	OperatorID uint      `json:"operatorId"`
-	OperatorName string  `json:"operatorName"`
-	EventType  string    `json:"eventType"`
-	Message    string    `json:"message"`
-	Content    string    `json:"content"`
-	Details    JSONField `json:"details"`
-	Metadata   JSONField `json:"metadata"`
-	Reasoning  string    `json:"reasoning"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID           uint      `json:"id"`
+	TicketID     uint      `json:"ticketId"`
+	ActivityID   *uint     `json:"activityId"`
+	OperatorID   uint      `json:"operatorId"`
+	OperatorName string    `json:"operatorName"`
+	EventType    string    `json:"eventType"`
+	Message      string    `json:"message"`
+	Content      string    `json:"content"`
+	Details      JSONField `json:"details"`
+	Metadata     JSONField `json:"metadata"`
+	Reasoning    string    `json:"reasoning"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 func (t *TicketTimeline) ToResponse() TicketTimelineResponse {

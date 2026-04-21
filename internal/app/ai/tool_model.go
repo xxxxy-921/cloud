@@ -44,30 +44,30 @@ const (
 
 type Tool struct {
 	model.BaseModel
-	Toolkit          string          `json:"toolkit" gorm:"size:64;not null;default:'';index"`
-	Name             string          `json:"name" gorm:"size:64;uniqueIndex;not null"`
-	DisplayName      string          `json:"displayName" gorm:"size:128;not null"`
-	Description      string          `json:"description" gorm:"type:text"`
+	Toolkit          string         `json:"toolkit" gorm:"size:64;not null;default:'';index"`
+	Name             string         `json:"name" gorm:"size:64;uniqueIndex;not null"`
+	DisplayName      string         `json:"displayName" gorm:"size:128;not null"`
+	Description      string         `json:"description" gorm:"type:text"`
 	ParametersSchema model.JSONText `json:"parametersSchema" gorm:"type:text"`
-	IsActive         bool            `json:"isActive" gorm:"not null;default:true"`
+	IsActive         bool           `json:"isActive" gorm:"not null;default:true"`
 }
 
 func (Tool) TableName() string { return "ai_tools" }
 
 type ToolResponse struct {
-	ID               uint            `json:"id"`
-	Toolkit          string          `json:"toolkit"`
-	Name             string          `json:"name"`
-	DisplayName      string          `json:"displayName"`
-	Description      string          `json:"description"`
-	ParametersSchema json.RawMessage `json:"parametersSchema"`
-	IsActive         bool            `json:"isActive"`
-	IsExecutable     bool            `json:"isExecutable"`
-	AvailabilityStatus string        `json:"availabilityStatus"`
-	AvailabilityReason string        `json:"availabilityReason,omitempty"`
-	BoundAgentCount    int64         `json:"boundAgentCount"`
-	CreatedAt        time.Time       `json:"createdAt"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
+	ID                 uint            `json:"id"`
+	Toolkit            string          `json:"toolkit"`
+	Name               string          `json:"name"`
+	DisplayName        string          `json:"displayName"`
+	Description        string          `json:"description"`
+	ParametersSchema   json.RawMessage `json:"parametersSchema"`
+	IsActive           bool            `json:"isActive"`
+	IsExecutable       bool            `json:"isExecutable"`
+	AvailabilityStatus string          `json:"availabilityStatus"`
+	AvailabilityReason string          `json:"availabilityReason,omitempty"`
+	BoundAgentCount    int64           `json:"boundAgentCount"`
+	CreatedAt          time.Time       `json:"createdAt"`
+	UpdatedAt          time.Time       `json:"updatedAt"`
 }
 
 func (t *Tool) ToResponse() ToolResponse {
@@ -76,17 +76,17 @@ func (t *Tool) ToResponse() ToolResponse {
 		params = json.RawMessage("{}")
 	}
 	return ToolResponse{
-		ID:               t.ID,
-		Toolkit:          t.Toolkit,
-		Name:             t.Name,
-		DisplayName:      t.DisplayName,
-		Description:      t.Description,
-		ParametersSchema: params,
-		IsActive:         t.IsActive,
-		IsExecutable:     t.IsActive,
+		ID:                 t.ID,
+		Toolkit:            t.Toolkit,
+		Name:               t.Name,
+		DisplayName:        t.DisplayName,
+		Description:        t.Description,
+		ParametersSchema:   params,
+		IsActive:           t.IsActive,
+		IsExecutable:       t.IsActive,
 		AvailabilityStatus: ToolAvailabilityAvailable,
-		CreatedAt:        t.CreatedAt,
-		UpdatedAt:        t.UpdatedAt,
+		CreatedAt:          t.CreatedAt,
+		UpdatedAt:          t.UpdatedAt,
 	}
 }
 
@@ -94,34 +94,34 @@ func (t *Tool) ToResponse() ToolResponse {
 
 type MCPServer struct {
 	model.BaseModel
-	Name                string          `json:"name" gorm:"size:128;not null"`
-	Description         string          `json:"description" gorm:"type:text"`
-	Transport           string          `json:"transport" gorm:"size:16;not null"` // sse | stdio
-	URL                 string          `json:"url" gorm:"size:512"`              // SSE endpoint
-	Command             string          `json:"command" gorm:"size:256"`           // STDIO command
-	Args                model.JSONText  `json:"args" gorm:"type:text"`             // STDIO args
-	Env                 model.JSONText  `json:"env" gorm:"type:text"`              // STDIO env vars
-	AuthType            string          `json:"authType" gorm:"size:32;not null;default:none"`
-	AuthConfigEncrypted []byte          `json:"-" gorm:"column:auth_config_encrypted;type:bytes"`
-	IsActive            bool            `json:"isActive" gorm:"not null;default:true"`
+	Name                string         `json:"name" gorm:"size:128;not null"`
+	Description         string         `json:"description" gorm:"type:text"`
+	Transport           string         `json:"transport" gorm:"size:16;not null"` // sse | stdio
+	URL                 string         `json:"url" gorm:"size:512"`               // SSE endpoint
+	Command             string         `json:"command" gorm:"size:256"`           // STDIO command
+	Args                model.JSONText `json:"args" gorm:"type:text"`             // STDIO args
+	Env                 model.JSONText `json:"env" gorm:"type:text"`              // STDIO env vars
+	AuthType            string         `json:"authType" gorm:"size:32;not null;default:none"`
+	AuthConfigEncrypted []byte         `json:"-" gorm:"column:auth_config_encrypted;type:bytes"`
+	IsActive            bool           `json:"isActive" gorm:"not null;default:true"`
 }
 
 func (MCPServer) TableName() string { return "ai_mcp_servers" }
 
 type MCPServerResponse struct {
-	ID           uint            `json:"id"`
-	Name         string          `json:"name"`
-	Description  string          `json:"description"`
-	Transport    string          `json:"transport"`
-	URL          string          `json:"url,omitempty"`
-	Command      string          `json:"command,omitempty"`
-	Args         json.RawMessage `json:"args,omitempty"`
-	Env          json.RawMessage `json:"env,omitempty"`
-	AuthType     string          `json:"authType"`
-	AuthMasked   string          `json:"authMasked,omitempty"`
-	IsActive     bool            `json:"isActive"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
+	ID          uint            `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Transport   string          `json:"transport"`
+	URL         string          `json:"url,omitempty"`
+	Command     string          `json:"command,omitempty"`
+	Args        json.RawMessage `json:"args,omitempty"`
+	Env         json.RawMessage `json:"env,omitempty"`
+	AuthType    string          `json:"authType"`
+	AuthMasked  string          `json:"authMasked,omitempty"`
+	IsActive    bool            `json:"isActive"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
 }
 
 func (m *MCPServer) ToResponse(authMasked string) MCPServerResponse {
@@ -146,17 +146,17 @@ func (m *MCPServer) ToResponse(authMasked string) MCPServerResponse {
 
 type Skill struct {
 	model.BaseModel
-	Name                string          `json:"name" gorm:"size:128;not null"`
-	DisplayName         string          `json:"displayName" gorm:"size:128;not null"`
-	Description         string          `json:"description" gorm:"type:text"`
-	SourceType          string          `json:"sourceType" gorm:"size:16;not null"` // github | upload
-	SourceURL           string          `json:"sourceUrl" gorm:"size:512"`
-	Manifest            model.JSONText  `json:"manifest" gorm:"type:text"`
-	Instructions        string          `json:"instructions" gorm:"type:text"`
-	ToolsSchema         model.JSONText  `json:"toolsSchema" gorm:"type:text"`
-	AuthType            string          `json:"authType" gorm:"size:32;not null;default:none"`
-	AuthConfigEncrypted []byte          `json:"-" gorm:"column:auth_config_encrypted;type:bytes"`
-	IsActive            bool            `json:"isActive" gorm:"not null;default:true"`
+	Name                string         `json:"name" gorm:"size:128;not null"`
+	DisplayName         string         `json:"displayName" gorm:"size:128;not null"`
+	Description         string         `json:"description" gorm:"type:text"`
+	SourceType          string         `json:"sourceType" gorm:"size:16;not null"` // github | upload
+	SourceURL           string         `json:"sourceUrl" gorm:"size:512"`
+	Manifest            model.JSONText `json:"manifest" gorm:"type:text"`
+	Instructions        string         `json:"instructions" gorm:"type:text"`
+	ToolsSchema         model.JSONText `json:"toolsSchema" gorm:"type:text"`
+	AuthType            string         `json:"authType" gorm:"size:32;not null;default:none"`
+	AuthConfigEncrypted []byte         `json:"-" gorm:"column:auth_config_encrypted;type:bytes"`
+	IsActive            bool           `json:"isActive" gorm:"not null;default:true"`
 }
 
 func (Skill) TableName() string { return "ai_skills" }

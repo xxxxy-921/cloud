@@ -21,15 +21,15 @@ type UserFinder interface {
 
 // GeneralUserInfo holds basic user info for the current_user_profile tool.
 type GeneralUserInfo struct {
-	ID             uint   `json:"id"`
-	Username       string `json:"username"`
-	Email          string `json:"email"`
-	Phone          string `json:"phone"`
-	Avatar         string `json:"avatar"`
-	RoleID         uint   `json:"roleId"`
-	RoleName       string `json:"roleName"`
-	RoleCode       string `json:"roleCode"`
-	ManagerID      *uint  `json:"managerId,omitempty"`
+	ID              uint   `json:"id"`
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	Phone           string `json:"phone"`
+	Avatar          string `json:"avatar"`
+	RoleID          uint   `json:"roleId"`
+	RoleName        string `json:"roleName"`
+	RoleCode        string `json:"roleCode"`
+	ManagerID       *uint  `json:"managerId,omitempty"`
 	ManagerUsername string `json:"managerUsername,omitempty"`
 }
 

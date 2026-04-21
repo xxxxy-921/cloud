@@ -22,9 +22,17 @@ interface AIDecisionPanelProps {
 
 interface DecisionPlan {
   next_step_type: string
-  next_step_name: string
+  execution_mode?: string
+  next_step_name?: string
   participant_id?: number
   participant_name?: string
+  activities?: Array<{
+    type?: string
+    participant_type?: string
+    participant_id?: number
+    instructions?: string
+    action_id?: number
+  }>
   action_id?: number
   reasoning: string
 }
@@ -34,7 +42,7 @@ export function AIDecisionPanel({ ticketId, activity }: AIDecisionPanelProps) {
   const queryClient = useQueryClient()
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
 
-  const confidencePercent = (activity.confidence ?? 0) * 100
+  const confidencePercent = (activity.aiConfidence ?? 0) * 100
   const isPendingApproval = activity.status === "pending_approval"
   const canAct = activity.canAct
 
@@ -113,14 +121,16 @@ export function AIDecisionPanel({ ticketId, activity }: AIDecisionPanelProps) {
           <div className="space-y-2 rounded-md border p-3">
             <p className="text-sm font-medium">{t("smart.planSummary")}</p>
             <div className="grid gap-1 text-sm">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-muted-foreground">{t("smart.nextStep")}</span>
-                <span>{plan.next_step_name || plan.next_step_type}</span>
+                <span className="text-right">
+                  {plan.activities?.[0]?.instructions || plan.next_step_name || plan.activities?.[0]?.type || plan.next_step_type}
+                </span>
               </div>
-              {plan.participant_name && (
+              {(plan.participant_name || plan.activities?.[0]?.participant_type || plan.activities?.[0]?.participant_id) && (
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{t("smart.participant")}</span>
-                  <span>{plan.participant_name}</span>
+                  <span>{plan.participant_name || plan.activities?.[0]?.participant_type || plan.activities?.[0]?.participant_id}</span>
                 </div>
               )}
             </div>
@@ -171,7 +181,7 @@ export function AIDecisionPanel({ ticketId, activity }: AIDecisionPanelProps) {
             <AlertDialogTitle>{t("smart.rejectConfirmTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {activity.name && <>{t("smart.nextStep")}: {activity.name}<br /></>}
-              {activity.confidence != null && <>{t("smart.confidence")}: {(activity.confidence * 100).toFixed(0)}%<br /></>}
+              {activity.aiConfidence != null && <>{t("smart.confidence")}: {(activity.aiConfidence * 100).toFixed(0)}%<br /></>}
               {t("smart.rejectConfirmDesc")}
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -577,12 +577,12 @@
     "strategyPlanAndExecute": "Plan & Execute"
   },
   "generate": {
-    "button": "Parse Workflow",
-    "generating": "Parsing...",
-    "success": "Workflow parsed successfully",
-    "partialSuccess": "Workflow generated with {{count}} validation issues",
+    "button": "Generate Reference Path",
+    "generating": "Generating...",
+    "success": "Reference path generated",
+    "partialSuccess": "Reference path generated with {{count}} validation issues",
     "specRequired": "Please fill in the collaboration spec first",
-    "workflowEmptySmartHint": "Fill in the collaboration spec above, then click \"Parse Workflow\" to generate",
+    "workflowEmptySmartHint": "Fill in the collaboration spec above, then click \"Generate Reference Path\" to create a strategy sketch",
     "nodeType": "Node Type"
   },
   "knowledge": {

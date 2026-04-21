@@ -3,12 +3,13 @@
 import { useState, useEffect, lazy, Suspense } from "react"
 import { useParams, useNavigate } from "react-router"
 import { useTranslation } from "react-i18next"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { z } from "zod"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Plus, Pencil, Trash2, Zap, Save, Loader2, Sparkles } from "lucide-react"
+import { ArrowLeft, Plus, Pencil, Trash2, Zap, Save, Loader2, Sparkles, ShieldCheck, CheckCircle2, AlertTriangle, XCircle } from "lucide-react"
 import { usePermission } from "@/hooks/use-permission"
+import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -42,7 +43,8 @@ import {
   fetchServiceDef, updateServiceDef,
   fetchCatalogTree, fetchSLATemplates,
   fetchServiceActions, createServiceAction, updateServiceAction, deleteServiceAction,
-  generateWorkflow,
+  generateWorkflow, fetchServiceHealth,
+  type ServiceHealthItem,
 } from "../../../api"
 import { SmartServiceConfig } from "../../../components/smart-service-config"
 import { ServiceKnowledgeCard } from "../../../components/service-knowledge-card"
@@ -320,6 +322,83 @@ function GenerateWorkflowButton({ serviceId, collaborationSpec }: {
   )
 }
 
+// ─── Publish Health Section ────────────────────────────
+
+function healthTone(status: ServiceHealthItem["status"]) {
+  if (status === "pass") {
+    return {
+      icon: CheckCircle2,
+      badge: "default" as const,
+      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    }
+  }
+  if (status === "fail") {
+    return {
+      icon: XCircle,
+      badge: "destructive" as const,
+      className: "border-red-200 bg-red-50 text-red-800",
+    }
+  }
+  return {
+    icon: AlertTriangle,
+    badge: "secondary" as const,
+    className: "border-amber-200 bg-amber-50 text-amber-800",
+  }
+}
+
+function ServiceHealthSection({ serviceId }: { serviceId: number }) {
+  const { data: health, isLoading } = useQuery({
+    queryKey: ["itsm-service-health", serviceId],
+    queryFn: () => fetchServiceHealth(serviceId),
+    enabled: serviceId > 0,
+  })
+
+  const overall = healthTone(health?.status ?? "warn")
+  const OverallIcon = overall.icon
+
+  return (
+    <section>
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+          <ShieldCheck className="h-4 w-4" />
+          发布健康检查
+        </h3>
+        <Badge variant={overall.badge}>
+          {health?.status === "pass" ? "可发布" : health?.status === "fail" ? "需修复" : "有风险"}
+        </Badge>
+      </div>
+      <div className="rounded-md border bg-card">
+        <div className={cn("flex items-center gap-3 border-b px-4 py-3 text-sm", overall.className)}>
+          {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <OverallIcon className="h-4 w-4" />}
+          <span className="font-medium">
+            {isLoading ? "正在检查智能服务配置" : health?.status === "pass" ? "关键配置已通过" : "请处理运行安全项"}
+          </span>
+          <span className="text-current/75">Agent、协作规范、参考路径、知识/动作、兜底人与权限都会纳入检查。</span>
+        </div>
+        <div className="divide-y">
+          {(health?.items ?? []).map((item) => {
+            const tone = healthTone(item.status)
+            const Icon = tone.icon
+            return (
+              <div key={item.key} className="flex flex-wrap items-start gap-3 px-4 py-3">
+                <Icon className={cn("mt-0.5 h-4 w-4", item.status === "pass" ? "text-emerald-600" : item.status === "fail" ? "text-red-600" : "text-amber-600")} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{item.label}</p>
+                  <p className="text-sm text-muted-foreground">{item.message}</p>
+                </div>
+                <Badge variant={tone.badge}>{item.status === "pass" ? "通过" : item.status === "fail" ? "失败" : "警告"}</Badge>
+              </div>
+            )
+          })}
+          {!isLoading && !health?.items?.length && (
+            <div className="px-4 py-6 text-sm text-muted-foreground">暂无检查结果。</div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // ─── Basic Info Form ──────────────────────────────────
 // Mounted only when service + catalogs + slaTemplates are all loaded,
 // so useForm defaultValues and SelectItem options are guaranteed in sync.
@@ -346,6 +425,7 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
       collaborationSpec: service.collaborationSpec ?? "",
     },
   })
+  const collaborationSpec = useWatch({ control: form.control, name: "collaborationSpec" })
 
   const updateMut = useMutation({
     mutationFn: (v: BasicFormValues) => updateServiceDef(service.id, {
@@ -459,7 +539,7 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
         {/* Smart Engine Config (full width) */}
         {service.engineType === "smart" && (
           <SmartServiceConfig
-            collaborationSpec={form.watch("collaborationSpec")}
+            collaborationSpec={collaborationSpec}
             onCollaborationSpecChange={(v) => form.setValue("collaborationSpec", v)}
           />
         )}
@@ -475,7 +555,7 @@ function BasicInfoForm({ service, catalogs, slaTemplates }: {
           {service.engineType === "smart" && (
             <GenerateWorkflowButton
               serviceId={service.id}
-              collaborationSpec={form.watch("collaborationSpec")}
+              collaborationSpec={collaborationSpec}
             />
           )}
         </div>
@@ -611,6 +691,10 @@ export function Component() {
         <BasicInfoForm key={service.updatedAt} service={service} catalogs={catalogs ?? []} slaTemplates={slaTemplates ?? []} />
       </section>
 
+      {service.engineType === "smart" && (
+        <ServiceHealthSection serviceId={serviceId} />
+      )}
+
       {/* Intake Form Section (classic engine only) */}
       {service.engineType === "classic" && (
         <IntakeFormSection serviceId={serviceId} initialSchema={service.intakeFormSchema} />
@@ -619,7 +703,9 @@ export function Component() {
       {/* Workflow Section */}
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-muted-foreground">{t("itsm:services.tabWorkflow")}</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground">
+            {service.engineType === "smart" ? "参考路径/策略草图" : t("itsm:services.tabWorkflow")}
+          </h3>
           {service.engineType === "classic" && !!service.workflowJson && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/itsm/services/${serviceId}/workflow`)}>
               <Pencil className="mr-1.5 h-3.5 w-3.5" />{t("itsm:workflow.editWorkflow")}
@@ -628,7 +714,9 @@ export function Component() {
         </div>
         {!service.workflowJson ? (
           <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed text-muted-foreground">
-            <p className="text-sm">{t("itsm:services.workflowEmpty")}</p>
+            <p className="text-sm">
+              {service.engineType === "smart" ? "暂无参考路径" : t("itsm:services.workflowEmpty")}
+            </p>
             {service.engineType === "classic" ? (
               <Button variant="outline" size="sm" onClick={() => navigate(`/itsm/services/${serviceId}/workflow`)}>
                 <Pencil className="mr-1.5 h-3.5 w-3.5" />{t("itsm:workflow.designWorkflow")}

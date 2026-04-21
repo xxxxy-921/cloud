@@ -3,7 +3,7 @@ package ai
 import "fmt"
 
 var riskDisabledBuiltinTools = map[string]string{
-	"http_request":    "外部网络访问需要域名白名单、超时、审计和敏感信息防泄露策略后才能开放。",
+	"http_request":   "外部网络访问需要域名白名单、超时、审计和敏感信息防泄露策略后才能开放。",
 	"execute_script": "代码执行需要沙箱、资源限制、语言白名单、审计和结果脱敏策略后才能开放。",
 }
 

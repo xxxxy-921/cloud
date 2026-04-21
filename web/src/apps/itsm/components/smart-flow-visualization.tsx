@@ -58,7 +58,7 @@ export function SmartFlowVisualization({ activities, currentActivityId }: SmartF
         <div className="flex items-start gap-1 overflow-x-auto pb-2">
           {sorted.map((activity, idx) => {
             const isCurrent = activity.id === currentActivityId
-            const isAI = activity.aiDecision != null || activity.confidence != null
+            const isAI = activity.aiDecision != null || activity.aiConfidence != null
             const isOverridden = activity.overriddenBy != null
 
             return (
@@ -87,7 +87,7 @@ export function SmartFlowVisualization({ activities, currentActivityId }: SmartF
                       <div className="flex items-center gap-0.5">
                         {isAI && <Bot className="h-3 w-3 text-blue-500" />}
                         {isOverridden && <User className="h-3 w-3 text-orange-500" />}
-                        {isAI && <ConfidenceBadge confidence={activity.confidence} />}
+                        {isAI && <ConfidenceBadge confidence={activity.aiConfidence} />}
                       </div>
                     </button>
                   </PopoverTrigger>
@@ -103,10 +103,10 @@ export function SmartFlowVisualization({ activities, currentActivityId }: SmartF
                           <p className="text-xs whitespace-pre-wrap">{activity.aiReasoning}</p>
                         </div>
                       )}
-                      {activity.confidence != null && (
+                      {activity.aiConfidence != null && (
                         <div className="flex justify-between text-xs">
                           <span className="text-muted-foreground">{t("smart.confidence")}</span>
-                          <span>{Math.round(activity.confidence * 100)}%</span>
+                          <span>{Math.round(activity.aiConfidence * 100)}%</span>
                         </div>
                       )}
                       {activity.overriddenBy != null && (

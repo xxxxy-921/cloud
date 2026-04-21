@@ -46,7 +46,7 @@ type searchKnowledgeArgs struct {
 
 type searchKnowledgeResult struct {
 	Query           string                  `json:"query"`
-	AssetScopeCount int                    `json:"asset_scope_count"`
+	AssetScopeCount int                     `json:"asset_scope_count"`
 	Results         []app.AIKnowledgeResult `json:"results"`
 	Message         string                  `json:"message,omitempty"`
 }

@@ -742,6 +742,11 @@ func (h *TicketHandler) RetryAI(c *gin.Context) {
 		return
 	}
 
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
 	userID, _ := c.Get("userId")
 	operatorID := userID.(uint)
 
@@ -749,7 +754,7 @@ func (h *TicketHandler) RetryAI(c *gin.Context) {
 	c.Set("audit_resource", "ticket")
 	c.Set("audit_resource_id", c.Param("id"))
 
-	ticket, err := h.svc.RetryAI(id, operatorID)
+	ticket, err := h.svc.RetryAI(id, req.Reason, operatorID)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrTicketNotFound):

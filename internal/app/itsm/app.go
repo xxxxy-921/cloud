@@ -223,6 +223,7 @@ func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 		// Service Definitions
 		g.POST("/services", serviceH.Create)
 		g.GET("/services", serviceH.List)
+		g.GET("/services/:id/health", serviceH.HealthCheck)
 		g.GET("/services/:id", serviceH.Get)
 		g.PUT("/services/:id", serviceH.Update)
 		g.DELETE("/services/:id", serviceH.Delete)

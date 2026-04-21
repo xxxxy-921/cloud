@@ -362,7 +362,7 @@ export function Component() {
 
       {/* Smart Engine: Current Activity Card */}
       {ticket.engineType === "smart" && (
-        <SmartCurrentActivityCard ticket={ticket} activities={activities} currentUserId={currentUserId} />
+        <SmartCurrentActivityCard ticket={ticket} activities={activities} currentUserId={currentUserId} canOverride={canOverride} />
       )}
 
       {/* Smart Engine: Flow Visualization */}

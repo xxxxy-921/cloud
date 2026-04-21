@@ -465,6 +465,7 @@ func (s *TicketService) BuildResponses(items []Ticket, operatorID uint) ([]Ticke
 			resp.AssigneeName = userNames[*resp.AssigneeID]
 		}
 		if resp.EngineType == "smart" {
+			resp.CanOverride = operatorID > 0 && resp.Status != TicketStatusCompleted && resp.Status != TicketStatusCancelled && resp.Status != TicketStatusFailed
 			s.populateSmartSummary(resp, activities, assignments)
 		}
 	}
@@ -1059,7 +1060,7 @@ func (s *TicketService) OverrideReassign(ticketID uint, activityID uint, newAssi
 }
 
 // RetryAI resets ai_failure_count and triggers a new decision cycle.
-func (s *TicketService) RetryAI(ticketID uint, operatorID uint) (*Ticket, error) {
+func (s *TicketService) RetryAI(ticketID uint, reason string, operatorID uint) (*Ticket, error) {
 	t, err := s.ticketRepo.FindByID(ticketID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1086,6 +1087,10 @@ func (s *TicketService) RetryAI(ticketID uint, operatorID uint) (*Ticket, error)
 			OperatorID: operatorID,
 			EventType:  "ai_retry",
 			Message:    "重新启用 AI 决策",
+			Details:    JSONField(mustJSON(map[string]string{"reason": reason})),
+		}
+		if reason != "" {
+			tl.Message = "重新启用 AI 决策：" + reason
 		}
 		if err := tx.Create(tl).Error; err != nil {
 			return err

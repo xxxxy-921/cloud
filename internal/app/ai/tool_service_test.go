@@ -55,7 +55,7 @@ func TestToolService_ListMarksUnavailableTools(t *testing.T) {
 	svc := newToolServiceForTest(t, db)
 	svc.registries = []ToolHandlerRegistry{testToolRegistry{
 		"general.current_time": []byte(`{"ok":true}`),
-		"search_knowledge":    []byte(`{"ok":true}`),
+		"search_knowledge":     []byte(`{"ok":true}`),
 	}}
 	repo := svc.repo
 

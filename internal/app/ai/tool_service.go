@@ -7,8 +7,8 @@ import (
 )
 
 var (
-	ErrToolNotFound           = errors.New("tool not found")
-	ErrToolNotExecutable      = errors.New("tool is not executable")
+	ErrToolNotFound            = errors.New("tool not found")
+	ErrToolNotExecutable       = errors.New("tool is not executable")
 	ErrToolDisableNeedsConfirm = errors.New("tool disable needs confirmation")
 )
 
