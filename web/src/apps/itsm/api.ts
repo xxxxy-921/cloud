@@ -373,6 +373,10 @@ export function cancelTicket(id: number, reason: string) {
   return api.put<TicketItem>(`/api/v1/itsm/tickets/${id}/cancel`, { reason })
 }
 
+export function withdrawTicket(id: number, reason: string) {
+  return api.put<TicketItem>(`/api/v1/itsm/tickets/${id}/withdraw`, { reason })
+}
+
 export function fetchMyTickets(params: {
   keyword?: string
   status?: string

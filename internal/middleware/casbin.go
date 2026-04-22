@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin/v2/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,6 +30,13 @@ var casbinWhitelistPrefixes = []string{
 	"/api/v1/auth/2fa",
 }
 
+var casbinWhitelistKeyMatches = []struct {
+	method  string
+	pattern string
+}{
+	{method: http.MethodPut, pattern: "/api/v1/itsm/tickets/:id/withdraw"},
+}
+
 // CasbinAuth returns a Gin middleware that checks permissions via Casbin enforcer.
 func CasbinAuth(enforcer *casbin.Enforcer) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -42,6 +50,12 @@ func CasbinAuth(enforcer *casbin.Enforcer) gin.HandlerFunc {
 		}
 		for _, prefix := range casbinWhitelistPrefixes {
 			if strings.HasPrefix(path, prefix) {
+				c.Next()
+				return
+			}
+		}
+		for _, route := range casbinWhitelistKeyMatches {
+			if method == route.method && util.KeyMatch2(path, route.pattern) {
 				c.Next()
 				return
 			}

@@ -153,7 +153,7 @@ export function Component() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{item.serviceName}</TableCell>
                   <TableCell className="text-sm">{item.currentOwnerName || item.assigneeName || "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{item.nextStepSummary || "等待处理"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{item.nextStepSummary || "等待受理"}</TableCell>
                   <TableCell>
                     <SLABadge slaStatus={item.slaStatus} slaResolutionDeadline={item.slaResolutionDeadline} />
                   </TableCell>

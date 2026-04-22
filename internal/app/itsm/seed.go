@@ -211,8 +211,8 @@ func seedMenus(db *gorm.DB) error {
 
 	// 我的工单
 	seedMenu(db, &itsmDir.ID, "我的工单", model.MenuTypeMenu, "/itsm/tickets/mine", "User", "itsm:ticket:mine", 1)
-	seedMenu(db, &itsmDir.ID, "待审批工单", model.MenuTypeMenu, "/itsm/tickets/approvals/pending", "ClipboardCheck", "itsm:ticket:approval:pending", 2)
-	seedMenu(db, &itsmDir.ID, "审批历史", model.MenuTypeMenu, "/itsm/tickets/approvals/history", "History", "itsm:ticket:approval:history", 3)
+	seedMenu(db, &itsmDir.ID, "我的待办", model.MenuTypeMenu, "/itsm/tickets/approvals/pending", "ClipboardCheck", "itsm:ticket:approval:pending", 2)
+	seedMenu(db, &itsmDir.ID, "历史工单", model.MenuTypeMenu, "/itsm/tickets/approvals/history", "History", "itsm:ticket:approval:history", 3)
 
 	// 工单管理
 	allTicketMenu := seedMenu(db, &itsmDir.ID, "工单管理", model.MenuTypeMenu, "/itsm/tickets", "List", "itsm:ticket:list", 4)

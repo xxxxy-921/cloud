@@ -15,6 +15,11 @@ registerApp({
         "itsm:ticket:mine",
         "itsm:ticket:approval:pending",
         "itsm:ticket:approval:history",
+      ],
+    },
+    {
+      label: "serviceManagement",
+      items: [
         "itsm:ticket:list",
         "itsm:service:list",
       ],

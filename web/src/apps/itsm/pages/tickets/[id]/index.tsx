@@ -72,6 +72,7 @@ import {
   fetchTicketTokens,
   fetchUsers,
   progressTicket,
+  withdrawTicket,
   type ActivityItem,
   type TicketItem,
   type TimelineItem,
@@ -95,6 +96,7 @@ const TIMELINE_EVENT_STYLE: Record<string, { icon: LucideIcon; bg: string; fg: s
   ticket_assigned:       { icon: UserPlus, bg: "bg-blue-100", fg: "text-blue-600" },
   ticket_completed:      { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
   ticket_cancelled:      { icon: XCircle, bg: "bg-gray-200", fg: "text-gray-500" },
+  withdrawn:             { icon: RotateCcw, bg: "bg-gray-200", fg: "text-gray-500" },
   workflow_started:      { icon: Play, bg: "bg-blue-100", fg: "text-blue-600" },
   workflow_completed:    { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
   activity_completed:    { icon: CheckCircle, bg: "bg-green-100", fg: "text-green-600" },
@@ -421,6 +423,7 @@ export function Component() {
   const ticketId = Number(id)
   const [assignOpen, setAssignOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [approvalOpen, setApprovalOpen] = useState(false)
   const [approvalOutcome, setApprovalOutcome] = useState<ApprovalOutcome>("approved")
   const [approvalActivityId, setApprovalActivityId] = useState<number | null>(null)
@@ -478,6 +481,12 @@ export function Component() {
     defaultValues: { reason: "" },
   })
 
+  const withdrawForm = useForm<{ reason: string }>({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    resolver: zodResolver(cancelSchema as any),
+    defaultValues: { reason: "" },
+  })
+
   const approvalForm = useForm<{ opinion: string }>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     resolver: zodResolver(approvalSchema as any),
@@ -528,6 +537,16 @@ export function Component() {
     onError: (err) => toast.error(err.message),
   })
 
+  const withdrawMut = useMutation({
+    mutationFn: (v: { reason: string }) => withdrawTicket(ticketId, v.reason),
+    onSuccess: () => {
+      invalidateTicket()
+      setWithdrawOpen(false)
+      toast.success(t("itsm:tickets.withdrawSuccess"))
+    },
+    onError: (err) => toast.error(err.message),
+  })
+
   const progressMut = useMutation({
     mutationFn: (data: { activityId: number; outcome: ApprovalOutcome; opinion: string }) => progressTicket(ticketId, data),
     onMutate: (data) => markSmartDecisioning(decisioningMessageForOutcome(data.outcome)),
@@ -573,6 +592,7 @@ export function Component() {
   const isActive = ticket ? ACTIVE_STATUSES.has(ticket.status) : false
   const isTerminal = ticket ? TERMINAL_STATUSES.has(ticket.status) : false
   const isDecisioning = ticket?.engineType === "smart" && ticket.smartState === "ai_reasoning"
+  const canWithdraw = Boolean(ticket && isActive && !isDecisioning && ticket.status === "pending" && ticket.requesterId === currentUserId)
   const actionableActivity = activeHumanActivity
   const isCurrentUserResponsible = Boolean(
     ticket?.canAct || actionableActivity?.canAct || (ticket?.assigneeId && ticket.assigneeId === currentUserId),
@@ -799,6 +819,12 @@ export function Component() {
                   </Button>
                 )}
 
+                {canWithdraw && (
+                  <Button size="sm" variant="outline" className="w-full" onClick={() => { withdrawForm.reset({ reason: "" }); setWithdrawOpen(true) }}>
+                    <DecisionButtonContent icon={RotateCcw}>{t("itsm:tickets.withdraw")}</DecisionButtonContent>
+                  </Button>
+                )}
+
                 {(!isActive || isTerminal) && (
                   <p className="col-span-2 rounded-lg border border-border/50 bg-background/35 p-3 text-sm text-muted-foreground">
                     当前工单已结束，证据区保留完整流程与审计记录。
@@ -908,6 +934,31 @@ export function Component() {
               <SheetFooter>
                 <Button type="submit" size="sm" variant="destructive" disabled={cancelMut.isPending}>
                   {cancelMut.isPending ? t("common:saving") : t("itsm:tickets.confirmCancel")}
+                </Button>
+              </SheetFooter>
+            </form>
+          </Form>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={withdrawOpen} onOpenChange={setWithdrawOpen}>
+        <SheetContent className="sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>{t("itsm:tickets.withdrawTitle")}</SheetTitle>
+            <SheetDescription className="sr-only">{t("itsm:tickets.withdrawTitle")}</SheetDescription>
+          </SheetHeader>
+          <Form {...withdrawForm}>
+            <form onSubmit={withdrawForm.handleSubmit((v) => withdrawMut.mutate(v))} className="flex flex-1 flex-col gap-5 px-4">
+              <FormField control={withdrawForm.control} name="reason" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("itsm:tickets.withdrawReason")}</FormLabel>
+                  <FormControl><Textarea rows={3} placeholder={t("itsm:tickets.withdrawReasonPlaceholder")} {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <SheetFooter>
+                <Button type="submit" size="sm" variant="destructive" disabled={withdrawMut.isPending}>
+                  {withdrawMut.isPending ? t("common:saving") : t("itsm:tickets.confirmWithdraw")}
                 </Button>
               </SheetFooter>
             </form>
