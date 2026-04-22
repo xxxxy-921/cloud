@@ -13,7 +13,17 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-function ConfigSearchField({
+type WorkspaceStatusTone = "success" | "neutral" | "warning" | "danger" | "info"
+
+const statusToneClass: Record<WorkspaceStatusTone, string> = {
+  success: "bg-emerald-500/78",
+  neutral: "bg-muted-foreground/45",
+  warning: "bg-amber-500/78",
+  danger: "bg-red-500/78",
+  info: "bg-sky-500/78",
+}
+
+function WorkspaceSearchField({
   value,
   onChange,
   placeholder,
@@ -49,7 +59,24 @@ function ConfigSearchField({
   )
 }
 
-function QuietStatus({
+function WorkspaceStatus({
+  label,
+  tone = "neutral",
+  className,
+}: {
+  label: ReactNode
+  tone?: WorkspaceStatusTone
+  className?: string
+}) {
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full border border-border/65 bg-background/35 px-2.5 py-1 text-xs font-medium text-foreground/72", className)}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", statusToneClass[tone])} />
+      {label}
+    </span>
+  )
+}
+
+function WorkspaceBooleanStatus({
   active,
   activeLabel,
   inactiveLabel,
@@ -59,19 +86,14 @@ function QuietStatus({
   inactiveLabel: string
 }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/65 bg-background/35 px-2.5 py-1 text-xs font-medium text-foreground/72">
-      <span
-        className={cn(
-          "h-1.5 w-1.5 rounded-full",
-          active ? "bg-emerald-500/78" : "bg-muted-foreground/45",
-        )}
-      />
-      {active ? activeLabel : inactiveLabel}
-    </span>
+    <WorkspaceStatus
+      tone={active ? "success" : "neutral"}
+      label={active ? activeLabel : inactiveLabel}
+    />
   )
 }
 
-function IconTooltipButton({
+function WorkspaceIconAction({
   label,
   icon: Icon,
   className,
@@ -106,7 +128,7 @@ function IconTooltipButton({
   )
 }
 
-function FormSection({
+function WorkspaceFormSection({
   title,
   children,
   className,
@@ -125,9 +147,26 @@ function FormSection({
   )
 }
 
-export {
-  ConfigSearchField,
-  FormSection,
-  IconTooltipButton,
-  QuietStatus,
+function WorkspaceColorSwatch({
+  color,
+  className,
+}: {
+  color: string
+  className?: string
+}) {
+  return (
+    <span className={cn("inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background/40", className)}>
+      <span className="h-4 w-4 rounded-[0.35rem] border border-black/5" style={{ backgroundColor: color }} />
+    </span>
+  )
 }
+
+export {
+  WorkspaceBooleanStatus,
+  WorkspaceColorSwatch,
+  WorkspaceFormSection,
+  WorkspaceIconAction,
+  WorkspaceSearchField,
+  WorkspaceStatus,
+}
+export type { WorkspaceStatusTone }

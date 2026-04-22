@@ -41,11 +41,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  ConfigSearchField,
-  FormSection,
-  IconTooltipButton,
-  QuietStatus,
-} from "../../components/config-management-ui"
+  WorkspaceSearchField,
+  WorkspaceFormSection,
+  WorkspaceIconAction,
+  WorkspaceBooleanStatus,
+} from "@/components/workspace/primitives"
 import {
   type PriorityItem, fetchPriorities, createPriority, updatePriority, deletePriority,
 } from "../../api"
@@ -184,7 +184,7 @@ export function Component() {
 
       <DataTableCard>
         <DataTableToolbar>
-          <ConfigSearchField
+          <WorkspaceSearchField
             value={search}
             onChange={setSearch}
             placeholder={t("itsm:priorities.searchPlaceholder")}
@@ -234,12 +234,12 @@ export function Component() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <QuietStatus active={item.isActive} activeLabel={t("itsm:priorities.active")} inactiveLabel={t("itsm:priorities.inactive")} />
+                    <WorkspaceBooleanStatus active={item.isActive} activeLabel={t("itsm:priorities.active")} inactiveLabel={t("itsm:priorities.inactive")} />
                   </TableCell>
                   <DataTableActionsCell>
                     <DataTableActions>
                       {canUpdate && (
-                        <IconTooltipButton
+                        <WorkspaceIconAction
                           label={t("common:edit")}
                           icon={Pencil}
                           onClick={() => handleEdit(item)}
@@ -287,7 +287,7 @@ export function Component() {
           </SheetHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-5 px-4">
-              <FormSection title={t("itsm:priorities.formIdentity")}>
+              <WorkspaceFormSection title={t("itsm:priorities.formIdentity")}>
                 <FormField control={form.control} name="name" render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("itsm:priorities.name")}</FormLabel>
@@ -311,8 +311,8 @@ export function Component() {
                     </FormItem>
                   )} />
                 </div>
-              </FormSection>
-              <FormSection title={t("itsm:priorities.formVisual")}>
+              </WorkspaceFormSection>
+              <WorkspaceFormSection title={t("itsm:priorities.formVisual")}>
                 <FormField control={form.control} name="color" render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("itsm:priorities.color")}</FormLabel>
@@ -325,8 +325,8 @@ export function Component() {
                     <FormMessage />
                   </FormItem>
                 )} />
-              </FormSection>
-              <FormSection title={t("itsm:priorities.formCommitment")}>
+              </WorkspaceFormSection>
+              <WorkspaceFormSection title={t("itsm:priorities.formCommitment")}>
                 <div className="grid grid-cols-2 gap-4">
                   <FormField control={form.control} name="defaultResponseMinutes" render={({ field }) => (
                     <FormItem>
@@ -343,8 +343,8 @@ export function Component() {
                     </FormItem>
                   )} />
                 </div>
-              </FormSection>
-              <FormSection title={t("itsm:priorities.formDescription")}>
+              </WorkspaceFormSection>
+              <WorkspaceFormSection title={t("itsm:priorities.formDescription")}>
                 <FormField control={form.control} name="description" render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("itsm:priorities.description")}</FormLabel>
@@ -352,7 +352,7 @@ export function Component() {
                     <FormMessage />
                   </FormItem>
                 )} />
-              </FormSection>
+              </WorkspaceFormSection>
               <SheetFooter>
                 <Button type="submit" size="sm" disabled={isPending}>
                   {isPending ? t("common:saving") : editing ? t("common:save") : t("common:create")}

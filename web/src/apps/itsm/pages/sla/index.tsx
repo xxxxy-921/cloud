@@ -41,11 +41,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  ConfigSearchField,
-  FormSection,
-  IconTooltipButton,
-  QuietStatus,
-} from "../../components/config-management-ui"
+  WorkspaceSearchField,
+  WorkspaceFormSection,
+  WorkspaceIconAction,
+  WorkspaceBooleanStatus,
+} from "@/components/workspace/primitives"
 import {
   type SLATemplateItem, type EscalationRuleItem,
   fetchSLATemplates, createSLATemplate, updateSLATemplate, deleteSLATemplate,
@@ -206,7 +206,7 @@ function EscalationRules({ slaId }: { slaId: number }) {
                       <DataTableActionsCell>
                         <DataTableActions>
                           {canUpdate && (
-                            <IconTooltipButton
+                            <WorkspaceIconAction
                               label={t("common:edit")}
                               icon={Pencil}
                               onClick={() => { setEditing(rule); setFormOpen(true) }}
@@ -254,7 +254,7 @@ function EscalationRules({ slaId }: { slaId: number }) {
               </SheetHeader>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-5 px-4">
-                  <FormSection title={t("itsm:sla.formPolicy")}>
+                  <WorkspaceFormSection title={t("itsm:sla.formPolicy")}>
                     <FormField control={form.control} name="triggerType" render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("itsm:sla.escalation.triggerType")}</FormLabel>
@@ -298,7 +298,7 @@ function EscalationRules({ slaId }: { slaId: number }) {
                         <FormMessage />
                       </FormItem>
                     )} />
-                  </FormSection>
+                  </WorkspaceFormSection>
                   <SheetFooter>
                     <Button type="submit" size="sm" disabled={isPending}>
                       {isPending ? t("common:saving") : editing ? t("common:save") : t("common:create")}
@@ -398,7 +398,7 @@ export function Component() {
 
       <DataTableCard>
         <DataTableToolbar>
-          <ConfigSearchField
+          <WorkspaceSearchField
             value={search}
             onChange={setSearch}
             placeholder={t("itsm:sla.searchPlaceholder")}
@@ -457,12 +457,12 @@ export function Component() {
                     <TableCell className="text-sm tabular-nums">{formatMinutes(item.responseMinutes, minuteUnit)}</TableCell>
                     <TableCell className="text-sm tabular-nums">{formatMinutes(item.resolutionMinutes, minuteUnit)}</TableCell>
                     <TableCell>
-                      <QuietStatus active={item.isActive} activeLabel={t("itsm:sla.active")} inactiveLabel={t("itsm:sla.inactive")} />
+                      <WorkspaceBooleanStatus active={item.isActive} activeLabel={t("itsm:sla.active")} inactiveLabel={t("itsm:sla.inactive")} />
                     </TableCell>
                     <DataTableActionsCell>
                       <DataTableActions>
                         {canUpdate && (
-                          <IconTooltipButton
+                          <WorkspaceIconAction
                             label={t("common:edit")}
                             icon={Pencil}
                             onClick={(event) => { event.stopPropagation(); setEditing(item); setFormOpen(true) }}
@@ -521,7 +521,7 @@ export function Component() {
           </SheetHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-5 px-4">
-              <FormSection title={t("itsm:sla.formIdentity")}>
+              <WorkspaceFormSection title={t("itsm:sla.formIdentity")}>
                 <FormField control={form.control} name="name" render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("itsm:sla.name")}</FormLabel>
@@ -536,8 +536,8 @@ export function Component() {
                     <FormMessage />
                   </FormItem>
                 )} />
-              </FormSection>
-              <FormSection title={t("itsm:sla.formCommitment")}>
+              </WorkspaceFormSection>
+              <WorkspaceFormSection title={t("itsm:sla.formCommitment")}>
                 <div className="grid grid-cols-2 gap-4">
                   <FormField control={form.control} name="responseMinutes" render={({ field }) => (
                     <FormItem>
@@ -554,8 +554,8 @@ export function Component() {
                     </FormItem>
                   )} />
                 </div>
-              </FormSection>
-              <FormSection title={t("itsm:sla.formDescription")}>
+              </WorkspaceFormSection>
+              <WorkspaceFormSection title={t("itsm:sla.formDescription")}>
                 <FormField control={form.control} name="description" render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("itsm:sla.description")}</FormLabel>
@@ -563,7 +563,7 @@ export function Component() {
                     <FormMessage />
                   </FormItem>
                 )} />
-              </FormSection>
+              </WorkspaceFormSection>
               <SheetFooter>
                 <Button type="submit" size="sm" disabled={isPending}>
                   {isPending ? t("common:saving") : editing ? t("common:save") : t("common:create")}
