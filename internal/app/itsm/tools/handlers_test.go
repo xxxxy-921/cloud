@@ -43,6 +43,7 @@ type stubOperator struct {
 	createdFormData    map[string]any
 	validatedServiceID uint
 	validatedFormData  map[string]any
+	participantResult  *ParticipantValidation
 }
 
 func (s *stubOperator) MatchServices(ctx context.Context, query string) ([]ServiceMatch, MatchDecision, error) {
@@ -72,6 +73,9 @@ func (s *stubOperator) WithdrawTicket(userID uint, ticketCode string, reason str
 func (s *stubOperator) ValidateParticipants(serviceID uint, formData map[string]any) (*ParticipantValidation, error) {
 	s.validatedServiceID = serviceID
 	s.validatedFormData = formData
+	if s.participantResult != nil {
+		return s.participantResult, nil
+	}
 	return &ParticipantValidation{OK: true}, nil
 }
 
@@ -86,6 +90,20 @@ func vpnServiceDetail(serviceID uint) *ServiceDetail {
 		},
 		FieldsHash: "vpn123",
 	}
+}
+
+func smartVPNServiceDetail(serviceID uint) *ServiceDetail {
+	detail := vpnServiceDetail(serviceID)
+	detail.EngineType = "smart"
+	detail.FormSchema = map[string]any{
+		"version": 1,
+		"fields": []map[string]any{
+			{"key": "vpn_account", "type": "text", "label": "VPN账号", "required": true},
+			{"key": "device_usage", "type": "textarea", "label": "设备与用途说明", "required": true},
+			{"key": "request_kind", "type": "textarea", "label": "访问原因", "required": true},
+		},
+	}
+	return detail
 }
 
 func TestServiceLoad_ReturnsPrefillSuggestionsFromRequestText(t *testing.T) {
@@ -391,6 +409,137 @@ func TestDraftPrepare_StillReportsMissingAccountWhenRequestHasNoAccount(t *testi
 	}
 	if len(resp.MissingRequiredFields) != 1 || resp.MissingRequiredFields[0].Key != "vpn_account" {
 		t.Fatalf("expected missing field detail for vpn_account, got %+v", resp.MissingRequiredFields)
+	}
+}
+
+func TestSubmitDraft_UsesSubmittedFormDataForSmartTicket(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: smartVPNServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "awaiting_confirmation",
+		LoadedServiceID: 5,
+		DraftSummary:    "VPN 开通申请",
+		DraftFormData: map[string]any{
+			"vpn_account":  "old@example.com",
+			"device_usage": "线上支持",
+			"request_kind": "线上支持",
+		},
+		DraftVersion: 1,
+		FieldsHash:   "vpn123",
+	}
+
+	result, err := SubmitDraft(op, store, 1, 7, DraftSubmitRequest{
+		DraftVersion: 1,
+		Summary:      "VPN 开通申请 - 修改后",
+		FormData: map[string]any{
+			"vpn_account":  "new@example.com",
+			"device_usage": "生产应急",
+			"request_kind": "生产应急",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit draft: %v", err)
+	}
+	if !result.OK || result.TicketCode != "TICK-000123" {
+		t.Fatalf("expected ticket created, got %+v", result)
+	}
+	if op.createdServiceID != 5 || op.createdSummary != "VPN 开通申请 - 修改后" {
+		t.Fatalf("unexpected created ticket target: service=%d summary=%q", op.createdServiceID, op.createdSummary)
+	}
+	if op.createdFormData["vpn_account"] != "new@example.com" || op.createdFormData["request_kind"] != "生产应急" {
+		t.Fatalf("expected submitted form data to create ticket, got %+v", op.createdFormData)
+	}
+	if state := store.states[1]; state.Stage != "idle" {
+		t.Fatalf("expected state reset after submit, got %+v", state)
+	}
+	if result.Surface == nil || result.Surface["surfaceType"] != "itsm.draft_form" {
+		t.Fatalf("expected submitted surface metadata, got %+v", result.Surface)
+	}
+}
+
+func TestSubmitDraft_RejectsNonSmartService(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: vpnServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "awaiting_confirmation",
+		LoadedServiceID: 5,
+		DraftVersion:    1,
+		FieldsHash:      "vpn123",
+	}
+
+	if _, err := SubmitDraft(op, store, 1, 7, DraftSubmitRequest{DraftVersion: 1}); err == nil {
+		t.Fatal("expected non-smart service submit to be rejected")
+	}
+	if op.createdServiceID != 0 {
+		t.Fatalf("ticket should not be created for non-smart service, got service %d", op.createdServiceID)
+	}
+}
+
+func TestSubmitDraft_RejectsStaleDraftVersion(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: smartVPNServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "awaiting_confirmation",
+		LoadedServiceID: 5,
+		DraftVersion:    3,
+		FieldsHash:      "vpn123",
+	}
+
+	if _, err := SubmitDraft(op, store, 1, 7, DraftSubmitRequest{DraftVersion: 2}); err == nil {
+		t.Fatal("expected stale draft version to be rejected")
+	}
+}
+
+func TestSubmitDraft_RejectsChangedFieldsHash(t *testing.T) {
+	store := newMemStateStore()
+	detail := smartVPNServiceDetail(5)
+	detail.FieldsHash = "changed"
+	op := &stubOperator{detail: detail}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "awaiting_confirmation",
+		LoadedServiceID: 5,
+		DraftVersion:    1,
+		FieldsHash:      "vpn123",
+	}
+
+	if _, err := SubmitDraft(op, store, 1, 7, DraftSubmitRequest{DraftVersion: 1}); err == nil {
+		t.Fatal("expected changed fields hash to be rejected")
+	}
+}
+
+func TestSubmitDraft_ParticipantPrecheckFailureDoesNotCreateTicket(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{
+		detail:            smartVPNServiceDetail(5),
+		participantResult: &ParticipantValidation{OK: false, FailureReason: "no owner", NodeLabel: "审批人", Guidance: "补充负责人"},
+	}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "awaiting_confirmation",
+		LoadedServiceID: 5,
+		DraftVersion:    1,
+		FieldsHash:      "vpn123",
+	}
+
+	result, err := SubmitDraft(op, store, 1, 7, DraftSubmitRequest{
+		DraftVersion: 1,
+		Summary:      "VPN 开通申请",
+		FormData: map[string]any{
+			"vpn_account":  "new@example.com",
+			"device_usage": "生产应急",
+			"request_kind": "生产应急",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit draft: %v", err)
+	}
+	if result.OK || result.FailureReason != "no owner" {
+		t.Fatalf("expected precheck failure result, got %+v", result)
+	}
+	if op.createdServiceID != 0 {
+		t.Fatalf("ticket should not be created when precheck fails, got service %d", op.createdServiceID)
+	}
+	if state := store.states[1]; state.Stage != "awaiting_confirmation" {
+		t.Fatalf("state should stay awaiting confirmation after precheck failure, got %+v", state)
 	}
 }
 

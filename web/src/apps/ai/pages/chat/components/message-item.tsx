@@ -225,6 +225,17 @@ function isDataPart(part: UIMessage["parts"][number]) {
   return part.type.startsWith("data-")
 }
 
+function dataPartIdentity(part: UIMessage["parts"][number], fallback: number) {
+  const data = (part as { data?: unknown }).data
+  if (data && typeof data === "object" && "surfaceId" in data) {
+    const surfaceId = (data as { surfaceId?: unknown }).surfaceId
+    if (typeof surfaceId === "string" && surfaceId) {
+      return `${part.type}:${surfaceId}`
+    }
+  }
+  return `${part.type}:${fallback}`
+}
+
 function getToolName(part: ChatToolPart) {
   return part.type === "dynamic-tool" ? part.toolName : part.type.split("-").slice(1).join("-")
 }
@@ -430,9 +441,12 @@ export function QAPair({
   const mainAiMessage = mainAiMessages[mainAiMessages.length - 1]
   const toolActivities = collectToolActivities(aiMessages, mainAiMessage)
   const dataParts = mainAiMessages.flatMap((message) => message.parts?.filter(isDataPart) ?? [])
+  const latestDataParts = Array.from(
+    dataParts.reduce((acc, part, index) => acc.set(dataPartIdentity(part, index), part), new Map<string, UIMessage["parts"][number]>()),
+  )
   const renderedDataParts = renderDataPart
-    ? dataParts
-        .map((part, index) => ({ key: `${part.type}-${index}`, node: renderDataPart(part) }))
+    ? latestDataParts
+        .map(([key, part]) => ({ key, node: renderDataPart(part) }))
         .filter((item) => item.node != null)
     : []
 

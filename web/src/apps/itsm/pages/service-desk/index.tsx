@@ -7,6 +7,7 @@ import type { UIMessage } from "ai"
 import {
   AlertTriangle,
   Bot,
+  CheckCircle2,
   History,
   Loader2,
   Plus,
@@ -21,7 +22,14 @@ import { useAiChat } from "@/apps/ai/pages/chat/hooks/use-ai-chat"
 import { sessionApi, type AgentSession } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { fetchEngineConfig } from "../../api"
+import { FormRenderer, type FormSchema } from "../../components/form-engine"
+import {
+  fetchEngineConfig,
+  submitServiceDeskDraft,
+  type AgenticUISurface,
+  type ITSMDraftFormSurface,
+  type ITSMDraftFormSurfacePayload,
+} from "../../api"
 
 const SUGGESTED_PROMPTS = [
   "我想申请 VPN，线上支持用",
@@ -266,6 +274,174 @@ function NotOnDutyState({ loading }: { loading: boolean }) {
   )
 }
 
+function readDraftSurface(part: UIMessage["parts"][number]): ITSMDraftFormSurface | null {
+  if (part.type !== "data-ui-surface") return null
+  const data = (part as { data?: unknown }).data
+  if (!data || typeof data !== "object") return null
+  const surface = data as AgenticUISurface<ITSMDraftFormSurfacePayload>
+  if (surface.surfaceType !== "itsm.draft_form") return null
+  if (!surface.payload || typeof surface.payload !== "object") return null
+  return surface
+}
+
+function isFormSchema(schema: unknown): schema is FormSchema {
+  return Boolean(schema && typeof schema === "object" && Array.isArray((schema as FormSchema).fields))
+}
+
+function ServiceDeskDataPart({
+  part,
+  sessionId,
+  onSubmitted,
+}: {
+  part: UIMessage["parts"][number]
+  sessionId: number
+  onSubmitted: () => void
+}) {
+  const surface = readDraftSurface(part)
+  if (!surface) return null
+  return (
+    <ITSMDraftFormSurfaceCard
+      key={`${surface.surfaceId}:${surface.payload.status}:${surface.payload.draftVersion ?? ""}`}
+      surface={surface}
+      sessionId={sessionId}
+      onSubmitted={onSubmitted}
+    />
+  )
+}
+
+function ITSMDraftFormSurfaceCard({
+  surface,
+  sessionId,
+  onSubmitted,
+}: {
+  surface: ITSMDraftFormSurface
+  sessionId: number
+  onSubmitted: () => void
+}) {
+  const payload = surface.payload
+  const initialFormData = useMemo(() => payload.values ?? {}, [payload.values])
+  const [formData, setFormData] = useState<Record<string, unknown>>(payload.values ?? {})
+  const [submittedSurface, setSubmittedSurface] = useState<ITSMDraftFormSurface | null>(null)
+  const [inlineError, setInlineError] = useState<string | null>(null)
+
+  const submitMutation = useMutation({
+    mutationFn: () => {
+      if (!payload.draftVersion) {
+        throw new Error("草稿版本缺失，请重新整理草稿")
+      }
+      return submitServiceDeskDraft(sessionId, {
+        draftVersion: payload.draftVersion,
+        summary: payload.summary ?? payload.title ?? "",
+        formData,
+      })
+    },
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setInlineError(result.guidance || result.failureReason || result.message || "提交未通过")
+        return
+      }
+      if (result.surface?.surfaceType === "itsm.draft_form") {
+        setSubmittedSurface(result.surface as ITSMDraftFormSurface)
+      } else {
+        setSubmittedSurface({
+          surfaceId: `${surface.surfaceId}:submitted`,
+          surfaceType: "itsm.draft_form",
+          payload: {
+            status: "submitted",
+            title: payload.title,
+            summary: payload.summary,
+            values: formData,
+            ticketId: result.ticketId,
+            ticketCode: result.ticketCode,
+            message: result.message,
+          },
+        })
+      }
+      onSubmitted()
+    },
+    onError: (err) => setInlineError(err.message),
+  })
+
+  const currentSurface = submittedSurface ?? surface
+  const currentPayload = currentSurface.payload
+
+  if (currentPayload.status === "loading") {
+    return (
+      <div className="mb-6 max-w-[720px] rounded-md border border-border/60 bg-muted/18 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <Loader2 className="size-4 animate-spin text-primary" />
+          {currentPayload.title || "正在整理草稿"}
+        </div>
+        <div className="mt-3 space-y-2">
+          <div className="h-2.5 w-2/3 animate-pulse rounded bg-muted" />
+          <div className="h-2.5 w-5/6 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+    )
+  }
+
+  if (currentPayload.status === "submitted") {
+    return (
+      <div className="mb-6 max-w-[720px] rounded-md border border-emerald-500/25 bg-emerald-500/6 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+          <CheckCircle2 className="size-4" />
+          {currentPayload.message || "工单已提交"}
+        </div>
+        {currentPayload.ticketCode && (
+          <div className="mt-2 text-sm text-foreground">
+            工单编号：<span className="font-medium">{currentPayload.ticketCode}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (!isFormSchema(currentPayload.schema)) {
+    return (
+      <div className="mb-6 max-w-[720px] rounded-md border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+        表单定义不可用，请重新整理草稿。
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-6 max-w-[720px] rounded-md border border-border/65 bg-background px-4 py-4 shadow-sm">
+      <div className="mb-4">
+        <div className="text-xs font-medium text-muted-foreground">草稿确认</div>
+        <div className="mt-1 text-base font-semibold text-foreground">{currentPayload.title || "服务申请草稿"}</div>
+        {currentPayload.summary && (
+          <div className="mt-1 text-sm leading-6 text-muted-foreground">{currentPayload.summary}</div>
+        )}
+      </div>
+
+      <FormRenderer
+        schema={currentPayload.schema}
+        data={initialFormData}
+        mode="edit"
+        onChange={setFormData}
+        disabled={submitMutation.isPending}
+      />
+
+      {inlineError && (
+        <div className="mt-4 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {inlineError}
+        </div>
+      )}
+
+      <div className="mt-4 flex justify-end">
+        <Button
+          type="button"
+          onClick={() => submitMutation.mutate()}
+          disabled={submitMutation.isPending}
+        >
+          {submitMutation.isPending ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 size-4" />}
+          提交工单
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function ServiceDeskConversation({
   session,
   agentName,
@@ -393,6 +569,14 @@ function ServiceDeskConversation({
                     agentName={agentName}
                     isStreaming={isLastPair && isBusy}
                     onRegenerate={isLastPair ? () => chat.regenerate() : undefined}
+                    renderDataPart={(part) => (
+                      <ServiceDeskDataPart
+                        part={part}
+                        sessionId={session.id}
+                        onSubmitted={invalidateWorkspace}
+                      />
+                    )}
+                    suppressTextWhenDataPart
                     doneMetrics={
                       isLastPair && chat.status === "ready"
                         ? {
