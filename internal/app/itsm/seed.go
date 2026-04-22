@@ -203,6 +203,10 @@ func seedMenus(db *gorm.DB) error {
 		}
 	}
 
+	if err := db.Where("permission = ?", "itsm:ticket:history").Delete(&model.Menu{}).Error; err != nil {
+		slog.Warn("seed: failed to remove history ticket menu", "error", err)
+	}
+
 	// 服务台
 	seedMenu(db, &itsmDir.ID, "服务台", model.MenuTypeMenu, "/itsm/service-desk", "MessageSquare", "itsm:service-desk:use", 0)
 
@@ -213,8 +217,8 @@ func seedMenus(db *gorm.DB) error {
 	// 我的工单
 	seedMenu(db, &itsmDir.ID, "我的工单", model.MenuTypeMenu, "/itsm/tickets/mine", "User", "itsm:ticket:mine", 3)
 
-	// 全部工单
-	allTicketMenu := seedMenu(db, &itsmDir.ID, "全部工单", model.MenuTypeMenu, "/itsm/tickets", "List", "itsm:ticket:list", 4)
+	// 工单管理
+	allTicketMenu := seedMenu(db, &itsmDir.ID, "工单管理", model.MenuTypeMenu, "/itsm/tickets", "List", "itsm:ticket:list", 4)
 	seedButtons(db, allTicketMenu, []model.Menu{
 		{Name: "创建工单", Type: model.MenuTypeButton, Permission: "itsm:ticket:create", Sort: 0},
 		{Name: "指派工单", Type: model.MenuTypeButton, Permission: "itsm:ticket:assign", Sort: 1},
@@ -223,11 +227,8 @@ func seedMenus(db *gorm.DB) error {
 		{Name: "工单覆写", Type: model.MenuTypeButton, Permission: "itsm:ticket:override", Sort: 4},
 	})
 
-	// 历史工单
-	seedMenu(db, &itsmDir.ID, "历史工单", model.MenuTypeMenu, "/itsm/tickets/history", "Archive", "itsm:ticket:history", 5)
-
 	// 服务目录 (unified workspace: catalogs + services)
-	serviceMenu := seedMenu(db, &itsmDir.ID, "服务目录", model.MenuTypeMenu, "/itsm/services", "Cog", "itsm:service:list", 6)
+	serviceMenu := seedMenu(db, &itsmDir.ID, "服务目录", model.MenuTypeMenu, "/itsm/services", "Cog", "itsm:service:list", 5)
 	seedButtons(db, serviceMenu, []model.Menu{
 		{Name: "新增服务", Type: model.MenuTypeButton, Permission: "itsm:service:create", Sort: 0},
 		{Name: "编辑服务", Type: model.MenuTypeButton, Permission: "itsm:service:update", Sort: 1},
@@ -370,7 +371,6 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/itsm/tickets", "GET"},
 		{"admin", "/api/v1/itsm/tickets/mine", "GET"},
 		{"admin", "/api/v1/itsm/tickets/todo", "GET"},
-		{"admin", "/api/v1/itsm/tickets/history", "GET"},
 		{"admin", "/api/v1/itsm/tickets/:id", "GET"},
 		{"admin", "/api/v1/itsm/tickets/:id/assign", "PUT"},
 		{"admin", "/api/v1/itsm/tickets/:id/complete", "PUT"},
@@ -414,7 +414,6 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		{"admin", "itsm:ticket:override", "read"},
 		{"admin", "itsm:ticket:mine", "read"},
 		{"admin", "itsm:ticket:todo", "read"},
-		{"admin", "itsm:ticket:history", "read"},
 		{"admin", "itsm:ticket:approvals", "read"},
 		{"admin", "itsm:priority:list", "read"},
 		{"admin", "itsm:priority:create", "read"},
@@ -432,6 +431,19 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 		if has, _ := enforcer.HasPolicy(p); !has {
 			if _, err := enforcer.AddPolicy(p); err != nil {
 				slog.Error("seed: failed to add policy", "policy", p, "error", err)
+			}
+		}
+	}
+
+	deprecatedPolicies := [][]string{
+		{"/api/v1/itsm/tickets/history", "GET"},
+		{"itsm:ticket:history", "read"},
+	}
+	for _, p := range deprecatedPolicies {
+		existingPolicies, _ := enforcer.GetFilteredPolicy(1, p[0], p[1])
+		for _, ep := range existingPolicies {
+			if _, err := enforcer.RemovePolicy(ep); err != nil {
+				slog.Warn("seed: failed to remove deprecated policy", "policy", ep, "error", err)
 			}
 		}
 	}

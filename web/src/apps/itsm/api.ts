@@ -390,12 +390,16 @@ export function cancelTicket(id: number, reason: string) {
 export function fetchMyTickets(params: {
   keyword?: string
   status?: string
+  startDate?: string
+  endDate?: string
   page?: number
   pageSize?: number
 }) {
   const p = new URLSearchParams()
   if (params.keyword) p.set("keyword", params.keyword)
   if (params.status) p.set("status", params.status)
+  if (params.startDate) p.set("startDate", params.startDate)
+  if (params.endDate) p.set("endDate", params.endDate)
   p.set("page", String(params.page ?? 1))
   p.set("pageSize", String(params.pageSize ?? 20))
   return api.get<{ items: TicketItem[]; total: number }>(
@@ -498,24 +502,6 @@ export function fetchTodoTickets(params: {
   p.set("pageSize", String(params.pageSize ?? 20))
   return api.get<{ items: TicketItem[]; total: number }>(
     `/api/v1/itsm/tickets/todo?${p}`,
-  )
-}
-
-export function fetchHistoryTickets(params: {
-  assigneeId?: number
-  startDate?: string
-  endDate?: string
-  page?: number
-  pageSize?: number
-}) {
-  const p = new URLSearchParams()
-  if (params.assigneeId) p.set("assigneeId", String(params.assigneeId))
-  if (params.startDate) p.set("startDate", params.startDate)
-  if (params.endDate) p.set("endDate", params.endDate)
-  p.set("page", String(params.page ?? 1))
-  p.set("pageSize", String(params.pageSize ?? 20))
-  return api.get<{ items: TicketItem[]; total: number }>(
-    `/api/v1/itsm/tickets/history?${p}`,
   )
 }
 

@@ -323,7 +323,6 @@ func (a *ITSMApp) Routes(api *gin.RouterGroup) {
 		// Tickets — special views must come before :id routes
 		g.GET("/tickets/mine", ticketH.Mine)
 		g.GET("/tickets/todo", ticketH.Todo)
-		g.GET("/tickets/history", ticketH.History)
 		g.GET("/tickets/approvals", ticketH.Approvals)
 		g.GET("/tickets/approvals/count", ticketH.ApprovalCount)
 		g.POST("/tickets", ticketH.Create)

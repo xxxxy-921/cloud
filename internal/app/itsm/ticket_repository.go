@@ -115,6 +115,8 @@ type TicketListParams struct {
 	ServiceID   *uint
 	AssigneeID  *uint
 	RequesterID *uint
+	StartDate   *time.Time
+	EndDate     *time.Time
 	Page        int
 	PageSize    int
 	DeptScope   *[]uint
@@ -141,6 +143,12 @@ func (r *TicketRepo) List(params TicketListParams) ([]Ticket, int64, error) {
 	}
 	if params.RequesterID != nil {
 		query = query.Where("requester_id = ?", *params.RequesterID)
+	}
+	if params.StartDate != nil {
+		query = query.Where("finished_at >= ?", *params.StartDate)
+	}
+	if params.EndDate != nil {
+		query = query.Where("finished_at <= ?", *params.EndDate)
 	}
 
 	var total int64
@@ -222,54 +230,6 @@ func (r *TicketRepo) ListTodo(params TodoListParams) ([]Ticket, int64, error) {
 		Order("itsm_priorities.value ASC, itsm_tickets.created_at ASC").
 		Offset(offset).Limit(params.PageSize)
 	if err := dataQuery.Find(&items).Error; err != nil {
-		return nil, 0, err
-	}
-	return items, total, nil
-}
-
-type HistoryListParams struct {
-	UserID     *uint
-	AssigneeID *uint
-	StartDate  *time.Time
-	EndDate    *time.Time
-	Page       int
-	PageSize   int
-}
-
-// ListHistory returns terminal-state tickets with optional filters.
-// When UserID is set, restricts to tickets where the user is requester or assignee.
-func (r *TicketRepo) ListHistory(params HistoryListParams) ([]Ticket, int64, error) {
-	terminalStatuses := []string{TicketStatusCompleted, TicketStatusFailed, TicketStatusCancelled}
-	query := r.db.Model(&Ticket{}).Where("status IN ?", terminalStatuses)
-
-	if params.UserID != nil {
-		query = query.Where("(requester_id = ? OR assignee_id = ?)", *params.UserID, *params.UserID)
-	}
-	if params.AssigneeID != nil {
-		query = query.Where("assignee_id = ?", *params.AssigneeID)
-	}
-	if params.StartDate != nil {
-		query = query.Where("finished_at >= ?", *params.StartDate)
-	}
-	if params.EndDate != nil {
-		query = query.Where("finished_at <= ?", *params.EndDate)
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	if params.Page < 1 {
-		params.Page = 1
-	}
-	if params.PageSize < 1 {
-		params.PageSize = 20
-	}
-
-	var items []Ticket
-	offset := (params.Page - 1) * params.PageSize
-	if err := query.Offset(offset).Limit(params.PageSize).Order("finished_at DESC").Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil

@@ -1,7 +1,7 @@
 {
   "menuGroup": {
     "workspace": "Workspace",
-    "serviceConfig": "Service Config",
+    "serviceManagement": "Service Management",
     "systemConfig": "System Config"
   },
   "forms": {
@@ -290,10 +290,9 @@
     }
   },
   "tickets": {
-    "title": "All Tickets",
+    "title": "Ticket Management",
     "mine": "My Tickets",
     "todo": "My Tasks",
-    "history": "History",
     "create": "New Ticket",
     "detail": "Ticket Detail",
     "code": "Ticket ID",

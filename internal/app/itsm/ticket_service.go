@@ -562,10 +562,13 @@ func (s *TicketService) List(params TicketListParams) ([]Ticket, int64, error) {
 	return s.ticketRepo.List(params)
 }
 
-func (s *TicketService) Mine(requesterID uint, status string, page, pageSize int) ([]Ticket, int64, error) {
+func (s *TicketService) Mine(requesterID uint, keyword, status string, startDate, endDate *time.Time, page, pageSize int) ([]Ticket, int64, error) {
 	params := TicketListParams{
 		RequesterID: &requesterID,
+		Keyword:     keyword,
 		Status:      status,
+		StartDate:   startDate,
+		EndDate:     endDate,
 		Page:        page,
 		PageSize:    pageSize,
 	}
@@ -589,10 +592,6 @@ func (s *TicketService) Todo(userID uint, keyword, status string, page, pageSize
 		}
 	}
 	return s.ticketRepo.ListTodo(params)
-}
-
-func (s *TicketService) History(params HistoryListParams) ([]Ticket, int64, error) {
-	return s.ticketRepo.ListHistory(params)
 }
 
 func (s *TicketService) Assign(id uint, assigneeID uint, operatorID uint) (*Ticket, error) {

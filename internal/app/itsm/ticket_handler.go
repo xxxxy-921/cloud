@@ -358,9 +358,24 @@ func (h *TicketHandler) Mine(c *gin.Context) {
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	keyword := c.Query("keyword")
 	status := c.Query("status")
 
-	items, total, err := h.svc.Mine(requesterID, status, page, pageSize)
+	var startDate *time.Time
+	if v := c.Query("startDate"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			startDate = &t
+		}
+	}
+	var endDate *time.Time
+	if v := c.Query("endDate"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			end := t.Add(24*time.Hour - time.Nanosecond)
+			endDate = &end
+		}
+	}
+
+	items, total, err := h.svc.Mine(requesterID, keyword, status, startDate, endDate, page, pageSize)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -378,46 +393,6 @@ func (h *TicketHandler) Todo(c *gin.Context) {
 	status := c.Query("status")
 
 	items, total, err := h.svc.Todo(uid, keyword, status, page, pageSize)
-	if err != nil {
-		handler.Fail(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.respondTicketList(c, items, total)
-}
-
-func (h *TicketHandler) History(c *gin.Context) {
-	userID, _ := c.Get("userId")
-	uid := userID.(uint)
-
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-
-	params := HistoryListParams{
-		UserID:   &uid,
-		Page:     page,
-		PageSize: pageSize,
-	}
-
-	if v := c.Query("assigneeId"); v != "" {
-		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.AssigneeID = &uid
-		}
-	}
-	if v := c.Query("startDate"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
-			params.StartDate = &t
-		}
-	}
-	if v := c.Query("endDate"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
-			end := t.Add(24*time.Hour - time.Nanosecond)
-			params.EndDate = &end
-		}
-	}
-
-	items, total, err := h.svc.History(params)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return

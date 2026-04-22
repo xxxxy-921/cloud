@@ -15,11 +15,9 @@ registerApp({
         "itsm:ticket:todo",
         "itsm:ticket:approvals",
         "itsm:ticket:mine",
-        "itsm:ticket:list",
-        "itsm:ticket:history",
       ],
     },
-    { label: "serviceConfig", items: ["itsm:service:list"] },
+    { label: "serviceManagement", items: ["itsm:ticket:list", "itsm:service:list"] },
     { label: "systemConfig", items: ["itsm:sla:list", "itsm:priority:list", "itsm:engine:config"] },
   ],
   routes: [
@@ -88,15 +86,6 @@ registerApp({
         {
           index: true,
           lazy: () => import("./pages/tickets/todo/index"),
-        },
-      ],
-    },
-    {
-      path: "itsm/tickets/history",
-      children: [
-        {
-          index: true,
-          lazy: () => import("./pages/tickets/history/index"),
         },
       ],
     },

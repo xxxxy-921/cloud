@@ -7,10 +7,12 @@ import { Ticket, Search, Bot } from "lucide-react"
 import { useListPage } from "@/hooks/use-list-page"
 import { withActiveMenuPermission } from "@/lib/navigation-state"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DataTableCard, DataTableEmptyRow, DataTableLoadingRow, DataTablePagination,
+  DataTableToolbar, DataTableToolbarGroup,
 } from "@/components/ui/data-table"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -24,12 +26,16 @@ export function Component() {
   const { t } = useTranslation(["itsm", "common"])
   const navigate = useNavigate()
   const [statusTab, setStatusTab] = useState("")
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
 
   const extraParams = useMemo(() => {
     const params: Record<string, string> = {}
     if (statusTab) params.status = statusTab
+    if (startDate) params.startDate = startDate
+    if (endDate) params.endDate = endDate
     return params
-  }, [statusTab])
+  }, [statusTab, startDate, endDate])
 
   const {
     keyword, setKeyword, handleSearch,
@@ -42,27 +48,56 @@ export function Component() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div>
         <h2 className="text-lg font-semibold">{t("itsm:tickets.mine")}</h2>
-        <form onSubmit={handleSearch} className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              className="w-64 pl-8"
-              placeholder={t("itsm:tickets.searchPlaceholder")}
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-            />
-          </div>
-        </form>
       </div>
 
+      <DataTableToolbar>
+        <DataTableToolbarGroup>
+          <form onSubmit={handleSearch} className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
+            <div className="relative w-full sm:max-w-sm">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="pl-8"
+                placeholder={t("itsm:tickets.searchPlaceholder")}
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
+            </div>
+            <Input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                setStartDate(e.target.value)
+                setPage(1)
+              }}
+              className="w-[160px]"
+              placeholder={t("itsm:tickets.startDate")}
+              aria-label={t("itsm:tickets.startDate")}
+            />
+            <Input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                setEndDate(e.target.value)
+                setPage(1)
+              }}
+              className="w-[160px]"
+              placeholder={t("itsm:tickets.endDate")}
+              aria-label={t("itsm:tickets.endDate")}
+            />
+            <Button type="submit" variant="outline" size="sm">{t("common:search")}</Button>
+          </form>
+        </DataTableToolbarGroup>
+      </DataTableToolbar>
+
       <Tabs value={statusTab || "all"} onValueChange={(v) => { setStatusTab(v === "all" ? "" : v); setPage(1) }}>
-        <TabsList>
+        <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="all">{t("itsm:tickets.allStatuses")}</TabsTrigger>
           <TabsTrigger value="pending">{t("itsm:tickets.statusPending")}</TabsTrigger>
           <TabsTrigger value="in_progress">{t("itsm:tickets.statusInProgress")}</TabsTrigger>
           <TabsTrigger value="completed">{t("itsm:tickets.statusCompleted")}</TabsTrigger>
+          <TabsTrigger value="failed">{t("itsm:tickets.statusFailed")}</TabsTrigger>
           <TabsTrigger value="cancelled">{t("itsm:tickets.statusCancelled")}</TabsTrigger>
         </TabsList>
       </Tabs>

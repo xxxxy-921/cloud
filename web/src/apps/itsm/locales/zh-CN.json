@@ -1,7 +1,7 @@
 {
   "menuGroup": {
     "workspace": "工作台",
-    "serviceConfig": "服务配置",
+    "serviceManagement": "服务管理",
     "systemConfig": "系统配置"
   },
   "forms": {
@@ -290,10 +290,9 @@
     }
   },
   "tickets": {
-    "title": "全部工单",
+    "title": "工单管理",
     "mine": "我的工单",
     "todo": "我的待办",
-    "history": "历史工单",
     "create": "新建工单",
     "detail": "工单详情",
     "code": "工单编号",
