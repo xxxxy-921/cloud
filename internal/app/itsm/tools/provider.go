@@ -23,7 +23,7 @@ func AllTools() []ITSMTool {
 		{
 			Name:        "itsm.service_match",
 			DisplayName: "服务匹配",
-			Description: "读取 ITSM 服务目录并通过结构化语义判定返回权威匹配结果：明确命中时只返回一个 selected_service_id；真实歧义时返回候选；无匹配时返回空列表。",
+			Description: "读取 ITSM 服务目录并通过结构化语义判定返回权威匹配结果：明确命中时只返回一个 selected_service_id，并返回 service_locked/next_required_tool；真实歧义时返回候选；无匹配时返回空列表。",
 			ParametersSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -47,7 +47,7 @@ func AllTools() []ITSMTool {
 		{
 			Name:        "itsm.service_load",
 			DisplayName: "服务加载",
-			Description: "加载指定服务的协作规范、表单定义和动作配置；service_id 可传真实服务 ID 或 1-based 候选序号，工具会以当前已确认/已加载服务为准；协作规范为主，流程图 JSON 仅参考。",
+			Description: "加载指定服务的协作规范、表单定义和动作配置；返回 prefill_suggestions 与 field_collection（必填字段、已预填字段、缺失字段和下一步建议）；service_id 可传真实服务 ID 或 1-based 候选序号。",
 			ParametersSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -68,7 +68,7 @@ func AllTools() []ITSMTool {
 		{
 			Name:        "itsm.draft_prepare",
 			DisplayName: "草稿整理",
-			Description: "在向用户展示任何拟提单草稿前必须先调用：登记当前草稿版本，并进入等待用户确认状态。form_data 必须使用 service_load 返回的字段 key；若误用字段 label，工具会尽量归一化为 key；缺少必填字段时不会进入可确认状态。",
+			Description: "在向用户展示任何拟提单草稿前必须先调用：登记当前草稿版本，并返回 ready_for_confirmation、missing_required_fields 和 next_required_tool。form_data 必须使用 service_load 返回的字段 key；缺少必填字段时不会进入可确认状态。",
 			ParametersSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -322,15 +322,15 @@ func SeedAgents(db *gorm.DB) error {
 
 	agents := []presetAgent{
 		{
-			Name:        "IT 服务台智能体",
-			Code:        "itsm.servicedesk",
-			Description: "IT 服务台智能体，引导用户完成服务匹配、信息收集、草稿确认与工单创建的全流程",
-			Type:        "assistant",
-			Visibility:  "public",
-			Strategy:    "react",
-			Temperature: 0.3,
-			MaxTokens:   4096,
-			MaxTurns:    20,
+			Name:         "IT 服务台智能体",
+			Code:         "itsm.servicedesk",
+			Description:  "IT 服务台智能体，引导用户完成服务匹配、信息收集、草稿确认与工单创建的全流程",
+			Type:         "assistant",
+			Visibility:   "public",
+			Strategy:     "react",
+			Temperature:  0.3,
+			MaxTokens:    4096,
+			MaxTurns:     20,
 			SystemPrompt: serviceDeskAgentSystemPrompt,
 			ToolNames: []string{
 				"itsm.service_match",
@@ -349,15 +349,15 @@ func SeedAgents(db *gorm.DB) error {
 			},
 		},
 		{
-			Name:        "流程决策智能体",
-			Code:        "itsm.decision",
-			Description: "ITSM 流程决策智能体，基于工单上下文和策略约束，通过多轮工具调用收集信息后给出下一步可执行、可审计的流程决策",
-			Type:        "assistant",
-			Visibility:  "private",
-			Strategy:    "react",
-			Temperature: 0.2,
-			MaxTokens:   4096,
-			MaxTurns:    8,
+			Name:         "流程决策智能体",
+			Code:         "itsm.decision",
+			Description:  "ITSM 流程决策智能体，基于工单上下文和策略约束，通过多轮工具调用收集信息后给出下一步可执行、可审计的流程决策",
+			Type:         "assistant",
+			Visibility:   "private",
+			Strategy:     "react",
+			Temperature:  0.2,
+			MaxTokens:    4096,
+			MaxTurns:     8,
 			SystemPrompt: decisionAgentSystemPrompt,
 			ToolNames: []string{
 				"decision.ticket_context",
