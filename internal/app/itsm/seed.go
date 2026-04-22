@@ -3,7 +3,6 @@ package itsm
 import (
 	"log/slog"
 	"strconv"
-	"strings"
 
 	"github.com/casbin/casbin/v2"
 	"gorm.io/gorm"
@@ -488,7 +487,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 	}
 
 	serviceRequestFormSchema := `{"version":1,"fields":[{"key":"title","type":"text","label":"请求标题","required":true,"validation":[{"rule":"required","message":"请输入请求标题"}],"width":"full"},{"key":"description","type":"textarea","label":"请求描述","required":true,"validation":[{"rule":"required","message":"请输入请求描述"}],"width":"full","props":{"rows":4}},{"key":"expected_date","type":"date","label":"期望完成日期","width":"half"},{"key":"remarks","type":"textarea","label":"备注","width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"请求信息","fields":["title","description"]},{"title":"补充信息","fields":["expected_date","remarks"]}]}}`
-	vpnAccessFormSchema := `{"version":1,"fields":[{"key":"vpn_account","type":"text","label":"VPN账号","required":true,"validation":[{"rule":"required","message":"请输入 VPN 账号"}],"width":"half"},{"key":"device_usage","type":"textarea","label":"设备与用途说明","required":true,"validation":[{"rule":"required","message":"请输入设备与用途说明"}],"width":"full","props":{"rows":3}},{"key":"request_kind","type":"textarea","label":"访问原因","required":true,"validation":[{"rule":"required","message":"请输入访问原因"}],"width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"VPN 开通信息","fields":["vpn_account","device_usage","request_kind"]}]}}`
+	vpnAccessFormSchema := `{"version":1,"fields":[{"key":"vpn_account","type":"text","label":"VPN账号","description":"用于登录 VPN 的账号；用户给出的邮箱可直接作为 VPN 账号。","placeholder":"例如：wenhaowu@dev.com","required":true,"validation":[{"rule":"required","message":"请输入 VPN 账号"}],"width":"half"},{"key":"device_usage","type":"textarea","label":"设备与用途说明","description":"说明访问 VPN 的设备或用途；用户已经说明用途时不必额外追问设备型号。","placeholder":"例如：线上支持用、远程办公访问内网","required":true,"validation":[{"rule":"required","message":"请输入设备与用途说明"}],"width":"full","props":{"rows":3}},{"key":"request_kind","type":"textarea","label":"访问原因","description":"申请 VPN 的业务原因，可复用用户已说明的用途或支持场景。","placeholder":"例如：线上支持、故障排查、远程办公","required":true,"validation":[{"rule":"required","message":"请输入访问原因"}],"width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"VPN 开通信息","fields":["vpn_account","device_usage","request_kind"]}]}}`
 
 	seeds := []serviceSeed{
 		{
@@ -559,7 +558,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 					slog.Info("seed: updated service collaboration spec", "code", s.Code)
 				}
 			}
-			if s.Code == "vpn-access-request" && isEmptyJSONField(existing.IntakeFormSchema) && s.IntakeFormSchema != "" {
+			if s.Code == "vpn-access-request" && s.IntakeFormSchema != "" && string(existing.IntakeFormSchema) != s.IntakeFormSchema {
 				if err := db.Model(&existing).Update("intake_form_schema", JSONField(s.IntakeFormSchema)).Error; err != nil {
 					slog.Error("seed: failed to update service intake form schema", "code", s.Code, "error", err)
 				} else {
@@ -630,11 +629,6 @@ func seedServiceDefinitions(db *gorm.DB) error {
 	return nil
 }
 
-func isEmptyJSONField(field JSONField) bool {
-	value := strings.TrimSpace(string(field))
-	return value == "" || value == "null" || value == "{}" || value == "[]"
-}
-
 // seedEngineConfig creates internal agents and default SystemConfig for ITSM engine.
 func seedEngineConfig(db *gorm.DB) error {
 	type agentSeed struct {
@@ -656,6 +650,18 @@ func seedEngineConfig(db *gorm.DB) error {
 	for _, a := range agents {
 		var existing struct{ ID uint }
 		if err := db.Table("ai_agents").Where("code = ?", a.Code).Select("id").First(&existing).Error; err == nil {
+			if err := db.Table("ai_agents").Where("id = ?", existing.ID).Updates(map[string]any{
+				"name":          a.Name,
+				"type":          "internal",
+				"system_prompt": a.SystemPrompt,
+				"temperature":   a.Temperature,
+				"is_active":     true,
+				"visibility":    "team",
+			}).Error; err != nil {
+				slog.Error("seed: failed to update internal agent", "code", a.Code, "error", err)
+				continue
+			}
+			slog.Info("seed: updated internal agent", "code", a.Code, "name", a.Name)
 			continue
 		}
 		if err := db.Table("ai_agents").Create(map[string]any{

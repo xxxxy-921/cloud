@@ -301,10 +301,12 @@ func parseFormFields(schemaJSON string) []FormField {
 	var fields []FormField
 	for _, f := range schema.Fields {
 		ff := FormField{
-			Key:      f.Key,
-			Label:    f.Label,
-			Type:     f.Type,
-			Required: f.Required,
+			Key:         f.Key,
+			Label:       f.Label,
+			Type:        f.Type,
+			Description: f.Description,
+			Placeholder: f.Placeholder,
+			Required:    f.Required,
 		}
 		// Check validation rules for "required".
 		for _, v := range f.Validation {
@@ -314,8 +316,11 @@ func parseFormFields(schemaJSON string) []FormField {
 		}
 		// Extract options for select/radio fields.
 		for _, opt := range f.Options {
-			if label, ok := opt.Label, true; ok {
-				ff.Options = append(ff.Options, label)
+			if opt.Label != "" || opt.Value != nil {
+				ff.Options = append(ff.Options, FormOption{
+					Label: opt.Label,
+					Value: fmt.Sprintf("%v", opt.Value),
+				})
 			}
 		}
 		fields = append(fields, ff)

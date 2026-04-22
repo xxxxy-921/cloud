@@ -34,6 +34,17 @@ type CurrentAssignmentInfo struct {
 	AssigneeName string
 }
 
+// CurrentActivityInfo holds a non-terminal activity that may block the next decision.
+type CurrentActivityInfo struct {
+	ID              uint
+	Name            string
+	ActivityType    string
+	Status          string
+	ExecutionMode   string
+	ActivityGroupID string
+	AIConfidence    float64
+}
+
 // ParallelGroupInfo holds aggregated counters for a parallel activity group.
 type ParallelGroupInfo struct {
 	ActivityGroupID string
@@ -81,6 +92,9 @@ type DecisionDataProvider interface {
 
 	// GetDecisionHistory returns completed and rejected activities for a ticket, ordered by ID ascending.
 	GetDecisionHistory(ticketID uint) ([]activityModel, error)
+
+	// GetCurrentActivities returns non-terminal activities for a ticket, ordered by ID ascending.
+	GetCurrentActivities(ticketID uint) ([]CurrentActivityInfo, error)
 
 	// GetExecutedActions returns successfully executed actions for a ticket.
 	GetExecutedActions(ticketID uint) ([]ExecutedActionInfo, error)
@@ -152,6 +166,16 @@ func (s *decisionDataStore) GetDecisionHistory(ticketID uint) ([]activityModel, 
 	var activities []activityModel
 	err := s.db.Where("ticket_id = ? AND status IN ?", ticketID, []string{ActivityCompleted, ActivityRejected}).
 		Order("id ASC").Find(&activities).Error
+	return activities, err
+}
+
+func (s *decisionDataStore) GetCurrentActivities(ticketID uint) ([]CurrentActivityInfo, error) {
+	var activities []CurrentActivityInfo
+	err := s.db.Table("itsm_ticket_activities").
+		Where("ticket_id = ? AND status IN ?", ticketID, []string{ActivityPending, ActivityInProgress, ActivityPendingApproval}).
+		Select("id, name, activity_type, status, execution_mode, activity_group_id, ai_confidence").
+		Order("id ASC").
+		Find(&activities).Error
 	return activities, err
 }
 

@@ -81,6 +81,7 @@ func toolTicketContext() decisionToolDef {
 				"description": ticket.Description,
 				"status":      ticket.Status,
 				"source":      ticket.Source,
+				"is_terminal": isTerminalTicketStatus(ticket.Status),
 			}
 
 			// Form data
@@ -124,8 +125,30 @@ func toolTicketContext() decisionToolDef {
 			}
 			result["activity_history"] = history
 
+			currentActivities, _ := ctx.data.GetCurrentActivities(ctx.ticketID)
+			var current []map[string]any
+			for _, a := range currentActivities {
+				current = append(current, map[string]any{
+					"id":                a.ID,
+					"name":              a.Name,
+					"type":              a.ActivityType,
+					"status":            a.Status,
+					"execution_mode":    a.ExecutionMode,
+					"activity_group_id": a.ActivityGroupID,
+					"ai_confidence":     a.AIConfidence,
+				})
+			}
+			result["current_activities"] = current
+
 			// Executed actions — shows which service actions have been successfully run
 			execs, _ := ctx.data.GetExecutedActions(ctx.ticketID)
+			totalActions, _ := ctx.data.CountActiveServiceActions(ctx.serviceID)
+			actionProgress := map[string]any{
+				"total":         totalActions,
+				"executed":      len(execs),
+				"all_completed": totalActions > 0 && int64(len(execs)) >= totalActions,
+			}
+			result["action_progress"] = actionProgress
 
 			if len(execs) > 0 {
 				var execNames []string
@@ -135,8 +158,7 @@ func toolTicketContext() decisionToolDef {
 				result["executed_actions"] = execNames
 
 				// Check if all service actions have been executed
-				totalActions, _ := ctx.data.CountActiveServiceActions(ctx.serviceID)
-				if totalActions > 0 && int64(len(execs)) >= totalActions {
+				if actionProgress["all_completed"] == true {
 					result["all_actions_completed"] = true
 				}
 			}
@@ -173,6 +195,15 @@ func toolTicketContext() decisionToolDef {
 
 			return json.Marshal(result)
 		},
+	}
+}
+
+func isTerminalTicketStatus(status string) bool {
+	switch status {
+	case "completed", "cancelled", "failed":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -284,7 +315,13 @@ func toolResolveParticipant() decisionToolDef {
 				})
 			}
 
+			status := "resolved"
+			if len(candidates) == 0 {
+				status = "no_candidates"
+			}
 			return json.Marshal(map[string]any{
+				"ok":         len(candidates) > 0,
+				"status":     status,
 				"candidates": candidates,
 				"count":      len(candidates),
 			})

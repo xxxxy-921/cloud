@@ -78,11 +78,224 @@ func vpnServiceDetail(serviceID uint) *ServiceDetail {
 		ServiceID: serviceID,
 		Name:      "VPN 开通申请",
 		FormFields: []FormField{
-			{Key: "vpn_account", Label: "VPN账号", Type: "text", Required: true},
-			{Key: "device_usage", Label: "设备与用途说明", Type: "textarea", Required: true},
-			{Key: "request_kind", Label: "访问原因", Type: "textarea", Required: true},
+			{Key: "vpn_account", Label: "VPN账号", Type: "text", Required: true, Description: "用于登录 VPN 的账号，用户给出的邮箱可直接作为账号"},
+			{Key: "device_usage", Label: "设备与用途说明", Type: "textarea", Required: true, Description: "说明访问 VPN 的设备或用途；用户已给出用途时不需要额外追问设备型号"},
+			{Key: "request_kind", Label: "访问原因", Type: "textarea", Required: true, Description: "申请 VPN 的业务原因"},
 		},
 		FieldsHash: "vpn123",
+	}
+}
+
+func TestServiceLoad_ReturnsPrefillSuggestionsFromRequestText(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{
+		matchResponse: []ServiceMatch{
+			{ID: 5, Name: "VPN 开通申请", CatalogPath: "基础设施与网络/网络与 VPN", Description: "VPN 开通", Score: 0.97, Reason: "用户明确要求申请 VPN"},
+		},
+		matchDecision: MatchDecision{Kind: MatchDecisionSelectService, SelectedServiceID: 5},
+		details:       map[uint]*ServiceDetail{5: vpnServiceDetail(5)},
+	}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	if _, err := serviceMatchHandler(op, store)(ctx, 1, []byte(`{"query":"我要申请VPN，线上支持用的，wenhaowu@dev.com"}`)); err != nil {
+		t.Fatalf("service match: %v", err)
+	}
+	result, err := serviceLoadHandler(op, store)(ctx, 1, []byte(`{"service_id":5}`))
+	if err != nil {
+		t.Fatalf("service load: %v", err)
+	}
+
+	var resp ServiceDetail
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal service detail: %v", err)
+	}
+	if resp.PrefillSuggestions["vpn_account"] != "wenhaowu@dev.com" ||
+		resp.PrefillSuggestions["device_usage"] != "线上支持用" ||
+		resp.PrefillSuggestions["request_kind"] != "线上支持用" {
+		t.Fatalf("unexpected prefill suggestions: %+v", resp.PrefillSuggestions)
+	}
+	state := store.states[1]
+	if state.RequestText != "我要申请VPN，线上支持用的，wenhaowu@dev.com" {
+		t.Fatalf("expected request text persisted, got %q", state.RequestText)
+	}
+	if state.PrefillFormData["vpn_account"] != "wenhaowu@dev.com" {
+		t.Fatalf("expected prefill data in state, got %+v", state.PrefillFormData)
+	}
+	if resp.FieldCollection == nil {
+		t.Fatalf("expected field collection summary")
+	}
+	if len(resp.FieldCollection.RequiredFields) != 3 {
+		t.Fatalf("expected three required fields, got %+v", resp.FieldCollection.RequiredFields)
+	}
+	if len(resp.FieldCollection.PrefilledFields) != 3 {
+		t.Fatalf("expected three prefilled fields, got %+v", resp.FieldCollection.PrefilledFields)
+	}
+	if len(resp.FieldCollection.MissingRequiredFields) != 0 {
+		t.Fatalf("expected no missing required fields, got %+v", resp.FieldCollection.MissingRequiredFields)
+	}
+	if !resp.FieldCollection.ReadyForDraft || resp.FieldCollection.NextRequiredTool != "itsm.draft_prepare" {
+		t.Fatalf("expected draft to be ready, got %+v", resp.FieldCollection)
+	}
+}
+
+func TestServiceLoad_ReturnsMissingFieldsAndRecommendedStep(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{
+		matchResponse: []ServiceMatch{
+			{ID: 5, Name: "VPN 开通申请", Description: "VPN 开通", Score: 0.97, Reason: "用户明确要求申请 VPN"},
+		},
+		matchDecision: MatchDecision{Kind: MatchDecisionSelectService, SelectedServiceID: 5},
+		details:       map[uint]*ServiceDetail{5: vpnServiceDetail(5)},
+	}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	if _, err := serviceMatchHandler(op, store)(ctx, 1, []byte(`{"query":"帮我开个VPN"}`)); err != nil {
+		t.Fatalf("service match: %v", err)
+	}
+	result, err := serviceLoadHandler(op, store)(ctx, 1, []byte(`{"service_id":5}`))
+	if err != nil {
+		t.Fatalf("service load: %v", err)
+	}
+
+	var resp ServiceDetail
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal service detail: %v", err)
+	}
+	if resp.FieldCollection == nil {
+		t.Fatalf("expected field collection summary")
+	}
+	if len(resp.FieldCollection.MissingRequiredFields) != 3 {
+		t.Fatalf("expected three missing required fields, got %+v", resp.FieldCollection.MissingRequiredFields)
+	}
+	if resp.FieldCollection.ReadyForDraft {
+		t.Fatalf("expected draft to be blocked by missing fields")
+	}
+	if resp.FieldCollection.RecommendedNextStep != "ask_missing_fields" || resp.FieldCollection.NextRequiredTool != "" {
+		t.Fatalf("expected ask_missing_fields recommendation, got %+v", resp.FieldCollection)
+	}
+}
+
+func TestDraftPrepare_UsesPrefillSuggestionsBeforeRequiredValidation(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: vpnServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "service_loaded",
+		LoadedServiceID: 5,
+		FieldsHash:      "vpn123",
+		PrefillFormData: map[string]any{
+			"vpn_account":  "wenhaowu@dev.com",
+			"device_usage": "线上支持用",
+			"request_kind": "线上支持用",
+		},
+	}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	result, err := draftPrepareHandler(op, store)(ctx, 1, []byte(`{"summary":"VPN 开通申请 - 线上支持用","form_data":{"request_kind":"线上支持用"}}`))
+	if err != nil {
+		t.Fatalf("prepare draft: %v", err)
+	}
+
+	var resp struct {
+		OK                   bool           `json:"ok"`
+		ReadyForConfirmation bool           `json:"ready_for_confirmation"`
+		NextRequiredTool     string         `json:"next_required_tool"`
+		FormData             map[string]any `json:"form_data"`
+		Warnings             []struct {
+			Type  string `json:"type"`
+			Field string `json:"field"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected prefill to satisfy required fields, got %s", string(result))
+	}
+	if !resp.ReadyForConfirmation || resp.NextRequiredTool != "itsm.draft_confirm" {
+		t.Fatalf("expected draft to be ready for confirmation, got ready=%v next=%q", resp.ReadyForConfirmation, resp.NextRequiredTool)
+	}
+	if resp.FormData["vpn_account"] != "wenhaowu@dev.com" ||
+		resp.FormData["device_usage"] != "线上支持用" ||
+		resp.FormData["request_kind"] != "线上支持用" {
+		t.Fatalf("expected complete form data from prefill, got %+v", resp.FormData)
+	}
+}
+
+func TestDraftPrepare_StillReportsMissingAccountWhenRequestHasNoAccount(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: vpnServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "service_loaded",
+		LoadedServiceID: 5,
+		FieldsHash:      "vpn123",
+		PrefillFormData: map[string]any{
+			"device_usage": "线上支持用",
+			"request_kind": "线上支持用",
+		},
+	}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	result, err := draftPrepareHandler(op, store)(ctx, 1, []byte(`{"summary":"VPN 开通申请 - 线上支持用","form_data":{}}`))
+	if err != nil {
+		t.Fatalf("prepare draft: %v", err)
+	}
+
+	var resp struct {
+		OK                    bool   `json:"ok"`
+		ReadyForConfirmation  bool   `json:"ready_for_confirmation"`
+		NextRequiredTool      string `json:"next_required_tool"`
+		MissingRequiredFields []struct {
+			Key string `json:"key"`
+		} `json:"missing_required_fields"`
+		Warnings []struct {
+			Type  string `json:"type"`
+			Field string `json:"field"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.OK {
+		t.Fatalf("expected missing vpn_account to block draft, got %s", string(result))
+	}
+	if resp.ReadyForConfirmation || resp.NextRequiredTool != "collect_missing_fields" {
+		t.Fatalf("expected missing fields recommendation, got ready=%v next=%q", resp.ReadyForConfirmation, resp.NextRequiredTool)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Field != "vpn_account" {
+		t.Fatalf("expected only vpn_account missing, got %+v", resp.Warnings)
+	}
+	if len(resp.MissingRequiredFields) != 1 || resp.MissingRequiredFields[0].Key != "vpn_account" {
+		t.Fatalf("expected missing field detail for vpn_account, got %+v", resp.MissingRequiredFields)
+	}
+}
+
+func TestParseFormFields_PreservesFieldContextAndOptionValues(t *testing.T) {
+	fields := parseFormFields(`{
+		"version": 1,
+		"fields": [
+			{
+				"key": "request_kind",
+				"type": "select",
+				"label": "访问原因",
+				"description": "选择 VPN 访问原因",
+				"placeholder": "例如：线上支持",
+				"required": true,
+				"options": [
+					{"label": "线上支持", "value": "network_support"},
+					{"label": "安全审计", "value": "security"}
+				]
+			}
+		]
+	}`)
+	if len(fields) != 1 {
+		t.Fatalf("expected one field, got %+v", fields)
+	}
+	field := fields[0]
+	if field.Description != "选择 VPN 访问原因" || field.Placeholder != "例如：线上支持" {
+		t.Fatalf("expected field context to be preserved, got %+v", field)
+	}
+	if len(field.Options) != 2 || field.Options[0].Label != "线上支持" || field.Options[0].Value != "network_support" {
+		t.Fatalf("expected option label/value to be preserved, got %+v", field.Options)
 	}
 }
 
@@ -106,6 +319,8 @@ func TestServiceMatch_SelectServiceAutoConfirmsAndAllowsLoad(t *testing.T) {
 		Matches              []ServiceMatch `json:"matches"`
 		ConfirmationRequired bool           `json:"confirmation_required"`
 		SelectedServiceID    uint           `json:"selected_service_id"`
+		ServiceLocked        bool           `json:"service_locked"`
+		NextRequiredTool     string         `json:"next_required_tool"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		t.Fatalf("unmarshal match response: %v", err)
@@ -115,6 +330,9 @@ func TestServiceMatch_SelectServiceAutoConfirmsAndAllowsLoad(t *testing.T) {
 	}
 	if resp.SelectedServiceID != 5 || len(resp.Matches) != 1 || resp.Matches[0].Name != "VPN 开通申请" {
 		t.Fatalf("expected only selected VPN service, got %+v", resp)
+	}
+	if !resp.ServiceLocked || resp.NextRequiredTool != "itsm.service_load" {
+		t.Fatalf("expected locked service and service_load next, got %+v", resp)
 	}
 	state := store.states[1]
 	if state.Stage != "candidates_ready" || state.ConfirmedServiceID != 5 || state.TopMatchServiceID != 5 || state.ConfirmationRequired {
@@ -147,6 +365,8 @@ func TestServiceMatch_NeedClarificationRequiresServiceConfirm(t *testing.T) {
 		ConfirmationRequired  bool           `json:"confirmation_required"`
 		SelectedServiceID     uint           `json:"selected_service_id"`
 		ClarificationQuestion string         `json:"clarification_question"`
+		ServiceLocked         bool           `json:"service_locked"`
+		NextRequiredTool      string         `json:"next_required_tool"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		t.Fatalf("unmarshal match response: %v", err)
@@ -156,6 +376,9 @@ func TestServiceMatch_NeedClarificationRequiresServiceConfirm(t *testing.T) {
 	}
 	if resp.ClarificationQuestion == "" {
 		t.Fatalf("expected clarification question in response")
+	}
+	if resp.ServiceLocked || resp.NextRequiredTool != "itsm.service_confirm" {
+		t.Fatalf("expected service_confirm next step, got %+v", resp)
 	}
 	state := store.states[1]
 	if state.ConfirmedServiceID != 0 || !state.ConfirmationRequired || len(state.CandidateServiceIDs) != 2 {
@@ -434,7 +657,7 @@ func TestDraftPrepare_MultivalueRoutingField_ResolvedValues(t *testing.T) {
 		detail: &ServiceDetail{
 			ServiceID: 1,
 			FormFields: []FormField{
-				{Key: "request_kind", Label: "访问原因", Type: "select", Required: true, Options: []string{"network_support", "security", "remote_maintenance"}},
+				{Key: "request_kind", Label: "访问原因", Type: "select", Required: true, Options: []FormOption{{Label: "network_support", Value: "network_support"}, {Label: "security", Value: "security"}, {Label: "remote_maintenance", Value: "remote_maintenance"}}},
 			},
 			RoutingFieldHint: &RoutingFieldHint{
 				FieldKey: "request_kind",
@@ -510,8 +733,8 @@ func TestDraftPrepare_MultivalueNonRoutingField_NoResolvedValues(t *testing.T) {
 		detail: &ServiceDetail{
 			ServiceID: 1,
 			FormFields: []FormField{
-				{Key: "request_kind", Label: "访问原因", Type: "select", Required: true, Options: []string{"network_support"}},
-				{Key: "vpn_type", Label: "VPN类型", Type: "select", Required: true, Options: []string{"l2tp", "ipsec"}},
+				{Key: "request_kind", Label: "访问原因", Type: "select", Required: true, Options: []FormOption{{Label: "network_support", Value: "network_support"}}},
+				{Key: "vpn_type", Label: "VPN类型", Type: "select", Required: true, Options: []FormOption{{Label: "l2tp", Value: "l2tp"}, {Label: "ipsec", Value: "ipsec"}}},
 			},
 			RoutingFieldHint: &RoutingFieldHint{
 				FieldKey:       "request_kind",

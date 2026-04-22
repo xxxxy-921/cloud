@@ -1,0 +1,191 @@
+package engine
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+)
+
+func TestBuildInitialSeedIncludesDecisionTrigger(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_tickets (
+		id integer primary key,
+		code text,
+		title text,
+		description text,
+		status text,
+		source text,
+		priority_id integer
+	)`).Error; err != nil {
+		t.Fatalf("create tickets: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+		t.Fatalf("create priorities: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '紧急')`).Error; err != nil {
+		t.Fatalf("insert priority: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_tickets (id, code, title, description, status, source, priority_id) VALUES (42, 'TICK-42', 'VPN', '线上支持', 'in_progress', 'agent', 1)`).Error; err != nil {
+		t.Fatalf("insert ticket: %v", err)
+	}
+
+	completedActivityID := uint(9)
+	engine := &SmartEngine{}
+	systemMsg, userMsg, err := engine.buildInitialSeed(db, 42, &serviceModel{
+		ID:                7,
+		Name:              "VPN 开通申请",
+		Description:       "VPN service",
+		CollaborationSpec: "审批通过后结束流程。",
+	}, "direct_first", &completedActivityID)
+	if err != nil {
+		t.Fatalf("build initial seed: %v", err)
+	}
+	if !strings.Contains(systemMsg, "## 服务处理规范") {
+		t.Fatalf("expected system prompt to include service spec")
+	}
+	for _, needle := range []string{`"trigger_reason": "activity_completed"`, `"completed_activity_id": 9`, `"decision_mode": "direct_first"`, `"code": "TICK-42"`} {
+		if !strings.Contains(userMsg, needle) {
+			t.Fatalf("expected user seed to contain %s, got %s", needle, userMsg)
+		}
+	}
+}
+
+type fakeDecisionDataProvider struct {
+	ticket       *DecisionTicketData
+	history      []activityModel
+	current      []CurrentActivityInfo
+	executed     []ExecutedActionInfo
+	totalActions int64
+	assignment   *CurrentAssignmentInfo
+	groups       []ParallelGroupInfo
+	pendingNames []string
+}
+
+func (f fakeDecisionDataProvider) GetTicketContext(uint) (*DecisionTicketData, error) {
+	return f.ticket, nil
+}
+func (f fakeDecisionDataProvider) GetDecisionHistory(uint) ([]activityModel, error) {
+	return f.history, nil
+}
+func (f fakeDecisionDataProvider) GetCurrentActivities(uint) ([]CurrentActivityInfo, error) {
+	return f.current, nil
+}
+func (f fakeDecisionDataProvider) GetExecutedActions(uint) ([]ExecutedActionInfo, error) {
+	return f.executed, nil
+}
+func (f fakeDecisionDataProvider) CountActiveServiceActions(uint) (int64, error) {
+	return f.totalActions, nil
+}
+func (f fakeDecisionDataProvider) GetCurrentAssignment(uint) (*CurrentAssignmentInfo, error) {
+	return f.assignment, nil
+}
+func (f fakeDecisionDataProvider) GetParallelGroups(uint) ([]ParallelGroupInfo, error) {
+	return f.groups, nil
+}
+func (f fakeDecisionDataProvider) GetPendingActivityNames(uint, string) ([]string, error) {
+	return f.pendingNames, nil
+}
+func (f fakeDecisionDataProvider) GetUserBasicInfo(uint) (*UserBasicInfo, error) {
+	return &UserBasicInfo{ID: 1, Username: "admin", IsActive: true}, nil
+}
+func (f fakeDecisionDataProvider) CountUserPendingActivities(uint) (int64, error) {
+	return 0, nil
+}
+func (f fakeDecisionDataProvider) GetSimilarHistory(uint, uint, int) ([]TicketHistoryRow, error) {
+	return nil, nil
+}
+func (f fakeDecisionDataProvider) CountCompletedTickets(uint) (int64, error) {
+	return 0, nil
+}
+func (f fakeDecisionDataProvider) CountTicketActivities(uint) (int64, error) {
+	return 0, nil
+}
+func (f fakeDecisionDataProvider) GetSLAData(uint) (*SLATicketData, error) {
+	return nil, nil
+}
+func (f fakeDecisionDataProvider) ListActiveServiceActions(uint) ([]ServiceActionRow, error) {
+	return nil, nil
+}
+func (f fakeDecisionDataProvider) GetServiceAction(uint, uint) (*ServiceActionRow, error) {
+	return nil, nil
+}
+func (f fakeDecisionDataProvider) ResolveForTool(*ParticipantResolver, uint, json.RawMessage) ([]uint, error) {
+	return nil, nil
+}
+
+func TestDecisionTicketContextReturnsStableDecisionAnchors(t *testing.T) {
+	now := time.Now()
+	def := toolTicketContext()
+	raw, err := def.Handler(&decisionToolContext{
+		ticketID:  42,
+		serviceID: 7,
+		data: fakeDecisionDataProvider{
+			ticket: &DecisionTicketData{
+				Code:                  "TICK-42",
+				Title:                 "VPN",
+				Description:           "线上支持",
+				Status:                "in_progress",
+				Source:                "agent",
+				FormData:              `{"vpn_account":"wenhaowu@dev.com"}`,
+				SLAResponseDeadline:   &now,
+				SLAResolutionDeadline: &now,
+			},
+			history: []activityModel{
+				{Name: "审批", ActivityType: "approve", Status: ActivityCompleted, TransitionOutcome: "approved", FinishedAt: &now},
+			},
+			current: []CurrentActivityInfo{
+				{Name: "处理中", ActivityType: "process", Status: ActivityPending},
+			},
+			executed: []ExecutedActionInfo{
+				{ActionName: "预检", ActionCode: "precheck", Status: "success"},
+				{ActionName: "放行", ActionCode: "apply", Status: "success"},
+			},
+			totalActions: 2,
+			assignment:   &CurrentAssignmentInfo{AssigneeID: 1, AssigneeName: "admin"},
+			groups:       []ParallelGroupInfo{{ActivityGroupID: "group-1", Total: 2, Completed: 1}},
+			pendingNames: []string{"安全审批"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ticket context: %v", err)
+	}
+
+	var resp struct {
+		IsTerminal        bool `json:"is_terminal"`
+		CurrentActivities []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"current_activities"`
+		ActionProgress struct {
+			Total        int  `json:"total"`
+			Executed     int  `json:"executed"`
+			AllCompleted bool `json:"all_completed"`
+		} `json:"action_progress"`
+		ParallelGroups []struct {
+			GroupID           string   `json:"group_id"`
+			PendingActivities []string `json:"pending_activities"`
+		} `json:"parallel_groups"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("unmarshal context: %v", err)
+	}
+	if resp.IsTerminal {
+		t.Fatalf("expected active ticket")
+	}
+	if len(resp.CurrentActivities) != 1 || resp.CurrentActivities[0].Name != "处理中" {
+		t.Fatalf("expected pending current activity, got %+v", resp.CurrentActivities)
+	}
+	if resp.ActionProgress.Total != 2 || resp.ActionProgress.Executed != 2 || !resp.ActionProgress.AllCompleted {
+		t.Fatalf("expected complete action progress, got %+v", resp.ActionProgress)
+	}
+	if len(resp.ParallelGroups) != 1 || resp.ParallelGroups[0].GroupID != "group-1" || len(resp.ParallelGroups[0].PendingActivities) != 1 {
+		t.Fatalf("expected parallel group progress, got %+v", resp.ParallelGroups)
+	}
+}

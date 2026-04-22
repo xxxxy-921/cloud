@@ -15,6 +15,14 @@ Feature: VPN 开通申请 — 服务台 Agent 对话校验
       | 安全管理员审批人   | security-operator  | it   | security_admin |
     And 已发布 VPN 对话测试服务
 
+  Scenario: 完整输入 — Agent 直接整理草稿而非追问已给信息
+    Given 用户消息为 "我要申请VPN，线上支持用的，wenhaowu@dev.com"
+    When 服务台 Agent 处理用户消息
+    Then 工具调用序列包含 "itsm.service_match"
+    And 工具调用序列包含 "itsm.service_load"
+    And 工具调用序列包含 "itsm.draft_prepare"
+    And 回复内容不匹配 "请补充.*VPN账号|请补充.*访问原因|是否还有其他具体原因|设备型号"
+
   Scenario: 跨路由冲突 — Agent 识别并向用户澄清
     Given 用户消息为 "我要申请VPN开通，原因是网络调试和安全审计都需要"
     When 服务台 Agent 处理用户消息

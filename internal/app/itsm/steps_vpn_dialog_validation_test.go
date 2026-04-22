@@ -135,6 +135,8 @@ const serviceDeskTestPrompt = `你是 IT 服务台智能体，帮助用户完成
 
 关键规则：
 - 调用 itsm.draft_prepare 时，summary 和 form_data 都必须传入；form_data 是 JSON 对象，key 为字段 key，value 为对应的值（必须使用 service_load 返回的字段定义中的 option value，而不是用户的原始措辞）
+- service_load 返回 prefill_suggestions 时，必须优先采用这些建议补齐同名表单字段，再判断必填缺失。用户给出的邮箱可作为 VPN 账号；"线上支持用/远程办公/故障排查"等用途短语可同时填入设备与用途说明和访问原因
+- 设备与用途说明不是单独的设备型号字段，用户已给出用途时不要再追问设备型号；用户已给出访问原因时不要再问"是否还有其他具体原因"
 - 当用户提到多个访问原因且映射到同一路由分支时，合并为该分支对应的单个结构化值（取第一个匹配的 option value）填入路由字段，同时将用户原始的多个原因完整写入 summary 和 reason 字段
 - 在调用 itsm.draft_prepare 之前，必须先根据 service_load 返回的 routing_field_hint 中的 option_route_map 判断用户的诉求是否跨越了多条路由分支。如果用户同时提到了映射到不同审批路径的多种需求，你必须主动向用户说明这些需求分属不同审批路径，请用户明确选择当前要办理哪一个，而不是替用户做选择或直接提交
 - 在调用 itsm.draft_prepare 前，先对照 service_load 返回的字段定义检查所有必填字段是否已收集；如果有必填字段缺失，必须先向用户追问缺失字段

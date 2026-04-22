@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -28,6 +29,8 @@ type ServiceDeskState struct {
 	LoadedServiceID       uint           `json:"loaded_service_id,omitempty"`
 	DraftSummary          string         `json:"draft_summary,omitempty"`
 	DraftFormData         map[string]any `json:"draft_form_data,omitempty"`
+	RequestText           string         `json:"request_text,omitempty"`
+	PrefillFormData       map[string]any `json:"prefill_form_data,omitempty"`
 	DraftVersion          int            `json:"draft_version"`
 	ConfirmedDraftVersion int            `json:"confirmed_draft_version"`
 	FieldsHash            string         `json:"fields_hash,omitempty"`
@@ -141,24 +144,55 @@ type ServiceMatch struct {
 
 // ServiceDetail is the full definition of a service returned by LoadService.
 type ServiceDetail struct {
-	ServiceID         uint              `json:"service_id"`
-	RequestedID       uint              `json:"requested_service_id,omitempty"`
-	ResolvedFrom      string            `json:"resolved_from,omitempty"`
-	Name              string            `json:"name"`
-	CollaborationSpec string            `json:"collaboration_spec"`
-	FormFields        []FormField       `json:"form_fields"`
-	Actions           []ActionInfo      `json:"actions"`
-	RoutingFieldHint  *RoutingFieldHint `json:"routing_field_hint,omitempty"`
-	FieldsHash        string            `json:"fields_hash"`
+	ServiceID          uint              `json:"service_id"`
+	RequestedID        uint              `json:"requested_service_id,omitempty"`
+	ResolvedFrom       string            `json:"resolved_from,omitempty"`
+	Name               string            `json:"name"`
+	CollaborationSpec  string            `json:"collaboration_spec"`
+	FormFields         []FormField       `json:"form_fields"`
+	Actions            []ActionInfo      `json:"actions"`
+	RoutingFieldHint   *RoutingFieldHint `json:"routing_field_hint,omitempty"`
+	PrefillSuggestions map[string]any    `json:"prefill_suggestions,omitempty"`
+	FieldCollection    *FieldCollection  `json:"field_collection,omitempty"`
+	FieldsHash         string            `json:"fields_hash"`
 }
 
 // FormField describes one field on a service request form.
 type FormField struct {
-	Key      string   `json:"key"`
-	Label    string   `json:"label"`
-	Type     string   `json:"type"` // text, select, radio, checkbox, date, textarea, table
-	Required bool     `json:"required"`
-	Options  []string `json:"options,omitempty"`
+	Key         string       `json:"key"`
+	Label       string       `json:"label"`
+	Type        string       `json:"type"` // text, select, radio, checkbox, date, textarea, table
+	Description string       `json:"description,omitempty"`
+	Placeholder string       `json:"placeholder,omitempty"`
+	Required    bool         `json:"required"`
+	Options     []FormOption `json:"options,omitempty"`
+}
+
+// FormOption describes one selectable option on a service request form.
+type FormOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// FieldCollection summarizes the field-filling state for an AI service desk turn.
+type FieldCollection struct {
+	RequiredFields        []FieldCollectionItem `json:"required_fields"`
+	PrefilledFields       []FieldCollectionItem `json:"prefilled_fields"`
+	MissingRequiredFields []FieldCollectionItem `json:"missing_required_fields"`
+	RoutingFieldKey       string                `json:"routing_field_key,omitempty"`
+	ReadyForDraft         bool                  `json:"ready_for_draft"`
+	NextRequiredTool      string                `json:"next_required_tool,omitempty"`
+	RecommendedNextStep   string                `json:"recommended_next_step"`
+}
+
+// FieldCollectionItem describes one form field in a field collection summary.
+type FieldCollectionItem struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+	Value    any    `json:"value,omitempty"`
+	Source   string `json:"source,omitempty"`
 }
 
 // ActionInfo is a permitted action on a service.
@@ -260,6 +294,8 @@ func defaultState() *ServiceDeskState {
 	return &ServiceDeskState{Stage: "idle"}
 }
 
+var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+
 func hashFormData(data map[string]any) string {
 	// Build deterministic JSON by sorting map keys
 	keys := make([]string, 0, len(data))
@@ -326,6 +362,131 @@ func normalizeFormDataKeys(data map[string]any, fields []FormField) map[string]a
 		normalized[canonicalKey] = val
 	}
 	return normalized
+}
+
+func mergePrefillFormData(data map[string]any, prefill map[string]any) map[string]any {
+	if len(data) == 0 {
+		data = map[string]any{}
+	}
+	if len(prefill) == 0 {
+		return data
+	}
+	merged := make(map[string]any, len(prefill)+len(data))
+	for key, val := range prefill {
+		if val != nil && strings.TrimSpace(fmt.Sprintf("%v", val)) != "" {
+			merged[key] = val
+		}
+	}
+	for key, val := range data {
+		if val != nil && strings.TrimSpace(fmt.Sprintf("%v", val)) != "" {
+			merged[key] = val
+		}
+	}
+	return merged
+}
+
+func buildPrefillSuggestions(requestText string, fields []FormField) map[string]any {
+	requestText = strings.TrimSpace(requestText)
+	if requestText == "" || len(fields) == 0 {
+		return nil
+	}
+
+	email := emailPattern.FindString(requestText)
+	purpose := extractPurposeText(requestText)
+	prefill := make(map[string]any)
+	for _, field := range fields {
+		semantic := strings.ToLower(field.Key + " " + field.Label + " " + field.Description + " " + field.Placeholder)
+		if email != "" && isAccountField(semantic) {
+			prefill[field.Key] = email
+			continue
+		}
+		if purpose != "" && isPurposeField(semantic) {
+			prefill[field.Key] = purpose
+		}
+	}
+	if len(prefill) == 0 {
+		return nil
+	}
+	return prefill
+}
+
+func buildFieldCollection(fields []FormField, prefill map[string]any, routing *RoutingFieldHint) *FieldCollection {
+	summary := &FieldCollection{
+		RecommendedNextStep: "prepare_draft",
+	}
+	if routing != nil {
+		summary.RoutingFieldKey = routing.FieldKey
+	}
+	for _, field := range fields {
+		item := FieldCollectionItem{
+			Key:      field.Key,
+			Label:    field.Label,
+			Type:     field.Type,
+			Required: field.Required,
+		}
+		if field.Required {
+			summary.RequiredFields = append(summary.RequiredFields, item)
+		}
+		val, ok := prefill[field.Key]
+		if ok && val != nil && strings.TrimSpace(fmt.Sprintf("%v", val)) != "" {
+			prefilled := item
+			prefilled.Value = val
+			prefilled.Source = "prefill_suggestions"
+			summary.PrefilledFields = append(summary.PrefilledFields, prefilled)
+			continue
+		}
+		if field.Required {
+			summary.MissingRequiredFields = append(summary.MissingRequiredFields, item)
+		}
+	}
+	summary.ReadyForDraft = len(summary.MissingRequiredFields) == 0
+	if summary.ReadyForDraft {
+		summary.NextRequiredTool = "itsm.draft_prepare"
+	} else {
+		summary.RecommendedNextStep = "ask_missing_fields"
+	}
+	return summary
+}
+
+func isAccountField(semantic string) bool {
+	return strings.Contains(semantic, "account") ||
+		strings.Contains(semantic, "账号") ||
+		strings.Contains(semantic, "vpn_account")
+}
+
+func isPurposeField(semantic string) bool {
+	return strings.Contains(semantic, "usage") ||
+		strings.Contains(semantic, "purpose") ||
+		strings.Contains(semantic, "reason") ||
+		strings.Contains(semantic, "request_kind") ||
+		strings.Contains(semantic, "用途") ||
+		strings.Contains(semantic, "原因") ||
+		strings.Contains(semantic, "说明")
+}
+
+func extractPurposeText(requestText string) string {
+	cleaned := emailPattern.ReplaceAllString(requestText, "")
+	cleaned = strings.NewReplacer(
+		"我要申请VPN", "", "我要申请 vpn", "", "申请VPN", "", "申请 vpn", "",
+		"开通VPN", "", "开VPN", "", "VPN", "", "vpn", "",
+		"我的", "", "账号", "", "是", "",
+	).Replace(cleaned)
+	cleaned = strings.Trim(cleaned, " ，,。；;、\t\n\r")
+	cleaned = strings.TrimSuffix(cleaned, "的")
+	if cleaned == "" {
+		return ""
+	}
+
+	knownPurposes := []string{
+		"线上支持", "故障排查", "生产应急", "网络接入",
+		"远程办公", "外部协作", "跨境访问", "安全合规", "安全审计", "合规检查",
+	}
+	for _, purpose := range knownPurposes {
+		if strings.Contains(cleaned, purpose) {
+			return cleaned
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +568,8 @@ func serviceMatchHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 		} else {
 			state.ConfirmedServiceID = 0
 		}
+		state.RequestText = p.Query
+		state.PrefillFormData = nil
 		if err := store.SaveState(sid, state); err != nil {
 			return nil, fmt.Errorf("save state: %w", err)
 		}
@@ -416,9 +579,21 @@ func serviceMatchHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 			"matches":                matches,
 			"confirmation_required":  confirmationRequired,
 			"selected_service_id":    selectedServiceID,
+			"service_locked":         selectedServiceID > 0 && !confirmationRequired,
+			"next_required_tool":     serviceMatchNextRequiredTool(selectedServiceID, confirmationRequired, len(matches)),
 			"clarification_question": decision.ClarificationQuestion,
 		}), nil
 	}
+}
+
+func serviceMatchNextRequiredTool(selectedServiceID uint, confirmationRequired bool, matchCount int) string {
+	if selectedServiceID > 0 && !confirmationRequired {
+		return "itsm.service_load"
+	}
+	if confirmationRequired && matchCount > 0 {
+		return "itsm.service_confirm"
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -511,9 +686,15 @@ func serviceLoadHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 		}
 		detail.RequestedID = p.ServiceID
 		detail.ResolvedFrom = resolvedFrom
+		detail.PrefillSuggestions = buildPrefillSuggestions(state.RequestText, detail.FormFields)
+		detail.FieldCollection = buildFieldCollection(detail.FormFields, detail.PrefillSuggestions, detail.RoutingFieldHint)
 
 		if state.LoadedServiceID == resolvedServiceID &&
 			(state.Stage == "service_loaded" || state.Stage == "awaiting_confirmation" || state.Stage == "confirmed") {
+			state.PrefillFormData = detail.PrefillSuggestions
+			if err := store.SaveState(sid, state); err != nil {
+				return nil, fmt.Errorf("save state: %w", err)
+			}
 			return mustMarshal(detail), nil
 		}
 
@@ -527,6 +708,7 @@ func serviceLoadHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 
 		state.LoadedServiceID = resolvedServiceID
 		state.FieldsHash = detail.FieldsHash
+		state.PrefillFormData = detail.PrefillSuggestions
 		if err := state.TransitionTo("service_loaded"); err != nil {
 			return nil, err
 		}
@@ -586,6 +768,7 @@ func draftPrepareHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 		}
 
 		p.FormData = normalizeFormDataKeys(p.FormData, detail.FormFields)
+		p.FormData = mergePrefillFormData(p.FormData, state.PrefillFormData)
 
 		// Build field index.
 		fieldMap := make(map[string]FormField, len(detail.FormFields))
@@ -605,6 +788,7 @@ func draftPrepareHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 			ResolvedValues []resolvedValue `json:"resolved_values,omitempty"`
 		}
 		var warnings []warning
+		var missingRequired []FieldCollectionItem
 		blocking := false
 
 		// Check for missing required fields.
@@ -618,6 +802,12 @@ func draftPrepareHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 					Type:    "missing_required",
 					Field:   f.Key,
 					Message: fmt.Sprintf("必填字段 [%s] 未填写", f.Label),
+				})
+				missingRequired = append(missingRequired, FieldCollectionItem{
+					Key:      f.Key,
+					Label:    f.Label,
+					Type:     f.Type,
+					Required: true,
 				})
 				blocking = true
 			}
@@ -661,7 +851,7 @@ func draftPrepareHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 				// Check if value is a valid option.
 				valid := false
 				for _, opt := range f.Options {
-					if opt == strVal {
+					if opt.Value == strVal || opt.Label == strVal {
 						valid = true
 						break
 					}
@@ -679,10 +869,14 @@ func draftPrepareHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 
 		if blocking {
 			return mustMarshal(map[string]any{
-				"ok":        false,
-				"summary":   p.Summary,
-				"form_data": p.FormData,
-				"warnings":  warnings,
+				"ok":                      false,
+				"ready_for_confirmation":  false,
+				"next_required_tool":      "collect_missing_fields",
+				"recommended_next_step":   "ask_missing_fields",
+				"missing_required_fields": missingRequired,
+				"summary":                 p.Summary,
+				"form_data":               p.FormData,
+				"warnings":                warnings,
 			}), nil
 		}
 
@@ -703,11 +897,15 @@ func draftPrepareHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 		}
 
 		return mustMarshal(map[string]any{
-			"ok":            true,
-			"draft_version": state.DraftVersion,
-			"summary":       p.Summary,
-			"form_data":     p.FormData,
-			"warnings":      warnings,
+			"ok":                      true,
+			"ready_for_confirmation":  true,
+			"next_required_tool":      "itsm.draft_confirm",
+			"recommended_next_step":   "show_draft_for_confirmation",
+			"missing_required_fields": []FieldCollectionItem{},
+			"draft_version":           state.DraftVersion,
+			"summary":                 p.Summary,
+			"form_data":               p.FormData,
+			"warnings":                warnings,
 		}), nil
 	}
 }

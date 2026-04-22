@@ -261,3 +261,35 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 		}
 	})
 }
+
+func TestSeedEngineConfigUpdatesExistingWorkflowGeneratorPrompt(t *testing.T) {
+	db := newSeedAlignmentDB(t)
+	code := "itsm.generator"
+	agent := aiapp.Agent{
+		Name:         "旧工作流解析",
+		Code:         &code,
+		Type:         aiapp.AgentTypeInternal,
+		Visibility:   aiapp.AgentVisibilityTeam,
+		SystemPrompt: "stale prompt",
+		Temperature:  0.9,
+		IsActive:     false,
+	}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("create stale generator agent: %v", err)
+	}
+
+	if err := seedEngineConfig(db); err != nil {
+		t.Fatalf("seed engine config: %v", err)
+	}
+
+	var got aiapp.Agent
+	if err := db.Where("code = ?", code).First(&got).Error; err != nil {
+		t.Fatalf("load generator agent: %v", err)
+	}
+	if got.SystemPrompt != itsmGeneratorSystemPrompt {
+		t.Fatalf("expected generator prompt to be refreshed")
+	}
+	if got.Name != "ITSM 工作流解析" || got.Temperature != 0.3 || !got.IsActive {
+		t.Fatalf("expected generator metadata to be refreshed, got name=%q temp=%v active=%v", got.Name, got.Temperature, got.IsActive)
+	}
+}

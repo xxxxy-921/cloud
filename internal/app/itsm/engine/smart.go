@@ -306,7 +306,7 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 	decisionCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	plan, err := e.agenticDecision(decisionCtx, tx, ticketID, svcInfo)
+	plan, err := e.agenticDecision(decisionCtx, tx, ticketID, completedActivityID, svcInfo)
 	if err != nil {
 		reason := fmt.Sprintf("AI 决策失败: %v", err)
 		if decisionCtx.Err() == context.DeadlineExceeded {
@@ -912,7 +912,7 @@ func (e *SmartEngine) RunDecisionCycleForTicket(ctx context.Context, tx *gorm.DB
 
 // agenticDecision builds domain context and tools, then delegates the ReAct loop
 // to the DecisionExecutor (implemented by the AI App).
-func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID uint, svc *serviceModel) (*DecisionPlan, error) {
+func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, svc *serviceModel) (*DecisionPlan, error) {
 	var agentID uint
 	if e.configProvider != nil {
 		agentID = e.configProvider.DecisionAgentID()
@@ -926,7 +926,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 	if e.configProvider != nil {
 		decisionMode = e.configProvider.DecisionMode()
 	}
-	systemMsg, userMsg, err := e.buildInitialSeed(tx, ticketID, svc, decisionMode)
+	systemMsg, userMsg, err := e.buildInitialSeed(tx, ticketID, svc, decisionMode, completedActivityID)
 	if err != nil {
 		return nil, fmt.Errorf("build initial seed: %w", err)
 	}
@@ -989,7 +989,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 
 // buildInitialSeed constructs the system and user messages for the agentic decision.
 // The seed is intentionally lightweight — the agent queries detailed context via tools.
-func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceModel, decisionMode string) (string, string, error) {
+func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceModel, decisionMode string, completedActivityID *uint) (string, string, error) {
 	// System message (domain context only; agent's system prompt is prepended by DecisionExecutor)
 	systemMsg := buildAgenticSystemPrompt(svc.CollaborationSpec, decisionMode, svc.WorkflowJSON)
 
@@ -1024,6 +1024,11 @@ func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceM
 	}
 
 	seed := map[string]any{
+		"decision_cycle": map[string]any{
+			"trigger_reason":        decisionTriggerReason(completedActivityID),
+			"completed_activity_id": completedActivityID,
+			"decision_mode":         normalizedDecisionMode(decisionMode),
+		},
 		"ticket": map[string]any{
 			"code":        ticket.Code,
 			"title":       ticket.Title,
@@ -1045,6 +1050,20 @@ func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceM
 	userMsg := fmt.Sprintf("## 工单信息与策略约束\n\n```json\n%s\n```\n\n请使用可用工具收集所需信息，然后输出最终决策。", seedJSON)
 
 	return systemMsg, userMsg, nil
+}
+
+func decisionTriggerReason(completedActivityID *uint) string {
+	if completedActivityID != nil && *completedActivityID > 0 {
+		return "activity_completed"
+	}
+	return "initial_decision"
+}
+
+func normalizedDecisionMode(decisionMode string) string {
+	if decisionMode == "" {
+		return "direct_first"
+	}
+	return decisionMode
 }
 
 // buildAgenticSystemPrompt constructs the domain system prompt for the agentic decision.
@@ -1076,9 +1095,9 @@ func buildAgenticSystemPrompt(collaborationSpec, decisionMode, workflowJSON stri
 
 const agenticToolGuidance = `## 工具使用指引
 
-你可以通过以下工具按需查询信息来辅助决策：
+你可以通过以下工具收集证据。工具结果是决策事实，不能用猜测替代。
 
-- **decision.ticket_context** — 获取工单完整上下文（表单数据、SLA、活动历史、当前指派、已执行动作、并签组状态）
+- **decision.ticket_context** — 获取工单完整上下文（表单数据、SLA、当前待办、活动历史、动作进度、并签组状态）
 - **decision.knowledge_search** — 搜索服务关联知识库
 - **decision.resolve_participant** — 按类型解析参与人（user/position/department/position_department/requester_manager）
 - **decision.user_workload** — 查询用户当前工单负载
@@ -1089,18 +1108,24 @@ const agenticToolGuidance = `## 工具使用指引
 
 ### 推荐推理步骤
 
-1. 先用 decision.ticket_context 了解完整上下文（注意 activity_history、executed_actions 和 parallel_groups）
-2. 用 decision.list_actions 查看是否有可用的自动化动作
-3. 如需查阅处理规范，使用 decision.knowledge_search
-4. 如果协作规范要求执行某个动作（如预检、放行等），使用 decision.execute_action 同步执行并获取结果，而非输出 type 为 "action" 的活动
-5. 如果需要多角色并行审批（并签），设置 execution_mode 为 "parallel"，在 activities 中列出所有并行角色
-6. 如果需要人工审批，用 decision.resolve_participant 解析指派人
-7. 可选：用 decision.user_workload 做负载均衡，用 decision.similar_history 参考历史模式
-8. 最终输出决策 JSON（不调用任何工具）
+1. 必须先用 decision.ticket_context 了解完整上下文，尤其是 current_activities、activity_history、action_progress、parallel_groups 和 is_terminal。
+2. 如果 is_terminal=true，直接输出 complete 或保持终态判断，不要创建新活动。
+3. 用 decision.list_actions 查看是否有可用自动化动作；协作规范要求预检、放行等同步动作时，优先 decision.execute_action，而不是输出 action 活动。
+4. 如需查阅处理规范或知识库，使用 decision.knowledge_search。知识不可用或无命中时可以降级，但要在 reasoning 说明。
+5. 需要人工审批/处理/表单时，必须先用 decision.resolve_participant 解析参与人；count=0 时不得高置信输出该人工活动。
+6. 候选多人时，可用 decision.user_workload 选择负载较低者；SLA 风险明显时可用 decision.sla_status。
+7. 如果需要多角色并行审批（并签），设置 execution_mode 为 "parallel"，在 activities 中列出所有并行角色。
+8. 最终输出决策 JSON（不调用任何工具）。
 
 ### 完成判断
 
-当 decision.ticket_context 返回的 all_actions_completed 为 true，表示服务配置的所有自动化动作均已成功执行。此时请对照协作规范判断流程是否应当结束——如果规范说"动作完成后结束"，你必须输出 next_step_type 为 "complete"，不要再创建新活动。`
+只有同时满足以下条件，才输出 next_step_type 为 "complete"：
+- 服务协作规范或工作流参考允许结束；
+- decision.ticket_context.current_activities 为空；
+- decision.ticket_context.parallel_groups 没有未完成项；
+- 必要的审批、处理、表单或自动动作前置条件已经完成。
+
+action_progress.all_completed=true 只说明动作已全部成功执行，不自动代表流程应结束；必须对照服务规范判断。`
 
 const agenticOutputFormat = "## 输出要求\n\n" +
 	"当你完成信息收集和推理后，直接输出以下 JSON 格式的决策（不要再调用任何工具）：\n\n" +
@@ -1127,6 +1152,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"- next_step_type: 下一步类型。\"complete\" 表示流程可以结束。\n" +
 	"- execution_mode: 执行模式。\"single\"（默认）为串行，\"parallel\" 为并签模式——activities 中的多个活动将并行等待处理，全部完成后才推进到下一步。当协作规范要求多角色并行审批时使用 \"parallel\"。\n" +
 	"- activities: 需要创建的活动列表。\n" +
+	"- complete 决策的 activities 必须为空数组。\n" +
 	"- participant_type: \"user\" 需填 participant_id；\"position_department\" 需填 position_code + department_code。\n" +
 	"- position_code / department_code: 当 participant_type 为 position_department 时，填写岗位编码和部门编码。\n" +
 	"- action_id: 当 type 为 \"action\" 时，填写 decision.list_actions 返回的 action id。\n" +
