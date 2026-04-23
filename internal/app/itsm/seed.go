@@ -800,8 +800,8 @@ func seedEngineConfig(db *gorm.DB) error {
 		smartTicketDecisionModeKey:    "direct_first",
 		smartTicketPathModelKey:       "0",
 		smartTicketPathTemperatureKey: "0.3",
-		smartTicketPathMaxRetriesKey:  "3",
-		smartTicketPathTimeoutKey:     "120",
+		smartTicketPathMaxRetriesKey:  "1",
+		smartTicketPathTimeoutKey:     "60",
 		smartTicketGuardAuditLevelKey: "full",
 		smartTicketGuardFallbackKey:   "0",
 	}

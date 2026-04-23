@@ -1,8 +1,12 @@
 package itsm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +15,66 @@ import (
 	"metis/internal/app/itsm/engine"
 	"metis/internal/llm"
 )
+
+type fakePathEngineConfigProvider struct {
+	cfg LLMEngineRuntimeConfig
+	err error
+}
+
+func (p fakePathEngineConfigProvider) PathBuilderRuntimeConfig() (LLMEngineRuntimeConfig, error) {
+	return p.cfg, p.err
+}
+
+type fakeWorkflowLLMClient struct {
+	responses []llm.ChatResponse
+	errs      []error
+	calls     int
+	requests  []llm.ChatRequest
+}
+
+func (c *fakeWorkflowLLMClient) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.calls++
+	c.requests = append(c.requests, req)
+	idx := c.calls - 1
+	if idx < len(c.errs) && c.errs[idx] != nil {
+		return nil, c.errs[idx]
+	}
+	if idx < len(c.responses) {
+		resp := c.responses[idx]
+		return &resp, nil
+	}
+	return &llm.ChatResponse{}, nil
+}
+
+func (c *fakeWorkflowLLMClient) ChatStream(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	return nil, llm.ErrNotSupported
+}
+
+func (c *fakeWorkflowLLMClient) Embedding(context.Context, llm.EmbeddingRequest) (*llm.EmbeddingResponse, error) {
+	return nil, llm.ErrNotSupported
+}
+
+func newWorkflowGenerateServiceForRetryTest(client *fakeWorkflowLLMClient, maxRetries int) *WorkflowGenerateService {
+	return &WorkflowGenerateService{
+		engineConfigSvc: fakePathEngineConfigProvider{cfg: LLMEngineRuntimeConfig{
+			Model:          "gpt-test",
+			Protocol:       llm.ProtocolOpenAI,
+			BaseURL:        "https://example.test/v1",
+			APIKey:         "test-key",
+			Temperature:    0.3,
+			MaxTokens:      1024,
+			MaxRetries:     maxRetries,
+			TimeoutSeconds: 30,
+		}},
+		llmClientFactory: func(string, string, string) (llm.Client, error) {
+			return client, nil
+		},
+	}
+}
+
+func validWorkflowJSONForGenerateTest() string {
+	return `{"nodes":[{"id":"start","type":"start","data":{"label":"开始"}},{"id":"end","type":"end","data":{"label":"结束"}}],"edges":[{"id":"e1","source":"start","target":"end","data":{}}]}`
+}
 
 // ---------------------------------------------------------------------------
 // Layer 1: Unit tests — extractJSON
@@ -132,6 +196,120 @@ func TestBuildActionsContext(t *testing.T) {
 	}
 	if !strings.Contains(result, "create-ticket") {
 		t.Fatal("should contain second action code")
+	}
+}
+
+func TestGenerate_FailsFastOnLLMUpstreamError(t *testing.T) {
+	client := &fakeWorkflowLLMClient{
+		errs: []error{context.DeadlineExceeded},
+	}
+	svc := newWorkflowGenerateServiceForRetryTest(client, 3)
+
+	_, err := svc.Generate(context.Background(), &GenerateRequest{
+		CollaborationSpec: "用户提交 VPN 申请后经理审批",
+	})
+	if !errors.Is(err, ErrPathEngineUpstream) {
+		t.Fatalf("expected ErrPathEngineUpstream, got %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("expected LLM to be called once for upstream errors, got %d", client.calls)
+	}
+	if got := client.requests[0].ResponseFormat; got == nil || got.Type != "json_object" {
+		t.Fatalf("expected json_object response format, got %+v", got)
+	}
+}
+
+func TestWorkflowGenerateHandlerReturnsBadGatewayForLLMUpstreamError(t *testing.T) {
+	client := &fakeWorkflowLLMClient{
+		errs: []error{context.DeadlineExceeded},
+	}
+	h := &WorkflowGenerateHandler{svc: newWorkflowGenerateServiceForRetryTest(client, 3)}
+	c, rec := newGinContext(http.MethodPost, "/api/v1/itsm/workflows/generate")
+	c.Request.Body = io.NopCloser(bytes.NewBufferString(`{"collaborationSpec":"用户提交 VPN 申请后经理审批"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.Generate(c)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGenerate_RetriesJSONExtractionFailure(t *testing.T) {
+	client := &fakeWorkflowLLMClient{
+		responses: []llm.ChatResponse{
+			{Content: "not json"},
+			{Content: validWorkflowJSONForGenerateTest()},
+		},
+	}
+	svc := newWorkflowGenerateServiceForRetryTest(client, 1)
+
+	resp, err := svc.Generate(context.Background(), &GenerateRequest{
+		CollaborationSpec: "用户提交 VPN 申请后经理审批",
+	})
+	if err != nil {
+		t.Fatalf("generate workflow: %v", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("expected JSON extraction failure to retry once, got %d calls", client.calls)
+	}
+	if resp.Retries != 1 {
+		t.Fatalf("expected retries=1, got %d", resp.Retries)
+	}
+}
+
+func TestGenerate_RetriesValidationFailure(t *testing.T) {
+	client := &fakeWorkflowLLMClient{
+		responses: []llm.ChatResponse{
+			{Content: `{"nodes":[],"edges":[]}`},
+			{Content: validWorkflowJSONForGenerateTest()},
+		},
+	}
+	svc := newWorkflowGenerateServiceForRetryTest(client, 1)
+
+	resp, err := svc.Generate(context.Background(), &GenerateRequest{
+		CollaborationSpec: "用户提交 VPN 申请后经理审批",
+	})
+	if err != nil {
+		t.Fatalf("generate workflow: %v", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("expected validation failure to retry once, got %d calls", client.calls)
+	}
+	if resp.Retries != 1 {
+		t.Fatalf("expected retries=1, got %d", resp.Retries)
+	}
+}
+
+func TestWorkflowValidationErrorsLogValue(t *testing.T) {
+	got := workflowValidationErrorsLogValue([]engine.ValidationError{
+		{NodeID: "gateway-1", EdgeID: "edge-2", Level: "error", Message: "排他网关缺少默认分支"},
+		{NodeID: "approve-1", Message: "处理节点缺少参与人"},
+	})
+
+	if !strings.Contains(got, "[error] node=gateway-1 edge=edge-2 排他网关缺少默认分支") {
+		t.Fatalf("expected first validation error details, got %q", got)
+	}
+	if !strings.Contains(got, "[error] node=approve-1 处理节点缺少参与人") {
+		t.Fatalf("expected default error level and node details, got %q", got)
+	}
+}
+
+func TestWorkflowValidationErrorsLogValueTruncatesLongLists(t *testing.T) {
+	got := workflowValidationErrorsLogValue([]engine.ValidationError{
+		{Message: "err-1"},
+		{Message: "err-2"},
+		{Message: "err-3"},
+		{Message: "err-4"},
+		{Message: "err-5"},
+		{Message: "err-6"},
+	})
+
+	if strings.Contains(got, "err-6") {
+		t.Fatalf("expected log details to be truncated, got %q", got)
+	}
+	if !strings.Contains(got, "... 1 more") {
+		t.Fatalf("expected truncated count, got %q", got)
 	}
 }
 

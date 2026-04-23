@@ -286,8 +286,8 @@ func (s *EngineConfigService) readPathConfig() EnginePathConfig {
 			ModelID:     uint(s.getConfigInt(smartTicketPathModelKey, 0)),
 			Temperature: s.getConfigFloat(smartTicketPathTemperatureKey, 0.3),
 		},
-		MaxRetries:     s.getConfigInt(smartTicketPathMaxRetriesKey, 3),
-		TimeoutSeconds: s.getConfigInt(smartTicketPathTimeoutKey, 120),
+		MaxRetries:     s.getConfigInt(smartTicketPathMaxRetriesKey, 1),
+		TimeoutSeconds: s.getConfigInt(smartTicketPathTimeoutKey, 60),
 	}
 	s.fillModelMeta(&cfg.EngineModelConfig)
 	return cfg

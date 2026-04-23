@@ -19,20 +19,29 @@ var (
 	ErrPathEngineNotConfigured = errors.New("参考路径生成未配置模型，请前往引擎设置页面设置")
 	ErrCollaborationSpecEmpty  = errors.New("协作规范不能为空")
 	ErrWorkflowGeneration      = errors.New("协作路径生成失败")
+	ErrPathEngineUpstream      = errors.New("参考路径生成引擎上游调用失败")
 )
+
+type pathEngineConfigProvider interface {
+	PathBuilderRuntimeConfig() (LLMEngineRuntimeConfig, error)
+}
+
+type workflowLLMClientFactory func(protocol, baseURL, apiKey string) (llm.Client, error)
 
 // WorkflowGenerateService handles one-shot path engine calls that turn collaboration specs into workflow JSON.
 type WorkflowGenerateService struct {
-	engineConfigSvc *EngineConfigService
-	actionRepo      *ServiceActionRepo
-	serviceDefSvc   *ServiceDefService
+	engineConfigSvc  pathEngineConfigProvider
+	actionRepo       *ServiceActionRepo
+	serviceDefSvc    *ServiceDefService
+	llmClientFactory workflowLLMClientFactory
 }
 
 func NewWorkflowGenerateService(i do.Injector) (*WorkflowGenerateService, error) {
 	return &WorkflowGenerateService{
-		engineConfigSvc: do.MustInvoke[*EngineConfigService](i),
-		actionRepo:      do.MustInvoke[*ServiceActionRepo](i),
-		serviceDefSvc:   do.MustInvoke[*ServiceDefService](i),
+		engineConfigSvc:  do.MustInvoke[*EngineConfigService](i),
+		actionRepo:       do.MustInvoke[*ServiceActionRepo](i),
+		serviceDefSvc:    do.MustInvoke[*ServiceDefService](i),
+		llmClientFactory: llm.NewClient,
 	}, nil
 }
 
@@ -68,7 +77,11 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 	}
 
 	// 2. Create LLM client
-	client, err := llm.NewClient(engineCfg.Protocol, engineCfg.BaseURL, engineCfg.APIKey)
+	clientFactory := s.llmClientFactory
+	if clientFactory == nil {
+		clientFactory = llm.NewClient
+	}
+	client, err := clientFactory(engineCfg.Protocol, engineCfg.BaseURL, engineCfg.APIKey)
 	if err != nil {
 		return nil, fmt.Errorf("LLM 客户端创建失败: %w", err)
 	}
@@ -102,20 +115,18 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 		callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 
 		resp, err := client.Chat(callCtx, llm.ChatRequest{
-			Model:       engineCfg.Model,
-			Messages:    messages,
-			Temperature: &temp,
-			MaxTokens:   engineCfg.MaxTokens,
+			Model:          engineCfg.Model,
+			Messages:       messages,
+			Temperature:    &temp,
+			MaxTokens:      engineCfg.MaxTokens,
+			ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
 		})
 		cancel()
 
 		if err != nil {
 			slog.Warn("workflow generate: LLM call failed",
 				"attempt", attempt+1, "error", err)
-			if attempt < maxRetries {
-				continue
-			}
-			return nil, fmt.Errorf("%w: LLM 调用失败 — %v", ErrWorkflowGeneration, err)
+			return nil, fmt.Errorf("%w: 参考路径生成引擎调用超时或不可用，请检查 AI 供应商上游、模型、密钥或额度配置: %v", ErrPathEngineUpstream, err)
 		}
 
 		// 6. Extract JSON from response
@@ -141,7 +152,11 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 		}
 
 		slog.Warn("workflow generate: validation failed",
-			"attempt", attempt+1, "errorCount", len(validationErrors))
+			"attempt", attempt+1,
+			"maxRetries", maxRetries,
+			"retrying", attempt < maxRetries,
+			"errorCount", len(validationErrors),
+			"validationErrors", workflowValidationErrorsLogValue(validationErrors))
 		lastErrors = validationErrors
 
 		if attempt < maxRetries {
@@ -154,6 +169,49 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 
 	// Should not reach here
 	return nil, ErrWorkflowGeneration
+}
+
+func workflowValidationErrorsLogValue(validationErrors []engine.ValidationError) string {
+	const maxLoggedErrors = 5
+	if len(validationErrors) == 0 {
+		return ""
+	}
+
+	limit := len(validationErrors)
+	if limit > maxLoggedErrors {
+		limit = maxLoggedErrors
+	}
+
+	var sb strings.Builder
+	for i := 0; i < limit; i++ {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		validationErr := validationErrors[i]
+		level := validationErr.Level
+		if level == "" {
+			level = "error"
+		}
+		sb.WriteString("[")
+		sb.WriteString(level)
+		sb.WriteString("]")
+		if validationErr.NodeID != "" {
+			sb.WriteString(" node=")
+			sb.WriteString(validationErr.NodeID)
+		}
+		if validationErr.EdgeID != "" {
+			sb.WriteString(" edge=")
+			sb.WriteString(validationErr.EdgeID)
+		}
+		if validationErr.Message != "" {
+			sb.WriteString(" ")
+			sb.WriteString(validationErr.Message)
+		}
+	}
+	if len(validationErrors) > limit {
+		sb.WriteString(fmt.Sprintf("; ... %d more", len(validationErrors)-limit))
+	}
+	return sb.String()
 }
 
 func (s *WorkflowGenerateService) buildGenerateResponse(req *GenerateRequest, workflowJSON json.RawMessage, retries int, validationErrors []engine.ValidationError) (*GenerateResponse, error) {

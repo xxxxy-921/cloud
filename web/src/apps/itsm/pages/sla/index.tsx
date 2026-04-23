@@ -72,7 +72,7 @@ function useEscalationSchema() {
     name: z.string().optional(),
     position_code: z.string().optional(),
     department_code: z.string().optional(),
-  }).passthrough()
+  })
   return z.object({
     triggerType: z.enum(["response_timeout", "resolution_timeout"]),
     level: z.number().min(1),

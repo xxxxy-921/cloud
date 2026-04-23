@@ -32,6 +32,8 @@ func (h *WorkflowGenerateHandler) Generate(c *gin.Context) {
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrPathEngineNotConfigured) || errors.Is(err, ErrCollaborationSpecEmpty) {
 			status = http.StatusBadRequest
+		} else if errors.Is(err, ErrPathEngineUpstream) {
+			status = http.StatusBadGateway
 		}
 		handler.Fail(c, status, err.Error())
 		return

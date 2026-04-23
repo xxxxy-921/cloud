@@ -43,6 +43,44 @@ dev: web-full-registry
 web-dev: web-full-registry
 	cd ./web && $(BUN) run dev
 
+stop-all:
+	@pids="$$( \
+		{ \
+			pgrep -f '[g]o run \./cmd/dev' 2>/dev/null || true; \
+			pgrep -f '[g]o run .*\./cmd/server' 2>/dev/null || true; \
+			pgrep -f '[b]un run dev' 2>/dev/null || true; \
+			pgrep -f '/web/node_modules/\.bin/[v]ite' 2>/dev/null || true; \
+			pgrep -f '/[s]erver([[:space:]]|$$)' 2>/dev/null || true; \
+			pgrep -f '/[s]idecar([[:space:]]|$$)' 2>/dev/null || true; \
+		} | sort -u)"; \
+	collect_children() { \
+		for child in $$(pgrep -P "$$1" 2>/dev/null || true); do \
+			echo "$$child"; \
+			collect_children "$$child"; \
+		done; \
+	}; \
+	all=""; \
+	for pid in $$pids; do \
+		all="$$all $$pid $$(collect_children "$$pid")"; \
+	done; \
+	all="$$(printf '%s\n' $$all | awk 'NF' | sort -u | tr '\n' ' ')"; \
+	if [ -z "$$all" ]; then \
+		echo "No Metis services found."; \
+		exit 0; \
+	fi; \
+	echo "Stopping Metis services: $$all"; \
+	kill -TERM $$all 2>/dev/null || true; \
+	sleep 2; \
+	alive=""; \
+	for pid in $$all; do \
+		if kill -0 "$$pid" 2>/dev/null; then alive="$$alive $$pid"; fi; \
+	done; \
+	if [ -n "$$alive" ]; then \
+		echo "Force killing:$$alive"; \
+		kill -KILL $$alive 2>/dev/null || true; \
+	fi; \
+	echo "Metis services stopped."
+
 # --- Build & Release ---
 
 build: web-build
@@ -175,7 +213,7 @@ test-bdd-vpn:
 	ITSM_BDD_PATHS=features/vpn_classic_flow.feature,features/vpn_dialog_coverage.feature,features/vpn_dialog_validation.feature,features/vpn_draft_recovery.feature,features/vpn_e2e_dialog_flow.feature,features/vpn_participant_validation.feature,features/vpn_smart_engine_deterministic.feature,features/vpn_smart_flow.feature,features/vpn_ticket_withdraw.feature \
 	go test ./internal/app/itsm/ -run TestBDD -v -timeout 20m
 
-.PHONY: web-full-registry web-build web-install web-dev dev build run release release-license build-license build-sidecar release-sidecar refer-clone seed seed-dev clean push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-bdd test-bdd-vpn
+.PHONY: web-full-registry web-build web-install web-dev dev stop-all build run release release-license build-license build-sidecar release-sidecar refer-clone seed seed-dev clean push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-bdd test-bdd-vpn
 
 # Backward-compat aliases
 license: build-license

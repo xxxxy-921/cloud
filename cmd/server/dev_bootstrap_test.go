@@ -158,8 +158,8 @@ METIS_DEV_AI_API_KEY=sk-new
 		"itsm.smart_ticket.service_matcher.max_tokens":      "1024",
 		"itsm.smart_ticket.service_matcher.timeout_seconds": "30",
 		"itsm.smart_ticket.path.temperature":                "0.3",
-		"itsm.smart_ticket.path.max_retries":                "3",
-		"itsm.smart_ticket.path.timeout_seconds":            "120",
+		"itsm.smart_ticket.path.max_retries":                "1",
+		"itsm.smart_ticket.path.timeout_seconds":            "60",
 		"itsm.smart_ticket.decision.mode":                   "direct_first",
 	}
 	for key, want := range expectedConfig {
