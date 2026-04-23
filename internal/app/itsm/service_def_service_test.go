@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"metis/internal/app/ai"
+	"metis/internal/app/itsm/engine"
 	"metis/internal/model"
 )
 
@@ -63,6 +64,13 @@ func TestServiceDefServiceCreate_AllowsWorkflowJSONOnSmartService(t *testing.T) 
 	}
 	if created.ID == 0 {
 		t.Fatal("expected created service to have ID")
+	}
+}
+
+func TestServiceDefServiceParticipantRiskAllowsRequester(t *testing.T) {
+	svc := &ServiceDefService{}
+	if issue := svc.checkParticipantRisk("form", engine.Participant{Type: "requester"}); issue != nil {
+		t.Fatalf("expected requester participant to be allowed, got %+v", issue)
 	}
 }
 

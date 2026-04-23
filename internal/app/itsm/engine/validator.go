@@ -456,10 +456,14 @@ func validateHumanNodeParticipants(n *WFNode) []ValidationError {
 		}}
 	}
 	if len(nd.Participants) == 0 {
+		participantHint := `position_department 必须使用 {"type":"position_department","department_code":"部门编码","position_code":"岗位编码"}`
+		if n.Type == NodeForm {
+			participantHint = `表单填写节点通常由申请人处理，可使用 {"type":"requester"}`
+		}
 		return []ValidationError{{
 			NodeID:  n.ID,
 			Level:   "error",
-			Message: fmt.Sprintf("人工节点 %s 必须配置处理人", n.ID),
+			Message: fmt.Sprintf("人工节点 %s 必须配置处理人：在 data.participants 中按协作规范配置非空数组；%s", humanNodeRef(n.ID, nd.Label), participantHint),
 		}}
 	}
 
@@ -471,7 +475,7 @@ func validateHumanNodeParticipants(n *WFNode) []ValidationError {
 				errs = append(errs, ValidationError{
 					NodeID:  n.ID,
 					Level:   "error",
-					Message: fmt.Sprintf("人工节点 %s 的第 %d 个处理人缺少 value", n.ID, i+1),
+					Message: fmt.Sprintf("人工节点 %s 的第 %d 个处理人缺少 value：user/position/department 类型必须在 participants 元素中配置 value", humanNodeRef(n.ID, nd.Label), i+1),
 				})
 			}
 		case "position_department":
@@ -479,10 +483,10 @@ func validateHumanNodeParticipants(n *WFNode) []ValidationError {
 				errs = append(errs, ValidationError{
 					NodeID:  n.ID,
 					Level:   "error",
-					Message: fmt.Sprintf("人工节点 %s 的第 %d 个处理人必须同时配置 position_code 和 department_code", n.ID, i+1),
+					Message: fmt.Sprintf("人工节点 %s 的第 %d 个处理人必须同时配置 position_code 和 department_code：例如 {\"type\":\"position_department\",\"department_code\":\"it\",\"position_code\":\"network_admin\"}", humanNodeRef(n.ID, nd.Label), i+1),
 				})
 			}
-		case "requester_manager":
+		case "requester", "requester_manager":
 		default:
 			errs = append(errs, ValidationError{
 				NodeID:  n.ID,
@@ -492,6 +496,13 @@ func validateHumanNodeParticipants(n *WFNode) []ValidationError {
 		}
 	}
 	return errs
+}
+
+func humanNodeRef(id string, label string) string {
+	if label == "" {
+		return id
+	}
+	return fmt.Sprintf("%s（%s）", id, label)
 }
 
 // validateGatewayCondition recursively validates a gateway condition.

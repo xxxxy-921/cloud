@@ -532,7 +532,7 @@ func (s *ServiceDefService) checkParticipantRisk(nodeID string, participant engi
 		if strings.TrimSpace(participant.PositionCode) == "" || strings.TrimSpace(participant.DepartmentCode) == "" {
 			return item(fmt.Sprintf("人工节点 %s 的 position_department 参与者缺少岗位或部门编码", nodeID))
 		}
-	case "requester_manager":
+	case "requester", "requester_manager":
 		return nil
 	default:
 		return item(fmt.Sprintf("人工节点 %s 使用了不支持的参与者类型 %q", nodeID, participant.Type))

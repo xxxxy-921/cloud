@@ -22,6 +22,11 @@ func TestValidateEscalationTargetConfigRequiresActionTargets(t *testing.T) {
 			raw:        JSONField(`{"recipients":[{"type":"user","value":"1"}],"channelId":2}`),
 		},
 		{
+			name:       "notify requester valid",
+			actionType: "notify",
+			raw:        JSONField(`{"recipients":[{"type":"requester"}],"channelId":2}`),
+		},
+		{
 			name:       "notify requires recipients",
 			actionType: "notify",
 			raw:        JSONField(`{"channelId":2}`),

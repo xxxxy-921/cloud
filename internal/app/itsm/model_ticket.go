@@ -8,12 +8,12 @@ import (
 
 // Ticket status constants
 const (
-	TicketStatusPending         = "pending"
-	TicketStatusInProgress      = "in_progress"
-	TicketStatusWaitingAction   = "waiting_action"
-	TicketStatusCompleted       = "completed"
-	TicketStatusFailed          = "failed"
-	TicketStatusCancelled       = "cancelled"
+	TicketStatusPending       = "pending"
+	TicketStatusInProgress    = "in_progress"
+	TicketStatusWaitingAction = "waiting_action"
+	TicketStatusCompleted     = "completed"
+	TicketStatusFailed        = "failed"
+	TicketStatusCancelled     = "cancelled"
 )
 
 // Ticket source constants
@@ -102,6 +102,33 @@ type TicketResponse struct {
 	UpdatedAt             time.Time  `json:"updatedAt"`
 }
 
+type TicketMonitorSummary struct {
+	ActiveTotal         int `json:"activeTotal"`
+	StuckTotal          int `json:"stuckTotal"`
+	SLARiskTotal        int `json:"slaRiskTotal"`
+	AIIncidentTotal     int `json:"aiIncidentTotal"`
+	CompletedTodayTotal int `json:"completedTodayTotal"`
+	SmartActiveTotal    int `json:"smartActiveTotal"`
+	ClassicActiveTotal  int `json:"classicActiveTotal"`
+}
+
+type TicketMonitorItem struct {
+	TicketResponse
+	RiskLevel                string     `json:"riskLevel"`
+	Stuck                    bool       `json:"stuck"`
+	StuckReasons             []string   `json:"stuckReasons"`
+	WaitingMinutes           int        `json:"waitingMinutes"`
+	CurrentActivityName      string     `json:"currentActivityName"`
+	CurrentActivityType      string     `json:"currentActivityType"`
+	CurrentActivityStartedAt *time.Time `json:"currentActivityStartedAt"`
+}
+
+type TicketMonitorResponse struct {
+	Summary TicketMonitorSummary `json:"summary"`
+	Items   []TicketMonitorItem  `json:"items"`
+	Total   int64                `json:"total"`
+}
+
 func (t *Ticket) ToResponse() TicketResponse {
 	return TicketResponse{
 		ID:                    t.ID,
@@ -168,7 +195,7 @@ type TicketAssignment struct {
 	model.BaseModel
 	TicketID        uint       `json:"ticketId" gorm:"not null;index"`
 	ActivityID      uint       `json:"activityId" gorm:"not null;index"`
-	ParticipantType string     `json:"participantType" gorm:"size:32;not null"` // user | requester_manager | position | department | position_department
+	ParticipantType string     `json:"participantType" gorm:"size:32;not null"` // requester | user | requester_manager | position | department | position_department
 	UserID          *uint      `json:"userId" gorm:"index"`
 	PositionID      *uint      `json:"positionId" gorm:"index"`
 	DepartmentID    *uint      `json:"departmentId" gorm:"index"`

@@ -455,6 +455,8 @@ func (e *SmartEngine) executeParallelPlan(tx *gorm.DB, ticketID uint, plan *Deci
 				IsCurrent:       true,
 			}
 			tx.Create(assignment)
+		} else if da.ParticipantType == "requester" {
+			e.createRequesterAssignment(tx, ticketID, act.ID)
 		} else if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
 			e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
 		} else if da.Type == "process" || da.Type == "form" {
@@ -529,6 +531,8 @@ func (e *SmartEngine) executeSinglePlan(tx *gorm.DB, ticketID uint, plan *Decisi
 		if err := tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("assignee_id", *da.ParticipantID).Error; err != nil {
 			return err
 		}
+	} else if da.ParticipantType == "requester" {
+		e.createRequesterAssignment(tx, ticketID, act.ID)
 	} else if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
 		e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
 	} else if da.Type == NodeApprove || da.Type == NodeProcess || da.Type == NodeForm {
@@ -640,6 +644,29 @@ func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID
 	}
 }
 
+func (e *SmartEngine) createRequesterAssignment(tx *gorm.DB, ticketID, activityID uint) {
+	var ticket ticketModel
+	if err := tx.First(&ticket, ticketID).Error; err != nil || ticket.RequesterID == 0 {
+		e.tryFallbackAssignment(tx, ticketID, activityID)
+		return
+	}
+
+	assignment := &assignmentModel{
+		TicketID:        ticketID,
+		ActivityID:      activityID,
+		ParticipantType: "requester",
+		UserID:          &ticket.RequesterID,
+		AssigneeID:      &ticket.RequesterID,
+		Status:          "pending",
+		IsCurrent:       true,
+	}
+	if err := tx.Create(assignment).Error; err != nil {
+		slog.Warn("requester assignment: failed to create assignment", "ticketID", ticketID, "activityID", activityID, "error", err)
+		return
+	}
+	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("assignee_id", ticket.RequesterID)
+}
+
 // pendManualHandlingPlan creates a manual process activity for low-confidence decisions.
 func (e *SmartEngine) pendManualHandlingPlan(tx *gorm.DB, ticketID uint, plan *DecisionPlan) error {
 	now := time.Now()
@@ -690,6 +717,8 @@ func (e *SmartEngine) pendManualHandlingPlan(tx *gorm.DB, ticketID uint, plan *D
 			if err := tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("assignee_id", *da.ParticipantID).Error; err != nil {
 				return err
 			}
+		case da.ParticipantType == "requester":
+			e.createRequesterAssignment(tx, ticketID, act.ID)
 		case da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "":
 			e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
 		default:
@@ -777,6 +806,9 @@ func (e *SmartEngine) hasResolvableHumanParticipant(a DecisionActivity) bool {
 		return true
 	}
 	if a.ParticipantType == "position_department" && a.PositionCode != "" && a.DepartmentCode != "" {
+		return true
+	}
+	if a.ParticipantType == "requester" {
 		return true
 	}
 	return e.configProvider != nil && e.configProvider.FallbackAssigneeID() > 0
@@ -941,6 +973,9 @@ func participantSignaturesForDecisionActivity(tx *gorm.DB, da DecisionActivity) 
 	if da.ParticipantID != nil && *da.ParticipantID > 0 {
 		signatures[fmt.Sprintf("user:%d", *da.ParticipantID)] = struct{}{}
 	}
+	if da.ParticipantType == "requester" {
+		signatures["requester"] = struct{}{}
+	}
 	if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
 		positionID, departmentID := resolvePositionDepartmentIDs(tx, da.PositionCode, da.DepartmentCode)
 		if positionID > 0 && departmentID > 0 {
@@ -954,6 +989,9 @@ func participantSignaturesForDecisionActivity(tx *gorm.DB, da DecisionActivity) 
 func participantSignaturesForAssignments(assignments []ActivityAssignmentInfo) map[string]struct{} {
 	signatures := map[string]struct{}{}
 	for _, a := range assignments {
+		if a.ParticipantType == "requester" {
+			signatures["requester"] = struct{}{}
+		}
 		if a.AssigneeID != nil && *a.AssigneeID > 0 {
 			signatures[fmt.Sprintf("user:%d", *a.AssigneeID)] = struct{}{}
 		}
@@ -1299,7 +1337,7 @@ const agenticToolGuidance = `## 工具使用指引
 
 - **decision.ticket_context** — 获取工单完整上下文（表单数据、SLA、当前处理任务、活动历史、动作进度、并行组状态）
 - **decision.knowledge_search** — 搜索服务关联知识库
-- **decision.resolve_participant** — 按类型解析参与人（user/position/department/position_department/requester_manager）
+- **decision.resolve_participant** — 按类型解析参与人（requester/user/position/department/position_department/requester_manager）
 - **decision.user_workload** — 查询用户当前工单负载
 - **decision.similar_history** — 查询同服务历史工单的处理模式
 - **decision.sla_status** — 查询 SLA 状态和紧急程度
@@ -1338,7 +1376,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"  \"activities\": [\n" +
 	"    {\n" +
 	"      \"type\": \"process|action|notify|form\",\n" +
-	"      \"participant_type\": \"user|position_department\",\n" +
+	"      \"participant_type\": \"requester|user|position_department\",\n" +
 	"      \"participant_id\": 42,\n" +
 	"      \"position_code\": \"db_admin\",\n" +
 	"      \"department_code\": \"it\",\n" +
@@ -1355,7 +1393,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"- execution_mode: 执行模式。\"single\"（默认）为串行，\"parallel\" 表示 activities 中的多个活动将并行等待处理，全部完成后才推进到下一步。\n" +
 	"- activities: 需要创建的活动列表。\n" +
 	"- complete 决策的 activities 必须为空数组。\n" +
-	"- participant_type: \"user\" 需填 participant_id；\"position_department\" 需填 position_code + department_code。\n" +
+	"- participant_type: \"requester\" 表示当前工单申请人，无需 participant_id；\"user\" 需填 participant_id；\"position_department\" 需填 position_code + department_code。\n" +
 	"- position_code / department_code: 当 participant_type 为 position_department 时，填写岗位编码和部门编码。\n" +
 	"- action_id: 当 type 为 \"action\" 时，填写 decision.list_actions 返回的 action id。\n" +
 	"- reasoning: 你的推理过程（会展示给管理员查看）。\n" +
@@ -1568,6 +1606,8 @@ func describeParticipants(participants []struct {
 	var parts []string
 	for _, p := range participants {
 		switch p.Type {
+		case "requester":
+			parts = append(parts, "申请人")
 		case "user":
 			parts = append(parts, fmt.Sprintf("用户(%s)", p.Value))
 		case "position":

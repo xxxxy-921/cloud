@@ -362,11 +362,11 @@ func toolResolveParticipant() decisionToolDef {
 	return decisionToolDef{
 		Def: llm.ToolDef{
 			Name:        "decision.resolve_participant",
-			Description: "按参与人类型解析出具体用户。支持 user/position/department/position_department/requester_manager",
+			Description: "按参与人类型解析出具体用户。支持 requester/user/position/department/position_department/requester_manager",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"type":            map[string]any{"type": "string", "description": "参与人类型: user|position|department|position_department|requester_manager"},
+					"type":            map[string]any{"type": "string", "description": "参与人类型: requester|user|position|department|position_department|requester_manager"},
 					"value":           map[string]any{"type": "string", "description": "类型相关值（user类型为user_id或username, position类型为position_code等）"},
 					"position_code":   map[string]any{"type": "string", "description": "岗位代码（position_department类型时必填）"},
 					"department_code": map[string]any{"type": "string", "description": "部门代码（position_department类型时必填）"},

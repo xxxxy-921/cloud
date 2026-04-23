@@ -89,10 +89,11 @@ func (h *TicketHandler) List(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
 
 	params := TicketListParams{
-		Keyword:  c.Query("keyword"),
-		Status:   c.Query("status"),
-		Page:     page,
-		PageSize: pageSize,
+		Keyword:    c.Query("keyword"),
+		Status:     c.Query("status"),
+		EngineType: c.Query("engineType"),
+		Page:       page,
+		PageSize:   pageSize,
 	}
 
 	if v := c.Query("priorityId"); v != "" {
@@ -130,6 +131,42 @@ func (h *TicketHandler) List(c *gin.Context) {
 		return
 	}
 	h.respondTicketList(c, items, total)
+}
+
+func (h *TicketHandler) Monitor(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+
+	params := TicketMonitorParams{
+		Keyword:    c.Query("keyword"),
+		Status:     c.Query("status"),
+		EngineType: c.Query("engineType"),
+		RiskLevel:  c.Query("riskLevel"),
+		Page:       page,
+		PageSize:   pageSize,
+	}
+
+	if v := c.Query("priorityId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.PriorityID = &uid
+		}
+	}
+	if v := c.Query("serviceId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err == nil {
+			uid := uint(id)
+			params.ServiceID = &uid
+		}
+	}
+
+	resp, err := h.svc.Monitor(params, currentUserID(c))
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handler.OK(c, resp)
 }
 
 func (h *TicketHandler) Get(c *gin.Context) {

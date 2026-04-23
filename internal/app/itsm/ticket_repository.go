@@ -111,6 +111,7 @@ func (r *TicketRepo) Update(id uint, updates map[string]any) error {
 type TicketListParams struct {
 	Keyword     string
 	Status      string
+	EngineType  string
 	PriorityID  *uint
 	ServiceID   *uint
 	AssigneeID  *uint
@@ -120,6 +121,17 @@ type TicketListParams struct {
 	Page        int
 	PageSize    int
 	DeptScope   *[]uint
+}
+
+type TicketMonitorParams struct {
+	Keyword    string
+	Status     string
+	EngineType string
+	RiskLevel  string
+	PriorityID *uint
+	ServiceID  *uint
+	Page       int
+	PageSize   int
 }
 
 type TicketApprovalListParams struct {
@@ -137,6 +149,9 @@ func (r *TicketRepo) List(params TicketListParams) ([]Ticket, int64, error) {
 	}
 	if params.Status != "" {
 		query = query.Where("status = ?", params.Status)
+	}
+	if params.EngineType != "" {
+		query = query.Where("engine_type = ?", params.EngineType)
 	}
 	if params.PriorityID != nil {
 		query = query.Where("priority_id = ?", *params.PriorityID)
@@ -175,6 +190,33 @@ func (r *TicketRepo) List(params TicketListParams) ([]Ticket, int64, error) {
 		return nil, 0, err
 	}
 	return items, total, nil
+}
+
+func (r *TicketRepo) ListMonitorBase(params TicketMonitorParams) ([]Ticket, error) {
+	query := r.db.Model(&Ticket{})
+
+	if params.Keyword != "" {
+		like := "%" + params.Keyword + "%"
+		query = query.Where("code LIKE ? OR title LIKE ? OR description LIKE ?", like, like, like)
+	}
+	if params.Status != "" {
+		query = query.Where("status = ?", params.Status)
+	}
+	if params.EngineType != "" {
+		query = query.Where("engine_type = ?", params.EngineType)
+	}
+	if params.PriorityID != nil {
+		query = query.Where("priority_id = ?", *params.PriorityID)
+	}
+	if params.ServiceID != nil {
+		query = query.Where("service_id = ?", *params.ServiceID)
+	}
+
+	var items []Ticket
+	if err := query.Order("updated_at DESC, id DESC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (r *TicketRepo) ListPendingApprovals(params TicketApprovalListParams, operatorID uint, positionIDs []uint, departmentIDs []uint) ([]Ticket, int64, error) {

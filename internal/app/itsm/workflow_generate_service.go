@@ -282,10 +282,36 @@ func (s *WorkflowGenerateService) buildUserMessage(spec string, actionsCtx strin
 			}
 			sb.WriteString(fmt.Sprintf("- %s%s\n", prefix, e.Message))
 		}
+		if validationErrorsRequireParticipantRepair(prevErrors) {
+			sb.WriteString("\n## 参与人修正要求\n\n")
+			sb.WriteString("- 每个 form/process 等人工节点都必须在 data.participants 中配置非空处理人数组。\n")
+			sb.WriteString("- 不要使用 data.participantType、data.positionCode、data.departmentCode；必须使用 participants 数组内的 type、position_code、department_code。\n")
+			sb.WriteString("- 如果缺处理人的节点是 form 表单填写节点，且表示申请人补充/填写资料，应生成：")
+			sb.WriteString(`"participants":[{"type":"requester"}]`)
+			sb.WriteString("。\n")
+			sb.WriteString("- 如果协作规范写明 position_department、部门编码 it、岗位编码 network_admin，应生成：")
+			sb.WriteString(`"participants":[{"type":"position_department","department_code":"it","position_code":"network_admin"}]`)
+			sb.WriteString("。\n")
+			sb.WriteString("- 如果不同网关分支进入不同岗位处理节点，每个 process 节点必须分别配置对应岗位的 participants。\n")
+		}
 	}
 
 	sb.WriteString("\n\n请仅输出合法的 JSON，不要包含任何额外文字或 markdown 代码块标记。")
 	return sb.String()
+}
+
+func validationErrorsRequireParticipantRepair(validationErrors []engine.ValidationError) bool {
+	for _, validationErr := range validationErrors {
+		msg := validationErr.Message
+		if strings.Contains(msg, "处理人") ||
+			strings.Contains(msg, "参与人") ||
+			strings.Contains(msg, "participants") ||
+			strings.Contains(msg, "position_code") ||
+			strings.Contains(msg, "department_code") {
+			return true
+		}
+	}
+	return false
 }
 
 // extractJSON attempts to extract a JSON object from the LLM response content.

@@ -180,7 +180,7 @@ func validateEscalationParticipant(p escalationParticipantConfig) error {
 		if strings.TrimSpace(p.PositionCode) == "" || strings.TrimSpace(p.DepartmentCode) == "" {
 			return errors.New("requires position_code and department_code")
 		}
-	case "requester_manager":
+	case "requester", "requester_manager":
 		return nil
 	default:
 		return fmt.Errorf("unsupported participant type %s", p.Type)

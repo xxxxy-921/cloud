@@ -22,6 +22,9 @@ func NewParticipantResolver(orgResolver app.OrgResolver) *ParticipantResolver {
 // Resolve returns user IDs for a given participant configuration.
 func (r *ParticipantResolver) Resolve(tx *gorm.DB, ticketID uint, p Participant) ([]uint, error) {
 	switch p.Type {
+	case "requester":
+		return r.resolveRequester(tx, ticketID)
+
 	case "user":
 		uid, err := strconv.ParseUint(p.Value, 10, 64)
 		if err != nil {
@@ -69,6 +72,17 @@ func (r *ParticipantResolver) Resolve(tx *gorm.DB, ticketID uint, p Participant)
 	default:
 		return nil, fmt.Errorf("unsupported participant type: %s", p.Type)
 	}
+}
+
+func (r *ParticipantResolver) resolveRequester(tx *gorm.DB, ticketID uint) ([]uint, error) {
+	var ticket ticketModel
+	if err := tx.First(&ticket, ticketID).Error; err != nil {
+		return nil, fmt.Errorf("ticket not found: %w", err)
+	}
+	if ticket.RequesterID == 0 {
+		return nil, nil
+	}
+	return []uint{ticket.RequesterID}, nil
 }
 
 func (r *ParticipantResolver) resolveRequesterManager(tx *gorm.DB, ticketID uint) ([]uint, error) {

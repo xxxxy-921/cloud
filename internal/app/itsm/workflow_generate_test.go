@@ -163,6 +163,7 @@ func TestBuildUserMessage_WithPrevErrors(t *testing.T) {
 	prevErrors := []engine.ValidationError{
 		{NodeID: "node-1", Level: "error", Message: "缺少出边"},
 		{EdgeID: "edge-2", Level: "error", Message: "引用了不存在的目标节点"},
+		{NodeID: "node-3", Level: "error", Message: "人工节点 node-3 必须配置处理人"},
 	}
 	msg := svc.buildUserMessage("处理流程", "", prevErrors)
 
@@ -174,6 +175,56 @@ func TestBuildUserMessage_WithPrevErrors(t *testing.T) {
 	}
 	if !strings.Contains(msg, "[边 edge-2]") {
 		t.Fatal("message should contain edge-prefixed error")
+	}
+	if !strings.Contains(msg, "参与人修正要求") {
+		t.Fatal("message should contain participant repair guidance")
+	}
+	if !strings.Contains(msg, `"participants":[{"type":"requester"}]`) {
+		t.Fatal("message should contain exact requester participant shape")
+	}
+	if !strings.Contains(msg, `"participants":[{"type":"position_department","department_code":"it","position_code":"network_admin"}]`) {
+		t.Fatal("message should contain exact position_department participant shape")
+	}
+}
+
+func TestPathBuilderSystemPromptRequiresHumanNodeParticipants(t *testing.T) {
+	requiredSnippets := []string{
+		"所有 form/process 等人工节点必须在 data 中配置非空 participants 数组",
+		"不要把 participantType、positionCode、departmentCode 直接放在 data 上",
+		`"participants":[{"type":"requester"}]`,
+		`type: "requester" | "user"`,
+		`"participants":[{"type":"position_department","department_code":"it","position_code":"network_admin"}]`,
+		`"position_code":"security_admin"`,
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(itsmPathBuilderSystemPrompt, snippet) {
+			t.Fatalf("system prompt missing required participant guidance: %s", snippet)
+		}
+	}
+}
+
+func TestWorkflowValidationMessageGuidesParticipantRepair(t *testing.T) {
+	errs := engine.ValidateWorkflow(json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"process_network","type":"process","data":{"label":"网络管理员处理"}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"process_network","data":{}},
+			{"id":"e2","source":"process_network","target":"end","data":{}}
+		]
+	}`))
+
+	if len(errs) == 0 {
+		t.Fatal("expected validation errors")
+	}
+	got := errs[0].Message
+	if !strings.Contains(got, "data.participants") || !strings.Contains(got, "position_department") {
+		t.Fatalf("expected actionable participant repair message, got %q", got)
+	}
+	if !strings.Contains(got, "process_network（网络管理员处理）") {
+		t.Fatalf("expected validation message to include node label, got %q", got)
 	}
 }
 

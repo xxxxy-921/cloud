@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -422,37 +423,9 @@ func (s *TicketService) BuildResponses(items []Ticket, operatorID uint) ([]Ticke
 		}
 	}
 
-	assignments := map[uint]ticketAssignmentDisplay{}
-	if ids := keysOf(activityIDs); len(ids) > 0 {
-		var rows []ticketAssignmentDisplay
-		query := db.Table("itsm_ticket_assignments AS a").
-			Joins("LEFT JOIN users AS au ON au.id = a.assignee_id").
-			Joins("LEFT JOIN users AS uu ON uu.id = a.user_id").
-			Joins("LEFT JOIN positions AS p ON p.id = a.position_id").
-			Joins("LEFT JOIN departments AS d ON d.id = a.department_id").
-			Where("a.activity_id IN ? AND a.status = ?", ids, AssignmentPending).
-			Select(`a.activity_id, a.participant_type,
-				COALESCE(au.username, uu.username, '') AS owner_name,
-				COALESCE(p.name, '') AS position_name,
-				COALESCE(d.name, '') AS department_name`)
-		if err := query.Scan(&rows).Error; err != nil {
-			return responses, err
-		}
-		posIDs, deptIDs := s.resolveUserOrg(operatorID)
-		for _, r := range rows {
-			if r.OwnerName == "" {
-				switch {
-				case r.PositionName != "" && r.DepartmentName != "":
-					r.OwnerName = r.DepartmentName + " / " + r.PositionName
-				case r.PositionName != "":
-					r.OwnerName = r.PositionName
-				case r.DepartmentName != "":
-					r.OwnerName = r.DepartmentName
-				}
-			}
-			r.CanAct = s.assignmentCanAct(r.ActivityID, operatorID, posIDs, deptIDs)
-			assignments[r.ActivityID] = r
-		}
+	assignments, err := s.loadAssignmentDisplays(activityIDs, operatorID)
+	if err != nil {
+		return responses, err
 	}
 
 	for i := range responses {
@@ -481,7 +454,81 @@ type ticketAssignmentDisplay struct {
 	OwnerName       string
 	PositionName    string
 	DepartmentName  string
+	UserID          *uint
+	AssigneeID      *uint
+	PositionID      *uint
+	DepartmentID    *uint
 	CanAct          bool
+}
+
+func (s *TicketService) loadAssignmentDisplays(activityIDs map[uint]struct{}, operatorID uint) (map[uint]ticketAssignmentDisplay, error) {
+	result := map[uint]ticketAssignmentDisplay{}
+	ids := keysOf(activityIDs)
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	db := s.ticketRepo.DB()
+	selects := []string{
+		"a.activity_id",
+		"a.participant_type",
+		"a.user_id",
+		"a.assignee_id",
+		"a.position_id",
+		"a.department_id",
+		"COALESCE(au.username, uu.username, '') AS owner_name",
+	}
+	query := db.Table("itsm_ticket_assignments AS a").
+		Joins("LEFT JOIN users AS au ON au.id = a.assignee_id").
+		Joins("LEFT JOIN users AS uu ON uu.id = a.user_id").
+		Where("a.activity_id IN ? AND a.status = ?", ids, AssignmentPending)
+
+	if db.Migrator().HasTable("positions") {
+		query = query.Joins("LEFT JOIN positions AS p ON p.id = a.position_id")
+		selects = append(selects, "COALESCE(p.name, '') AS position_name")
+	} else {
+		selects = append(selects, "'' AS position_name")
+	}
+	if db.Migrator().HasTable("departments") {
+		query = query.Joins("LEFT JOIN departments AS d ON d.id = a.department_id")
+		selects = append(selects, "COALESCE(d.name, '') AS department_name")
+	} else {
+		selects = append(selects, "'' AS department_name")
+	}
+
+	var rows []ticketAssignmentDisplay
+	if err := query.Select(strings.Join(selects, ", ")).Scan(&rows).Error; err != nil {
+		return result, err
+	}
+
+	posIDs, deptIDs := s.resolveUserOrg(operatorID)
+	for _, r := range rows {
+		if r.OwnerName == "" {
+			r.OwnerName = assignmentOwnerFallback(r)
+		}
+		r.CanAct = s.assignmentCanAct(r.ActivityID, operatorID, posIDs, deptIDs)
+		result[r.ActivityID] = r
+	}
+	return result, nil
+}
+
+func assignmentOwnerFallback(a ticketAssignmentDisplay) string {
+	switch {
+	case a.PositionName != "" && a.DepartmentName != "":
+		return a.DepartmentName + " / " + a.PositionName
+	case a.PositionName != "":
+		return a.PositionName
+	case a.DepartmentName != "":
+		return a.DepartmentName
+	case a.PositionID != nil && a.DepartmentID != nil:
+		return fmt.Sprintf("部门 #%d / 岗位 #%d", *a.DepartmentID, *a.PositionID)
+	case a.PositionID != nil:
+		return fmt.Sprintf("岗位 #%d", *a.PositionID)
+	case a.DepartmentID != nil:
+		return fmt.Sprintf("部门 #%d", *a.DepartmentID)
+	default:
+		return ""
+	}
 }
 
 func (s *TicketService) populateSmartSummary(resp *TicketResponse, activities map[uint]TicketActivity, assignments map[uint]ticketAssignmentDisplay) {
@@ -560,6 +607,69 @@ func keysOf(set map[uint]struct{}) []uint {
 
 func (s *TicketService) List(params TicketListParams) ([]Ticket, int64, error) {
 	return s.ticketRepo.List(params)
+}
+
+const (
+	monitorNoActivityBlockAfter = 5 * time.Minute
+	monitorHumanWaitRiskAfter   = 60 * time.Minute
+	monitorActionRiskAfter      = 15 * time.Minute
+	monitorSLADueRiskBefore     = 30 * time.Minute
+)
+
+func (s *TicketService) Monitor(params TicketMonitorParams, operatorID uint) (*TicketMonitorResponse, error) {
+	tickets, err := s.ticketRepo.ListMonitorBase(params)
+	if err != nil {
+		return nil, err
+	}
+
+	base, err := s.BuildResponses(tickets, operatorID)
+	if err != nil {
+		return nil, err
+	}
+
+	facts, err := s.loadMonitorFacts(tickets)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	items := make([]TicketMonitorItem, 0, len(base))
+	summary := TicketMonitorSummary{}
+	for i := range base {
+		ticket := &tickets[i]
+		item := TicketMonitorItem{TicketResponse: base[i], RiskLevel: "normal"}
+		s.populateMonitorItem(&item, ticket, facts[ticket.ID], now)
+		s.accumulateMonitorSummary(&summary, ticket, &item, now)
+		if monitorRiskMatches(params.RiskLevel, item.RiskLevel) {
+			items = append(items, item)
+		}
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		ri, rj := monitorRiskRank(items[i].RiskLevel), monitorRiskRank(items[j].RiskLevel)
+		if ri != rj {
+			return ri < rj
+		}
+		if items[i].WaitingMinutes != items[j].WaitingMinutes {
+			return items[i].WaitingMinutes > items[j].WaitingMinutes
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+
+	total := int64(len(items))
+	page, pageSize := normalizePage(params.Page, params.PageSize)
+	start := (page - 1) * pageSize
+	if start >= len(items) {
+		items = []TicketMonitorItem{}
+	} else {
+		end := start + pageSize
+		if end > len(items) {
+			end = len(items)
+		}
+		items = items[start:end]
+	}
+
+	return &TicketMonitorResponse{Summary: summary, Items: items, Total: total}, nil
 }
 
 func (s *TicketService) Mine(requesterID uint, keyword, status string, startDate, endDate *time.Time, page, pageSize int) ([]Ticket, int64, error) {
