@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react"
+import { useState, type ComponentType, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CheckCircle2, ExternalLink, Route, Save, ShieldAlert, TriangleAlert, XCircle } from "lucide-react"
+import { ExternalLink, Route, Save, ShieldAlert } from "lucide-react"
 import { useNavigate } from "react-router"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -12,7 +12,6 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
 import {
-  type EngineHealthItem,
   type SmartStaffingConfig,
   type SmartStaffingConfigUpdate,
   fetchModels,
@@ -22,31 +21,34 @@ import {
   updateSmartStaffingConfig,
 } from "../../api"
 
-type SectionStatus = "pass" | "warn" | "fail"
+function EngineSettingSection({
+  icon,
+  title,
+  description,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>
+  title: string
+  description: string
+  children: ReactNode
+}) {
+  const Icon = icon
 
-function statusFromHealth(item: EngineHealthItem | undefined): SectionStatus {
-  return item?.status ?? "fail"
-}
-
-function EngineStatus({ status, label }: { status: SectionStatus; label?: string }) {
-  const { t } = useTranslation("itsm")
-  const content = label ?? t(`engineConfig.status.${status}`)
-  const styles = {
-    pass: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    warn: "border-amber-200 bg-amber-50 text-amber-700",
-    fail: "border-red-200 bg-red-50 text-red-700",
-  }
-  const icons = {
-    pass: CheckCircle2,
-    warn: TriangleAlert,
-    fail: XCircle,
-  }
-  const Icon = icons[status]
   return (
-    <span className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium ${styles[status]}`}>
-      <Icon className="h-3.5 w-3.5" />
-      {content}
-    </span>
+    <Card className="w-full gap-0 overflow-hidden py-0">
+      <CardContent className="grid gap-5 px-5 py-5 xl:grid-cols-[minmax(240px,320px)_1fr] xl:items-start">
+        <div className="flex min-w-0 gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-muted/45">
+            <Icon className="h-4.5 w-4.5 text-foreground" />
+          </div>
+          <div className="min-w-0">
+            <CardTitle className="text-[15px]">{title}</CardTitle>
+            <CardDescription className="mt-1 text-xs leading-5">{description}</CardDescription>
+          </div>
+        </div>
+        <div className="min-w-0">{children}</div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -102,7 +104,7 @@ function PathBuilderFields({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(190px,230px)_minmax(220px,280px)_minmax(220px,1fr)_minmax(120px,150px)_minmax(150px,190px)] xl:items-start">
+    <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-[minmax(180px,220px)_minmax(220px,280px)_minmax(260px,1fr)_160px_180px] 2xl:items-start">
       <div className="space-y-1.5">
         <Label>{t("engineConfig.provider")}</Label>
         <Select
@@ -142,7 +144,7 @@ function PathBuilderFields({
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <Label>{t("engineConfig.temperature")}</Label>
-          <span className="font-mono text-xs text-muted-foreground">{temperature.toFixed(2)}</span>
+          <span className="rounded-full border border-border/55 bg-background/35 px-2 py-0.5 font-mono text-[11px] text-muted-foreground">{temperature.toFixed(2)}</span>
         </div>
         <Slider min={0} max={1} step={0.05} value={[temperature]} onValueChange={([v]) => onTemperatureChange(v)} />
       </div>
@@ -181,14 +183,6 @@ function EngineSettingsForm({ config }: { config: SmartStaffingConfig }) {
     queryKey: ["users-for-engine-settings-fallback"],
     queryFn: () => fetchUsers(),
   })
-
-  const healthByKey = useMemo(() => {
-    const map = new Map<string, EngineHealthItem>()
-    for (const item of config.health.items) {
-      map.set(item.key, item)
-    }
-    return map
-  }, [config.health.items])
 
   const [pathProviderId, setPathProviderId] = useState(config.runtime.pathBuilder.providerId)
   const [pathModelId, setPathModelId] = useState(config.runtime.pathBuilder.modelId)
@@ -237,87 +231,67 @@ function EngineSettingsForm({ config }: { config: SmartStaffingConfig }) {
         </Button>
       </div>
 
-      <Card className="max-w-[1480px] gap-0 overflow-hidden py-0">
-        <div className="flex flex-col gap-3 border-b border-border/45 px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-muted/45">
-              <Route className="h-4.5 w-4.5 text-foreground" />
-            </div>
-            <div className="min-w-0">
-              <CardTitle className="text-sm">{t("itsm:engineConfig.pathBuilderTitle")}</CardTitle>
-              <CardDescription className="mt-1 text-xs leading-5">{t("itsm:engineConfig.pathBuilderDesc")}</CardDescription>
-            </div>
-          </div>
-          <EngineStatus status={statusFromHealth(healthByKey.get("pathBuilder"))} label={healthByKey.get("pathBuilder")?.label} />
-        </div>
-        <CardContent className="px-5 py-4">
-          <PathBuilderFields
-            providerId={pathProviderId}
-            modelId={pathModelId}
-            temperature={pathTemperature}
-            maxRetries={pathMaxRetries}
-            timeoutSeconds={pathTimeoutSeconds}
-            onProviderChange={setPathProviderId}
-            onModelChange={setPathModelId}
-            onTemperatureChange={setPathTemperature}
-            onMaxRetriesChange={setPathMaxRetries}
-            onTimeoutSecondsChange={setPathTimeoutSeconds}
-          />
-        </CardContent>
-      </Card>
+      <EngineSettingSection
+        icon={Route}
+        title={t("itsm:engineConfig.pathBuilderTitle")}
+        description={t("itsm:engineConfig.pathBuilderDesc")}
+      >
+        <PathBuilderFields
+          providerId={pathProviderId}
+          modelId={pathModelId}
+          temperature={pathTemperature}
+          maxRetries={pathMaxRetries}
+          timeoutSeconds={pathTimeoutSeconds}
+          onProviderChange={setPathProviderId}
+          onModelChange={setPathModelId}
+          onTemperatureChange={setPathTemperature}
+          onMaxRetriesChange={setPathMaxRetries}
+          onTimeoutSecondsChange={setPathTimeoutSeconds}
+        />
+      </EngineSettingSection>
 
-      <Card className="max-w-[920px] gap-0 overflow-hidden py-0">
-        <div className="flex flex-col gap-3 border-b border-border/45 px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-muted/45">
-              <ShieldAlert className="h-4.5 w-4.5 text-foreground" />
-            </div>
-            <div className="min-w-0">
-              <CardTitle className="text-sm">{t("itsm:engineConfig.guardTitle")}</CardTitle>
-              <CardDescription className="mt-1 text-xs leading-5">{t("itsm:engineConfig.guardDesc")}</CardDescription>
-            </div>
+      <EngineSettingSection
+        icon={ShieldAlert}
+        title={t("itsm:engineConfig.guardTitle")}
+        description={t("itsm:engineConfig.guardDesc")}
+      >
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[220px_320px]">
+          <div className="space-y-1.5">
+            <Label>{t("engineConfig.auditLevel")}</Label>
+            <Select value={auditLevel} onValueChange={setAuditLevel}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="full">{t("engineConfig.logFull")}</SelectItem>
+                <SelectItem value="summary">{t("engineConfig.logSummary")}</SelectItem>
+                <SelectItem value="off">{t("engineConfig.logOff")}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <EngineStatus status={statusFromHealth(healthByKey.get("guard"))} label={healthByKey.get("guard")?.label} />
+          <div className="space-y-1.5">
+            <Label>{t("engineConfig.fallbackAssignee")}</Label>
+            <Select value={String(fallbackAssignee)} onValueChange={(v) => setFallbackAssignee(Number(v))}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t("engineConfig.fallbackAssigneePlaceholder")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">{t("engineConfig.fallbackAssigneeNone")}</SelectItem>
+                {!fallbackUserKnown && (
+                  <SelectItem value={String(fallbackAssignee)}>
+                    {t("engineConfig.fallbackAssigneeUnknown", { id: fallbackAssignee })}
+                  </SelectItem>
+                )}
+                {fallbackUsers.map((user) => (
+                  <SelectItem key={user.id} value={String(user.id)}>
+                    {user.username}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-        <CardContent className="px-5 py-4">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(180px,240px)_minmax(220px,300px)]">
-            <div className="space-y-1.5">
-              <Label>{t("engineConfig.auditLevel")}</Label>
-              <Select value={auditLevel} onValueChange={setAuditLevel}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="full">{t("engineConfig.logFull")}</SelectItem>
-                  <SelectItem value="summary">{t("engineConfig.logSummary")}</SelectItem>
-                  <SelectItem value="off">{t("engineConfig.logOff")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t("engineConfig.fallbackAssignee")}</Label>
-              <Select value={String(fallbackAssignee)} onValueChange={(v) => setFallbackAssignee(Number(v))}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder={t("engineConfig.fallbackAssigneePlaceholder")} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">{t("engineConfig.fallbackAssigneeNone")}</SelectItem>
-                  {!fallbackUserKnown && (
-                    <SelectItem value={String(fallbackAssignee)}>
-                      {t("engineConfig.fallbackAssigneeUnknown", { id: fallbackAssignee })}
-                    </SelectItem>
-                  )}
-                  {fallbackUsers.map((user) => (
-                    <SelectItem key={user.id} value={String(user.id)}>
-                      {user.username}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      </EngineSettingSection>
     </div>
   )
 }

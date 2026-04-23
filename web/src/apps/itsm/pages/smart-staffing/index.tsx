@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import type { ComponentType, ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Activity, Bot, CheckCircle2, ExternalLink, Save, ShieldCheck, TriangleAlert, XCircle } from "lucide-react"
+import { Activity, Bot, ExternalLink, Save, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 import { useNavigate } from "react-router"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { WorkspaceStatus, type WorkspaceStatusTone } from "@/components/workspace/primitives"
 import {
   type AgentItem,
   type EngineHealthItem,
@@ -29,23 +30,13 @@ function statusFromHealth(item: EngineHealthItem | undefined): SectionStatus {
 function EngineStatus({ status, label }: { status: SectionStatus; label?: string }) {
   const { t } = useTranslation("itsm")
   const content = label ?? t(`engineConfig.status.${status}`)
-  const styles = {
-    pass: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    warn: "border-amber-200 bg-amber-50 text-amber-700",
-    fail: "border-red-200 bg-red-50 text-red-700",
+  const toneByStatus: Record<SectionStatus, WorkspaceStatusTone> = {
+    pass: "success",
+    warn: "warning",
+    fail: "danger",
   }
-  const icons = {
-    pass: CheckCircle2,
-    warn: TriangleAlert,
-    fail: XCircle,
-  }
-  const Icon = icons[status]
-  return (
-    <span className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium ${styles[status]}`}>
-      <Icon className="h-3.5 w-3.5" />
-      {content}
-    </span>
-  )
+
+  return <WorkspaceStatus tone={toneByStatus[status]} label={content} className="shrink-0 whitespace-nowrap py-0.5 text-[11px]" />
 }
 
 function AgentPreview({ agent }: { agent: AgentItem | undefined }) {
@@ -130,19 +121,21 @@ function StaffingSection({
 }) {
   const Icon = icon
   return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <div className="flex flex-col gap-3 border-b border-border/45 px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex min-w-0 gap-3">
+    <Card className="min-w-0 gap-0 overflow-hidden py-0">
+      <div className="border-b border-border/45 px-5 py-4">
+        <div className="flex min-w-0 items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-muted/45">
             <Icon className="h-4.5 w-4.5 text-foreground" />
           </div>
-          <div className="min-w-0">
-            <CardTitle className="text-sm">{title}</CardTitle>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <CardTitle className="text-[15px]">{title}</CardTitle>
+              <EngineStatus status={statusFromHealth(health)} />
+            </div>
             <CardDescription className="mt-1 text-xs leading-5">{description}</CardDescription>
             {health?.message ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{health.message}</p> : null}
           </div>
         </div>
-        <EngineStatus status={statusFromHealth(health)} />
       </div>
       <CardContent className="px-5 py-4">{children}</CardContent>
     </Card>
@@ -214,7 +207,7 @@ function SmartStaffingForm({ config }: { config: SmartStaffingConfig }) {
         </Button>
       </div>
 
-      <div className="grid max-w-[1480px] gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid w-full items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <StaffingSection
           icon={Bot}
           title={t("itsm:engineConfig.intakeTitle")}
