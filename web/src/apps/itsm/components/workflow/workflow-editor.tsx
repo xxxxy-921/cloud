@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react"
+import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import {
   ReactFlow,
@@ -18,6 +18,7 @@ import {
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -46,29 +47,153 @@ interface WorkflowEditorProps {
   onSave: (data: { nodes: Node[]; edges: Edge[] }) => void
   saving?: boolean
   serviceId?: number
+  intakeFormSchema?: unknown
+  onIntakeFormSchemaChange?: (schema: unknown) => void
+  inspectorFallback?: ReactNode
   validationErrors?: Array<{ nodeId?: string; edgeId?: string; message: string }>
 }
 
 let nodeId = 0
 function getNodeId() { return `node_${Date.now()}_${++nodeId}` }
 
-function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors }: WorkflowEditorProps) {
+function defaultNodeData(nodeType: NodeType, label: string): WFNodeData {
+  return {
+    label,
+    nodeType,
+    ...(nodeType === "wait" || nodeType === "timer" ? { waitMode: nodeType === "timer" ? "timer" as const : "signal" as const } : {}),
+    ...(nodeType === "parallel" || nodeType === "inclusive" ? { gateway_direction: "fork" as const } : {}),
+  }
+}
+
+function defaultWorkflowData(t: (key: string) => string): { nodes: Node[]; edges: Edge[] } {
+  return {
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        position: { x: 0, y: 120 },
+        data: defaultNodeData("start", t("workflow.node.start")) as unknown as Record<string, unknown>,
+      },
+      {
+        id: "end",
+        type: "end",
+        position: { x: 360, y: 120 },
+        data: defaultNodeData("end", t("workflow.node.end")) as unknown as Record<string, unknown>,
+      },
+    ],
+    edges: [
+      {
+        id: "edge_start_end",
+        source: "start",
+        target: "end",
+        type: "workflow",
+        markerEnd: { type: MarkerType.ArrowClosed },
+        data: { outcome: "completed", default: true } satisfies WFEdgeData as Record<string, unknown>,
+      },
+    ],
+  }
+}
+
+function collectDraftIssues(nodes: Node[], edges: Edge[]) {
+  const issues: Array<{ nodeId?: string; edgeId?: string; message: string }> = []
+  const startNodes = nodes.filter((node) => ((node.data ?? {}) as unknown as WFNodeData).nodeType === "start" || node.type === "start")
+  const endNodes = nodes.filter((node) => ((node.data ?? {}) as unknown as WFNodeData).nodeType === "end" || node.type === "end")
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const incoming = new Map<string, number>()
+  const outgoing = new Map<string, Edge[]>()
+
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
+      issues.push({ edgeId: edge.id, message: "连线引用了不存在的节点" })
+      continue
+    }
+    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1)
+    const list = outgoing.get(edge.source) ?? []
+    list.push(edge)
+    outgoing.set(edge.source, list)
+  }
+
+  if (startNodes.length !== 1) issues.push({ message: "工作流必须包含一个开始节点" })
+  if (endNodes.length < 1) issues.push({ message: "工作流必须包含结束节点" })
+
+  for (const node of nodes) {
+    const data = (node.data ?? {}) as unknown as WFNodeData
+    const nodeType = data.nodeType ?? (node.type as NodeType)
+    if (nodeType !== "start" && (incoming.get(node.id) ?? 0) === 0) {
+      issues.push({ nodeId: node.id, message: "节点不可达" })
+    }
+    if ((nodeType === "form" || nodeType === "process") && !data.participants?.length) {
+      issues.push({ nodeId: node.id, message: "人工节点缺少参与人" })
+    }
+    if ((nodeType === "parallel" || nodeType === "inclusive") && data.gateway_direction !== "fork" && data.gateway_direction !== "join") {
+      issues.push({ nodeId: node.id, message: "网关缺少方向" })
+    }
+    if (nodeType === "exclusive") {
+      const out = outgoing.get(node.id) ?? []
+      if (out.length < 2) {
+        issues.push({ nodeId: node.id, message: "排他网关至少需要两条出边" })
+      }
+      for (const edge of out) {
+        const edgeData = (edge.data ?? {}) as WFEdgeData
+        if (!(edgeData.default ?? edgeData.isDefault) && !edgeData.condition) {
+          issues.push({ nodeId: node.id, edgeId: edge.id, message: "分支连线缺少条件" })
+        }
+      }
+    }
+  }
+
+  if (startNodes[0] && (outgoing.get(startNodes[0].id)?.length ?? 0) !== 1) {
+    issues.push({ nodeId: startNodes[0].id, message: "开始节点必须有一条出边" })
+  }
+
+  return issues
+}
+
+function InnerEditor({
+  initialData,
+  onSave,
+  saving,
+  serviceId,
+  intakeFormSchema,
+  onIntakeFormSchemaChange,
+  inspectorFallback,
+  validationErrors,
+}: WorkflowEditorProps) {
   const { t } = useTranslation("itsm")
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const rfInstance = useReactFlow()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
 
+  const startingData = initialData?.nodes?.length ? initialData : defaultWorkflowData(t)
+
   // Migrate legacy "workflow" type to specific nodeType
-  const migratedNodes = (initialData?.nodes ?? []).map((n) => ({
-    ...n,
-    type: (n.data as unknown as WFNodeData).nodeType ?? n.type,
-  }))
-  const migratedEdges = (initialData?.edges ?? []).map((e) => ({
-    ...e,
-    type: "workflow",
-    markerEnd: { type: MarkerType.ArrowClosed },
-  }))
+  const migratedNodes = (startingData.nodes ?? []).map((n) => {
+    const data = (n.data ?? {}) as unknown as WFNodeData
+    const nodeType = data.nodeType ?? (n.type as NodeType)
+    return {
+      ...n,
+      type: nodeType,
+      data: {
+        ...data,
+        nodeType,
+        ...(nodeType === "parallel" || nodeType === "inclusive" ? { gateway_direction: data.gateway_direction ?? "fork" } : {}),
+      } as unknown as Record<string, unknown>,
+    }
+  })
+  const migratedEdges = (startingData.edges ?? []).map((e) => {
+    const data = (e.data ?? {}) as unknown as WFEdgeData
+    return {
+      ...e,
+      type: "workflow",
+      markerEnd: { type: MarkerType.ArrowClosed },
+      data: {
+        ...data,
+        default: data.default ?? data.isDefault ?? false,
+        isDefault: undefined,
+      } as unknown as Record<string, unknown>,
+    }
+  })
 
   const [nodes, setNodes, onNodesChange] = useNodesState(migratedNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(migratedEdges)
@@ -102,7 +227,7 @@ function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors 
       ...params,
       type: "workflow",
       markerEnd: { type: MarkerType.ArrowClosed },
-      data: { outcome: "", isDefault: false } as Record<string, unknown>,
+        data: { outcome: "", default: false } as Record<string, unknown>,
     }, eds))
   }, [setEdges])
 
@@ -127,9 +252,7 @@ function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors 
       type: nodeType,
       position,
       data: {
-        label: t(`workflow.node.${nodeType}`),
-        nodeType,
-        ...(nodeType === "wait" || nodeType === "timer" ? { waitMode: nodeType === "timer" ? "timer" : "signal" } : {}),
+        ...defaultNodeData(nodeType, t(`workflow.node.${nodeType}`)),
       } satisfies WFNodeData,
     }
     setNodes((nds) => [...nds, newNode] as typeof nds)
@@ -155,10 +278,21 @@ function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors 
       ...node,
       data: { ...(node.data as Record<string, unknown>), _workflowState: undefined },
     }))
-    const cleanEdges = edges.map((edge) => ({
-      ...edge,
-      data: { ...(edge.data as Record<string, unknown>), readonly: undefined, visited: undefined, failed: undefined },
-    }))
+    const cleanEdges = edges.map((edge) => {
+      const data = { ...((edge.data ?? {}) as Record<string, unknown>) }
+      const isDefault = data.isDefault as boolean | undefined
+      delete data.readonly
+      delete data.visited
+      delete data.failed
+      delete data.isDefault
+      return {
+        ...edge,
+        data: {
+          ...data,
+          default: (data.default as boolean | undefined) ?? isDefault ?? false,
+        },
+      }
+    })
     onSave({ nodes: cleanNodes, edges: cleanEdges })
   }
 
@@ -284,10 +418,11 @@ function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors 
   const edgeSourceNodeType = selectedEdge
     ? (nodes.find((n) => n.id === selectedEdge.source)?.data as unknown as WFNodeData | undefined)?.nodeType
     : undefined
+  const draftIssues = useMemo(() => collectDraftIssues(nodes as Node[], edges as Edge[]), [nodes, edges])
 
   return (
     <div className="flex h-full overflow-hidden bg-background" ref={reactFlowWrapper}>
-      <NodePalette />
+      <NodePalette serviceId={serviceId} nodes={nodes as Node[]} intakeFormSchema={intakeFormSchema} />
       <div className="min-w-0 flex-1">
         <ContextMenu>
           <ContextMenuTrigger asChild>
@@ -352,6 +487,9 @@ function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors 
                     </TooltipTrigger>
                     <TooltipContent>{t("workflow.autoLayout")}</TooltipContent>
                   </Tooltip>
+                  <Badge variant={draftIssues.length > 0 ? "outline" : "secondary"} className="h-8 rounded-lg px-2.5">
+                    {draftIssues.length > 0 ? `${draftIssues.length} 个问题` : "已就绪"}
+                  </Badge>
                   <Button size="sm" onClick={handleSave} disabled={saving}>
                     <Save className="mr-1.5 h-3.5 w-3.5" />
                     {saving ? t("workflow.saving") : t("workflow.save")}
@@ -381,11 +519,18 @@ function InnerEditor({ initialData, onSave, saving, serviceId, validationErrors 
         </ContextMenu>
       </div>
       {selectedNode && (
-        <NodePropertyPanel node={selectedNode} serviceId={serviceId} onClose={() => setSelectedNodeId(null)} />
+        <NodePropertyPanel
+          node={selectedNode}
+          serviceId={serviceId}
+          intakeFormSchema={intakeFormSchema}
+          onIntakeFormSchemaChange={onIntakeFormSchemaChange}
+          onClose={() => setSelectedNodeId(null)}
+        />
       )}
       {selectedEdge && (
         <EdgePropertyPanel edge={selectedEdge} sourceNodeType={edgeSourceNodeType} onClose={() => setSelectedEdgeId(null)} />
       )}
+      {!selectedNode && !selectedEdge ? inspectorFallback : null}
     </div>
   )
 }

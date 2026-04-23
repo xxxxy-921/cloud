@@ -52,6 +52,8 @@ export interface WFNodeData {
   formSchema?: unknown
   // process
   executionMode?: "single" | "parallel" | "sequential"
+  // parallel / inclusive gateway
+  gateway_direction?: "fork" | "join"
   // action
   actionId?: number
   // exclusive gateway
@@ -74,6 +76,7 @@ export interface WFNodeData {
 
 export interface WFEdgeData {
   outcome?: string
+  default?: boolean
   isDefault?: boolean
   condition?: GatewayCondition | ConditionGroup
   readonly?: boolean

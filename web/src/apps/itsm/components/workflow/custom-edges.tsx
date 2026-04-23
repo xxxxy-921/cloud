@@ -43,6 +43,7 @@ function defaultNodeData(nodeType: NodeType, label: string): WFNodeData {
     label,
     nodeType,
     ...(nodeType === "wait" || nodeType === "timer" ? { waitMode: nodeType === "timer" ? "timer" as const : "signal" as const } : {}),
+    ...(nodeType === "parallel" || nodeType === "inclusive" ? { gateway_direction: "fork" as const } : {}),
   }
 }
 
@@ -74,7 +75,7 @@ function WorkflowEdgeInner({
 
   const edgeData = data as WFEdgeData | undefined
   const outcome = edgeData?.outcome
-  const isDefault = edgeData?.isDefault
+  const isDefault = edgeData?.default ?? edgeData?.isDefault
   const condition = edgeData?.condition
   const condText = conditionSummary(condition)
 
@@ -123,7 +124,7 @@ function WorkflowEdgeInner({
         targetHandle: targetHandleId,
         type: "workflow",
         markerEnd: { type: MarkerType.ArrowClosed },
-        data: { outcome: "", isDefault: false } satisfies WFEdgeData as Record<string, unknown>,
+        data: { outcome: "", default: false } satisfies WFEdgeData as Record<string, unknown>,
       }
       return [...rest, firstEdge, secondEdge]
     })

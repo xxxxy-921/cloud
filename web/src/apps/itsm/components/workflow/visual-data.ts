@@ -7,11 +7,11 @@ export type WorkflowNodeGroup = {
 }
 
 export const WORKFLOW_NODE_GROUPS: WorkflowNodeGroup[] = [
-  { label: "workflow.group.events", types: ["start", "end", "timer", "signal"] },
   { label: "workflow.group.human", types: ["form", "process"] },
   { label: "workflow.group.automation", types: ["action", "script", "notify"] },
   { label: "workflow.group.control", types: ["exclusive", "parallel", "inclusive"] },
-  { label: "workflow.group.composite", types: ["subprocess", "wait"] },
+  { label: "workflow.group.composite", types: ["wait", "subprocess"] },
+  { label: "workflow.group.events", types: ["end"] },
 ]
 
 export function getNodeAccent(nodeType?: NodeType): string {

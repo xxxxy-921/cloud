@@ -50,6 +50,7 @@ import { SmartServiceConfig } from "../../../components/smart-service-config"
 import { ServiceKnowledgeCard } from "../../../components/service-knowledge-card"
 import { FormDesigner } from "../../../components/form-engine"
 import type { FormSchema } from "../../../components/form-engine"
+import { ClassicWorkflowWorkbench } from "./classic-workflow-workbench"
 
 const WorkflowPreview = lazy(() => import("./workflow-preview"))
 
@@ -733,6 +734,16 @@ export function Component() {
 
   if (!service) {
     return <div className="flex h-96 items-center justify-center text-muted-foreground">Not found</div>
+  }
+
+  if (service.engineType === "classic") {
+    return (
+      <ClassicWorkflowWorkbench
+        service={service}
+        catalogs={catalogs ?? []}
+        slaTemplates={slaTemplates ?? []}
+      />
+    )
   }
 
   const workflowSection = (
