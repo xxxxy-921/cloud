@@ -46,15 +46,22 @@ type bddContext struct {
 	departments map[string]*org.Department // key = department code
 
 	// Ticket lifecycle (populated by When steps, asserted by Then steps)
-	collaborationSpec string
-	service           *ServiceDefinition
-	priority          *Priority
-	ticket            *Ticket
-	tickets           map[string]*Ticket        // multi-ticket scenarios, key = alias
-	fallbackUserID    uint                      // fallback assignee for participant validation scenarios
-	dialogState       dialogTestState           // dialog validation test state
-	actionReceiver    *LocalActionReceiver      // action HTTP test receiver (nil if not needed)
-	serviceActions    map[string]*ServiceAction // key = action code
+	collaborationSpec   string
+	service             *ServiceDefinition
+	priority            *Priority
+	ticket              *Ticket
+	tickets             map[string]*Ticket // multi-ticket scenarios, key = alias
+	fallbackUserID      uint               // fallback assignee for participant validation scenarios
+	slaAssuranceAgentID uint
+	toolCalls           []bddToolCall
+	dialogState         dialogTestState           // dialog validation test state
+	actionReceiver      *LocalActionReceiver      // action HTTP test receiver (nil if not needed)
+	serviceActions      map[string]*ServiceAction // key = action code
+}
+
+type bddToolCall struct {
+	Name      string
+	Arguments string
 }
 
 func newBDDContext() *bddContext {
@@ -85,6 +92,8 @@ func (bc *bddContext) reset() {
 	bc.departments = make(map[string]*org.Department)
 	bc.tickets = make(map[string]*Ticket)
 	bc.fallbackUserID = 0
+	bc.slaAssuranceAgentID = 0
+	bc.toolCalls = nil
 	bc.dialogState = dialogTestState{}
 	bc.serviceActions = make(map[string]*ServiceAction)
 	if bc.actionReceiver != nil {
@@ -149,7 +158,7 @@ func (bc *bddContext) reset() {
 	}
 
 	// Build SmartEngine with test dependencies.
-	executor := &testDecisionExecutor{db: db, llmCfg: bc.llmCfg}
+	executor := &testDecisionExecutor{db: db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall}
 	userProvider := &testUserProvider{db: db}
 	bc.smartEngine = engine.NewSmartEngine(executor, nil, userProvider, resolver, submitter, &bddConfigProvider{bc: bc})
 }
@@ -386,8 +395,9 @@ var _ engine.TaskSubmitter = (*syncActionSubmitter)(nil)
 // testDecisionExecutor implements app.AIDecisionExecutor for BDD tests.
 // Reads Agent record from DB, combines with LLM config from env, and runs the ReAct loop.
 type testDecisionExecutor struct {
-	db     *gorm.DB
-	llmCfg llmConfig
+	db             *gorm.DB
+	llmCfg         llmConfig
+	recordToolCall func(name string, args json.RawMessage)
 }
 
 func (e *testDecisionExecutor) Execute(ctx context.Context, agentID uint, req app.AIDecisionRequest) (*app.AIDecisionResponse, error) {
@@ -476,6 +486,9 @@ func (e *testDecisionExecutor) Execute(ctx context.Context, agentID uint, req ap
 
 		// Execute tool calls via the provided handler.
 		for _, tc := range resp.ToolCalls {
+			if e.recordToolCall != nil {
+				e.recordToolCall(tc.Name, json.RawMessage(tc.Arguments))
+			}
 			result, err := req.ToolHandler(tc.Name, json.RawMessage(tc.Arguments))
 			var content string
 			if err != nil {
@@ -495,6 +508,19 @@ func (e *testDecisionExecutor) Execute(ctx context.Context, agentID uint, req ap
 }
 
 var _ app.AIDecisionExecutor = (*testDecisionExecutor)(nil)
+
+func (bc *bddContext) recordToolCall(name string, args json.RawMessage) {
+	bc.toolCalls = append(bc.toolCalls, bddToolCall{Name: name, Arguments: string(args)})
+}
+
+func (bc *bddContext) hasToolCall(name string) bool {
+	for _, call := range bc.toolCalls {
+		if call.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
 // testUserProvider implements engine.UserProvider for BDD tests.
 // Queries all active users with their position/department info from the BDD in-memory DB.
@@ -552,6 +578,10 @@ func (p *bddConfigProvider) DecisionAgentID() uint {
 		return *p.bc.service.AgentID
 	}
 	return 0
+}
+
+func (p *bddConfigProvider) SLAAssuranceAgentID() uint {
+	return p.bc.slaAssuranceAgentID
 }
 
 func (p *bddConfigProvider) AuditLevel() string {

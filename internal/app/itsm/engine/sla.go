@@ -262,7 +262,7 @@ func runSLAAssuranceAgent(ctx context.Context, db *gorm.DB, t *ticketModel, rule
 		UserMessage:  buildSLAAssuranceUserMessage(t, rule, triggerType),
 		Tools:        slaAssuranceToolDefs(),
 		ToolHandler:  toolHandler,
-		MaxTurns:     4,
+		MaxTurns:     8,
 	})
 	if err != nil {
 		return err
@@ -408,7 +408,7 @@ func buildSLAAssuranceUserMessage(t *ticketModel, rule *escalationRuleModel, tri
 		"title":        t.Title,
 		"trigger_type": triggerType,
 		"matched_rule": slaRulePayload(rule),
-		"instruction":  "请读取当前工单上下文和已命中规则；如规则允许，调用 sla.trigger_escalation 触发升级动作。",
+		"instruction":  "请严格按顺序处理：先调用 sla.risk_queue 确认候选队列，再调用 sla.ticket_context 读取当前工单上下文，然后调用 sla.escalation_rules 读取已命中规则；规则允许时必须调用 sla.trigger_escalation 触发升级动作。",
 	}
 	raw, _ := json.Marshal(payload)
 	return string(raw)

@@ -83,4 +83,5 @@ func initializeScenario(sc *godog.ScenarioContext) {
 	registerE2EDialogSteps(sc, bc)
 	registerSessionIsolationSteps(sc, bc)
 	registerKnowledgeRoutingSteps(sc, bc)
+	registerSLAAssuranceSteps(sc, bc)
 }

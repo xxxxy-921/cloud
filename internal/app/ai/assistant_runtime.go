@@ -52,9 +52,6 @@ func (gw *AgentGateway) buildAgentRuntimeContext(ctx context.Context, agent *Age
 	if agent.Code != nil {
 		agentCode = strings.TrimSpace(*agent.Code)
 	}
-	if agentCode == "" {
-		return ""
-	}
 	var blocks []string
 	for _, provider := range gw.runtimeContextProviders {
 		block, err := provider.BuildAgentRuntimeContext(ctx, agentCode, session.ID, session.UserID)

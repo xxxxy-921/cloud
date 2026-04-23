@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -223,6 +224,13 @@ METIS_DEV_AI_API_KEY=sk-dev
 	}
 	if adminCount != 1 {
 		t.Fatalf("admin count = %d, want 1", adminCount)
+	}
+	var fallbackCfg model.SystemConfig
+	if err := db.Where("\"key\" = ?", "itsm.smart_ticket.guard.fallback_assignee").First(&fallbackCfg).Error; err != nil {
+		t.Fatalf("load ITSM fallback assignee config: %v", err)
+	}
+	if fallbackCfg.Value != strconv.FormatUint(uint64(admin.ID), 10) {
+		t.Fatalf("fallback assignee = %q, want admin id %d", fallbackCfg.Value, admin.ID)
 	}
 
 	for _, key := range []string{

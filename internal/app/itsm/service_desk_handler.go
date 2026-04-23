@@ -17,18 +17,20 @@ import (
 )
 
 type ServiceDeskHandler struct {
-	db         *gorm.DB
-	stateStore *tools.SessionStateStore
-	operator   *tools.Operator
-	sessionSvc *ai.SessionService
+	db             *gorm.DB
+	configProvider *EngineConfigService
+	stateStore     *tools.SessionStateStore
+	operator       *tools.Operator
+	sessionSvc     *ai.SessionService
 }
 
 func NewServiceDeskHandler(i do.Injector) (*ServiceDeskHandler, error) {
 	db := do.MustInvoke[*database.DB](i)
+	configProvider := do.MustInvoke[*EngineConfigService](i)
 	stateStore := do.MustInvoke[*tools.SessionStateStore](i)
 	operator := do.MustInvoke[*tools.Operator](i)
 	sessionSvc := do.MustInvoke[*ai.SessionService](i)
-	return &ServiceDeskHandler{db: db.DB, stateStore: stateStore, operator: operator, sessionSvc: sessionSvc}, nil
+	return &ServiceDeskHandler{db: db.DB, configProvider: configProvider, stateStore: stateStore, operator: operator, sessionSvc: sessionSvc}, nil
 }
 
 func (h *ServiceDeskHandler) verifyServiceDeskSession(c *gin.Context) (uint, uint, bool) {
@@ -39,12 +41,16 @@ func (h *ServiceDeskHandler) verifyServiceDeskSession(c *gin.Context) (uint, uin
 	}
 
 	userID := c.GetUint("userId")
+	intakeAgentID := h.configProvider.IntakeAgentID()
+	if intakeAgentID == 0 {
+		handler.Fail(c, http.StatusBadRequest, "服务受理岗未上岗")
+		return 0, 0, false
+	}
 	var row struct {
 		ID uint
 	}
 	if err := h.db.Table("ai_agent_sessions AS s").
-		Joins("JOIN ai_agents AS a ON a.id = s.agent_id").
-		Where("s.id = ? AND s.user_id = ? AND a.code = ?", sid, userID, "itsm.servicedesk").
+		Where("s.id = ? AND s.user_id = ? AND s.agent_id = ?", sid, userID, intakeAgentID).
 		Select("s.id").
 		First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

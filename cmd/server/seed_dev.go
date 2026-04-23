@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -27,6 +28,8 @@ const (
 	seedDevAdminUsername = "admin"
 	seedDevAdminPassword = "password"
 	seedDevAdminEmail    = "admin@local.dev"
+
+	seedDevITSMFallbackAssigneeKey = "itsm.smart_ticket.guard.fallback_assignee"
 )
 
 func runSeedDevCommand(args []string) {
@@ -146,12 +149,46 @@ func runSeedDev(configPath, envPath string) error {
 	if err := seed.AssignInstallAdminOrgIdentity(db.DB, seedDevAdminUsername); err != nil {
 		return fmt.Errorf("assign dev admin org identity: %w", err)
 	}
+	if err := seedDevDefaultITSMFallbackAssignee(db.DB); err != nil {
+		return fmt.Errorf("seed dev ITSM fallback assignee: %w", err)
+	}
 
 	if err := runDevBootstrap(db.DB, cfg, envPath); err != nil {
 		return fmt.Errorf("dev AI bootstrap: %w", err)
 	}
 	if err := seed.SetInstalled(db.DB); err != nil {
 		return fmt.Errorf("mark installed: %w", err)
+	}
+	return nil
+}
+
+func seedDevDefaultITSMFallbackAssignee(db *gorm.DB) error {
+	var admin model.User
+	if err := db.Where("username = ? AND is_active = ?", seedDevAdminUsername, true).First(&admin).Error; err != nil {
+		return fmt.Errorf("load dev admin: %w", err)
+	}
+
+	var cfg model.SystemConfig
+	err := db.Where("\"key\" = ?", seedDevITSMFallbackAssigneeKey).First(&cfg).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("load %s: %w", seedDevITSMFallbackAssigneeKey, err)
+		}
+		cfg = model.SystemConfig{
+			Key:   seedDevITSMFallbackAssigneeKey,
+			Value: strconv.FormatUint(uint64(admin.ID), 10),
+		}
+		if err := db.Create(&cfg).Error; err != nil {
+			return fmt.Errorf("create %s: %w", seedDevITSMFallbackAssigneeKey, err)
+		}
+		return nil
+	}
+	if cfg.Value != "" && cfg.Value != "0" {
+		return nil
+	}
+	cfg.Value = strconv.FormatUint(uint64(admin.ID), 10)
+	if err := db.Save(&cfg).Error; err != nil {
+		return fmt.Errorf("update %s: %w", seedDevITSMFallbackAssigneeKey, err)
 	}
 	return nil
 }

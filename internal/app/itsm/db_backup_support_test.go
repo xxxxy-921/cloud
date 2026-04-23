@@ -240,7 +240,7 @@ func publishDbBackupSmartService(bc *bddContext) error {
 	resolver := engine.NewParticipantResolver(orgSvc)
 	bc.engine = engine.NewClassicEngine(resolver, &noopSubmitter{}, nil)
 	submitter := &syncActionSubmitter{db: bc.db, classicEngine: bc.engine}
-	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg}
+	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall}
 	userProvider := &testUserProvider{db: bc.db}
 	bc.smartEngine = engine.NewSmartEngine(executor, nil, userProvider, resolver, submitter, &bddConfigProvider{bc: bc})
 	bc.smartEngine.SetActionExecutor(engine.NewActionExecutor(bc.db))

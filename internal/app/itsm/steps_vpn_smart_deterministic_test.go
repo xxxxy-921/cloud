@@ -28,8 +28,8 @@ func registerDeterministicSteps(sc *godog.ScenarioContext, bc *bddContext) {
 	sc.When(`^执行确定性 complete 决策$`, bc.whenDeterministicCompletePlan)
 	sc.When(`^工单 AI 失败次数设为上限并尝试决策$`, bc.whenAICircuitBreaker)
 	sc.When(`^取消智能工单，原因为 "([^"]*)"$`, bc.whenCancelSmartTicket)
-		sc.When(`^创建确定性人工处置决策 type="([^"]*)"$`, bc.whenCreatePendingProcessDecision)
-		sc.When(`^管理员取消当前人工处置决策$`, bc.whenAdminRejectsDecision)
+	sc.When(`^创建确定性人工处置决策 type="([^"]*)"$`, bc.whenCreatePendingProcessDecision)
+	sc.When(`^管理员取消当前人工处置决策$`, bc.whenAdminRejectsDecision)
 
 	// Then
 	sc.Then(`^最新活动类型为 "([^"]*)" 且状态为 "([^"]*)"$`, bc.thenLatestActivityTypeAndStatus)
@@ -126,7 +126,7 @@ func (bc *bddContext) givenFallbackAssigneeInactive() error {
 	bc.fallbackUserID = user.ID
 	configProvider := &testConfigProvider{fallbackAssigneeID: user.ID}
 
-	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg}
+	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall}
 	userProvider := &testUserProvider{db: bc.db}
 	orgSvc := &testOrgService{db: bc.db}
 	resolver := engine.NewParticipantResolver(orgSvc)
@@ -273,9 +273,9 @@ func (bc *bddContext) whenCreatePendingProcessDecision(actType string) error {
 	now := time.Now()
 	activity := &TicketActivity{
 		TicketID:     bc.ticket.ID,
-			Name:         "AI 决策待人工处置",
-			ActivityType: actType,
-			Status:       engine.ActivityPending,
+		Name:         "AI 决策待人工处置",
+		ActivityType: actType,
+		Status:       engine.ActivityPending,
 		AIReasoning:  "确定性测试：低置信度决策",
 		AIConfidence: 0.5,
 		StartedAt:    &now,
@@ -300,7 +300,7 @@ func (bc *bddContext) whenAdminRejectsDecision() error {
 	now := time.Now()
 	if err := bc.db.Model(&TicketActivity{}).Where("id = ?", activity.ID).
 		Updates(map[string]any{
-				"status":      engine.ActivityCancelled,
+			"status":      engine.ActivityCancelled,
 			"finished_at": now,
 		}).Error; err != nil {
 		return fmt.Errorf("reject activity: %w", err)
@@ -309,8 +309,8 @@ func (bc *bddContext) whenAdminRejectsDecision() error {
 	return bc.db.Create(&TicketTimeline{
 		TicketID:   bc.ticket.ID,
 		ActivityID: &activity.ID,
-			EventType:  "ai_decision_cancelled",
-			Message:    "管理员取消了 AI 人工处置任务",
+		EventType:  "ai_decision_cancelled",
+		Message:    "管理员取消了 AI 人工处置任务",
 	}).Error
 }
 

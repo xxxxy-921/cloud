@@ -62,10 +62,14 @@ func (r testToolRegistry) Execute(ctx context.Context, toolName string, userID u
 }
 
 type testRuntimeContextProvider struct {
-	block string
+	block       string
+	acceptBlank bool
 }
 
 func (p testRuntimeContextProvider) BuildAgentRuntimeContext(ctx context.Context, agentCode string, sessionID, userID uint) (string, error) {
+	if p.acceptBlank && agentCode == "" && sessionID == 99 && userID == 7 {
+		return p.block, nil
+	}
 	if agentCode == "itsm.servicedesk" && sessionID == 99 && userID == 7 {
 		return p.block, nil
 	}
@@ -192,6 +196,27 @@ func TestAssistantRuntimeAssembly_AppendsRuntimeContextProviderBlock(t *testing.
 	}
 	if !strings.Contains(runtime.SystemPrompt, "## Runtime Context") || !strings.Contains(runtime.SystemPrompt, "loaded_service_id: 5") {
 		t.Fatalf("expected runtime context block in prompt, got %q", runtime.SystemPrompt)
+	}
+}
+
+func TestAssistantRuntimeAssembly_AppendsRuntimeContextForCodeLessAgent(t *testing.T) {
+	db := setupTestDB(t)
+	gw := newGatewayForTest(t, db, nil)
+	gw.runtimeContextProviders = []app.AgentRuntimeContextProvider{
+		testRuntimeContextProvider{block: "## Runtime Context\nloaded_service_id: 8", acceptBlank: true},
+	}
+
+	modelID := uint(1)
+	agent := &Agent{Name: "Custom Intake", Type: AgentTypeAssistant, ModelID: &modelID, CreatedBy: 1}
+	_ = gw.agentSvc.Create(agent)
+	session := &AgentSession{BaseModel: model.BaseModel{ID: 99}, UserID: 7}
+
+	runtime, err := gw.buildAssistantRuntime(context.Background(), agent, session, []ExecuteMessage{{Role: MessageRoleUser, Content: "继续"}}, "base")
+	if err != nil {
+		t.Fatalf("build runtime: %v", err)
+	}
+	if !strings.Contains(runtime.SystemPrompt, "loaded_service_id: 8") {
+		t.Fatalf("expected runtime context block for codeless agent, got %q", runtime.SystemPrompt)
 	}
 }
 

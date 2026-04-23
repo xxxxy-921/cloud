@@ -39,8 +39,23 @@ func (a *ITSMApp) GetToolRegistry() any {
 
 // BuildAgentRuntimeContext implements app.AgentRuntimeContextProvider for ITSM
 // service desk sessions.
-func (a *ITSMApp) BuildAgentRuntimeContext(ctx context.Context, agentCode string, sessionID, userID uint) (string, error) {
-	if agentCode != "itsm.servicedesk" || sessionID == 0 {
+func (a *ITSMApp) BuildAgentRuntimeContext(ctx context.Context, _ string, sessionID, userID uint) (string, error) {
+	if sessionID == 0 {
+		return "", nil
+	}
+	configProvider := do.MustInvoke[*EngineConfigService](a.injector)
+	intakeAgentID := configProvider.IntakeAgentID()
+	if intakeAgentID == 0 {
+		return "", nil
+	}
+	db := do.MustInvoke[*database.DB](a.injector)
+	var row struct {
+		ID uint
+	}
+	if err := db.DB.Table("ai_agent_sessions").
+		Where("id = ? AND user_id = ? AND agent_id = ?", sessionID, userID, intakeAgentID).
+		Select("id").
+		First(&row).Error; err != nil {
 		return "", nil
 	}
 	store := do.MustInvoke[*tools.SessionStateStore](a.injector)
