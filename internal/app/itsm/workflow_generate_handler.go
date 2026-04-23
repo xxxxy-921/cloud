@@ -30,7 +30,7 @@ func (h *WorkflowGenerateHandler) Generate(c *gin.Context) {
 	resp, err := h.svc.Generate(c.Request.Context(), &req)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, ErrGeneratorNotConfigured) || errors.Is(err, ErrCollaborationSpecEmpty) {
+		if errors.Is(err, ErrPathEngineNotConfigured) || errors.Is(err, ErrCollaborationSpecEmpty) {
 			status = http.StatusBadRequest
 		}
 		handler.Fail(c, status, err.Error())

@@ -18,12 +18,12 @@ import (
 )
 
 var (
-	ErrGeneratorNotConfigured = errors.New("路径引擎未配置模型，请前往智能工单引擎配置页面设置")
-	ErrCollaborationSpecEmpty = errors.New("协作规范不能为空")
-	ErrWorkflowGeneration     = errors.New("协作路径生成失败")
+	ErrPathEngineNotConfigured = errors.New("路径引擎未配置模型，请前往智能工单引擎配置页面设置")
+	ErrCollaborationSpecEmpty  = errors.New("协作规范不能为空")
+	ErrWorkflowGeneration      = errors.New("协作路径生成失败")
 )
 
-// WorkflowGenerateService handles one-shot LLM calls to parse collaboration specs into workflow JSON.
+// WorkflowGenerateService handles one-shot path engine calls that turn collaboration specs into workflow JSON.
 type WorkflowGenerateService struct {
 	agentSvc      *ai.AgentService
 	modelRepo     *ai.ModelRepo
@@ -59,7 +59,7 @@ type GenerateResponse struct {
 	HealthCheck  *ServiceHealthCheck        `json:"healthCheck,omitempty"`
 }
 
-// Generate parses a collaboration spec into a validated workflow JSON via the path engine.
+// Generate turns a collaboration spec into validated workflow JSON via the path engine.
 func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
 	if strings.TrimSpace(req.CollaborationSpec) == "" {
 		return nil, ErrCollaborationSpecEmpty
@@ -68,10 +68,10 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 	// 1. Load path builder agent
 	agent, err := s.agentSvc.GetByCode(smartTicketPathBuilderAgentKey)
 	if err != nil {
-		return nil, ErrGeneratorNotConfigured
+		return nil, ErrPathEngineNotConfigured
 	}
 	if agent.ModelID == nil || *agent.ModelID == 0 {
-		return nil, ErrGeneratorNotConfigured
+		return nil, ErrPathEngineNotConfigured
 	}
 
 	// 2. Load model with provider
