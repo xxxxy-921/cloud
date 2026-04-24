@@ -15,6 +15,51 @@ function timeout(ms: number) {
 }
 
 describe("createStreamFromSSE", () => {
+  test("paces UI chunks when multiple SSE events arrive in one network chunk", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(encoder.encode([
+          `data: ${JSON.stringify({ id: "text-1", type: "text-start" })}`,
+          "",
+          `data: ${JSON.stringify({ delta: "你", id: "text-1", type: "text-delta" })}`,
+          "",
+          `data: ${JSON.stringify({ delta: "好", id: "text-1", type: "text-delta" })}`,
+          "",
+          `data: ${JSON.stringify({ id: "text-1", type: "text-end" })}`,
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n")))
+        controller.close()
+      },
+    })
+    const reader = createStreamFromSSE(new Response(body)).getReader()
+
+    const start = await reader.read()
+    expect(start.value?.type).toBe("text-start")
+
+    const firstDeltaRead = reader.read()
+    expect(await Promise.race([firstDeltaRead, timeout(5)])).toBe("timeout")
+
+    const firstDelta = await firstDeltaRead
+    expect(firstDelta.value).toMatchObject({
+      type: "text-delta",
+      delta: "你",
+      id: "text-1",
+    })
+
+    const secondDelta = await reader.read()
+    const textEnd = await reader.read()
+    await reader.cancel()
+
+    expect(secondDelta.value).toMatchObject({
+      type: "text-delta",
+      delta: "好",
+      id: "text-1",
+    })
+    expect(textEnd.value?.type).toBe("text-end")
+  })
+
   test("emits the first delta before the upstream SSE stream finishes", async () => {
     let releaseSecondChunk: (() => void) | undefined
     const secondChunkReleased = new Promise<void>((resolve) => {

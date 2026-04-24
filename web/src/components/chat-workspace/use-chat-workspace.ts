@@ -7,13 +7,12 @@ import { toast } from "sonner"
 import { sessionApi, type AgentSession, type SessionMessage } from "@/lib/api"
 import {
   createOptimisticUserMessage,
-  hasUnmatchedPendingUserMessages,
-  mergeTimelineMessages,
   sessionMessagesToUIMessages,
   useAiChat,
   type UseAiChatOptions,
 } from "./use-ai-chat"
 import type { ChatComposerImage } from "./composer"
+import { hasUnmatchedPendingUserMessages, mergeTimelineMessages } from "./message-merge"
 
 function previewImage(file: File) {
   return new Promise<string>((resolve, reject) => {

@@ -67,8 +67,22 @@ function messageCoverageKeys(message: UIMessage) {
   return keys
 }
 
+function messageIdentityKeys(message: UIMessage) {
+  const meta = message.metadata as {
+    originalRole?: string
+    tool_call_id?: string
+  } | undefined
+
+  if (meta?.originalRole === "tool_call" || meta?.originalRole === "tool_result") {
+    const storedKey = storedToolIdentity(meta, String(message.id))
+    return storedKey ? [storedKey] : [`stored-tool:${message.id}`]
+  }
+
+  return messageCoverageKeys(message)
+}
+
 function addMessageKeys(keys: Set<string>, message: UIMessage) {
-  for (const key of messageCoverageKeys(message)) {
+  for (const key of messageIdentityKeys(message)) {
     keys.add(key)
   }
 }

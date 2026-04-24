@@ -5,7 +5,6 @@ import { Chat, useChat, type UseChatHelpers } from "@ai-sdk/react"
 import type { ChatTransport, UIMessage } from "ai"
 import { sessionApi, type SessionMessage } from "@/lib/api"
 import { TOKEN_KEY } from "@/lib/constants"
-import { hasUnmatchedPendingUserMessages, mergeTimelineMessages } from "./message-merge"
 import { createStreamFromSSE } from "./sse-stream"
 
 export function sessionMessagesToUIMessages(messages: SessionMessage[]): UIMessage[] {
