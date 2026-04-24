@@ -40,7 +40,12 @@ func TestUIMessageStreamEncoder_TextDelta(t *testing.T) {
 	assertJSONField(t, lines[3], "type", "text-delta")
 	assertJSONField(t, lines[3], "delta", "world")
 	assertJSONField(t, lines[4], "type", "text-end")
-	assertJSONField(t, lines[5], "type", "finish")
+	assertJSONField(t, lines[5], "type", "message-metadata")
+	assertNestedJSONField(t, lines[5], "messageMetadata", "usage", map[string]any{
+		"promptTokens":     float64(10),
+		"completionTokens": float64(20),
+	})
+	assertJSONField(t, lines[6], "type", "finish")
 	if lines[len(lines)-1] != "[DONE]" {
 		t.Errorf("expected last line to be [DONE], got %s", lines[len(lines)-1])
 	}
@@ -84,7 +89,7 @@ func TestUIMessageStreamEncoder_ToolCallAndResult(t *testing.T) {
 	assertJSONField(t, lines[5], "output", "result")
 }
 
-func assertNestedJSONField(t *testing.T, line, nestedKey, key, expected string) {
+func assertNestedJSONField(t *testing.T, line, nestedKey, key string, expected any) {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal([]byte(line), &m); err != nil {
@@ -98,9 +103,18 @@ func assertNestedJSONField(t *testing.T, line, nestedKey, key, expected string) 
 	if !ok {
 		t.Fatalf("missing key %q in nested %q of %s", key, nestedKey, line)
 	}
-	if got := v.(string); got != expected {
-		t.Errorf("%s.%s: expected %q, got %q", nestedKey, key, expected, got)
+	if gotJSON, expectedJSON := canonicalJSON(t, v), canonicalJSON(t, expected); gotJSON != expectedJSON {
+		t.Errorf("%s.%s: expected %s, got %s", nestedKey, key, expectedJSON, gotJSON)
 	}
+}
+
+func canonicalJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal value: %v", err)
+	}
+	return string(data)
 }
 
 func TestUIMessageStreamEncoder_PlanAndSteps(t *testing.T) {

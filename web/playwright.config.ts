@@ -7,17 +7,12 @@ export default defineConfig({
     timeout: 5_000,
   },
   use: {
-    baseURL: "http://127.0.0.1:3100",
+    baseURL: "http://localhost:3000",
     headless: false,
     launchOptions: {
       slowMo: 120,
     },
     trace: "on-first-retry",
-  },
-  webServer: {
-    command: "bun vite --host 127.0.0.1 --port 3100",
-    url: "http://127.0.0.1:3100",
-    reuseExistingServer: !process.env.CI,
   },
   projects: [
     {

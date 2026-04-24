@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { useChat, Chat, type UseChatHelpers } from "@ai-sdk/react"
 import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk"
 import { DefaultChatTransport, type UIMessage } from "ai"
@@ -35,6 +35,11 @@ export function useServiceDeskChat(
   initialSessionMessages?: SessionMessage[],
   options?: UseServiceDeskChatOptions,
 ) {
+  const optionsRef = useRef(options)
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
+
   const initialSignature = useMemo(
     () => sessionMessagesSignature(initialSessionMessages),
     [initialSessionMessages],
@@ -59,12 +64,12 @@ export function useServiceDeskChat(
       id: String(sessionId),
       messages: initialMessages,
       transport,
-      onFinish: options?.onFinish,
-      onError: options?.onError,
+      onFinish: () => optionsRef.current?.onFinish?.(),
+      onError: (error) => optionsRef.current?.onError?.(error),
     })
     ;(chat as unknown as { state: { snapshot: typeof fastSnapshot } }).state.snapshot = fastSnapshot
     return chat
-  }, [initialMessages, options?.onError, options?.onFinish, sessionId, transport])
+  }, [initialMessages, sessionId, transport])
 
   const chat = useChat({
     chat: chatInstance,
