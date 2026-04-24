@@ -153,6 +153,7 @@ type sendMessageReq struct {
 
 type chatReq struct {
 	Messages []chatMessage `json:"messages"`
+	Trigger  string        `json:"trigger"`
 }
 
 type chatMessage struct {
@@ -259,10 +260,13 @@ func (h *SessionHandler) Chat(c *gin.Context) {
 		handler.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	isRegenerate := req.Trigger == "regenerate-message"
 	content, images := latestUserInput(req.Messages)
-	if content == "" && len(images) == 0 {
-		handler.Fail(c, http.StatusBadRequest, "content or images required")
-		return
+	if !isRegenerate {
+		if content == "" && len(images) == 0 {
+			handler.Fail(c, http.StatusBadRequest, "content or images required")
+			return
+		}
 	}
 
 	session, err := h.svc.GetOwned(uint(sid), userID)
@@ -275,9 +279,11 @@ func (h *SessionHandler) Chat(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.svc.StoreMessage(session.ID, MessageRoleUser, content, imagesMetadata(images), 0); err != nil {
-		handler.Fail(c, http.StatusInternalServerError, err.Error())
-		return
+	if !isRegenerate {
+		if _, err := h.svc.StoreMessage(session.ID, MessageRoleUser, content, imagesMetadata(images), 0); err != nil {
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	if err := h.svc.UpdateStatus(session.ID, SessionStatusRunning); err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
