@@ -49,7 +49,9 @@ func (a *LicenseApp) Providers(i do.Injector) {
 	do.Provide(i, product.NewPlanService)
 	do.Provide(i, licensee.NewLicenseeService)
 	do.Provide(i, certificate.NewLicenseService)
-	do.ProvideValue[product.LicenseOperations](i, do.MustInvoke[*certificate.LicenseService](i))
+	do.Provide(i, func(i do.Injector) (product.LicenseOperations, error) {
+		return do.MustInvoke[*certificate.LicenseService](i), nil
+	})
 	do.Provide(i, product.NewProductHandler)
 	do.Provide(i, product.NewPlanHandler)
 	do.Provide(i, licensee.NewLicenseeHandler)
