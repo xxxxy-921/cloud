@@ -56,7 +56,7 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		} else if UnimplementedNodeTypes[n.Type] {
 			errs = append(errs, ValidationError{
 				NodeID:  n.ID,
-				Level:   "warning",
+				Level:   "error",
 				Message: fmt.Sprintf("节点 %s 类型 %s 已注册但执行逻辑尚未实现，当前版本不支持运行", n.ID, n.Type),
 			})
 		}
@@ -266,16 +266,120 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 	// 8. Script node constraints (⑤a itsm-script-task)
 	for i := range def.Nodes {
 		n := &def.Nodes[i]
-		if n.Type != NodeScript {
-			continue
-		}
-		nodeOutEdges := outEdges[n.ID]
-		if len(nodeOutEdges) != 1 {
-			errs = append(errs, ValidationError{
-				NodeID:  n.ID,
-				Level:   "error",
-				Message: fmt.Sprintf("脚本节点 %s 必须有且仅有一条出边", n.ID),
-			})
+		switch n.Type {
+		case NodeAction:
+			nd, err := ParseNodeData(n.Data)
+			if err != nil {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("动作节点 %s 数据解析失败: %v", n.ID, err),
+				})
+				continue
+			}
+			if nd.ActionID == 0 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("动作节点 %s 必须配置 action_id", n.ID),
+				})
+			}
+			if len(outEdges[n.ID]) == 0 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("动作节点 %s 至少需要一条出边", n.ID),
+				})
+			}
+		case NodeNotify:
+			if len(outEdges[n.ID]) != 1 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("通知节点 %s 必须有且仅有一条出边", n.ID),
+				})
+			}
+			nd, err := ParseNodeData(n.Data)
+			if err != nil {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("通知节点 %s 数据解析失败: %v", n.ID, err),
+				})
+				continue
+			}
+			if nd.ChannelID == 0 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "warning",
+					Message: fmt.Sprintf("通知节点 %s 未配置 channel_id，将只记录流程时间线", n.ID),
+				})
+			}
+		case NodeWait:
+			nd, err := ParseNodeData(n.Data)
+			if err != nil {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("等待节点 %s 数据解析失败: %v", n.ID, err),
+				})
+				continue
+			}
+			if nd.WaitMode != "signal" && nd.WaitMode != "timer" {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("等待节点 %s 必须配置 wait_mode（signal 或 timer）", n.ID),
+				})
+			}
+			if nd.WaitMode == "timer" && nd.Duration == "" {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("等待节点 %s 使用 timer 模式时必须配置 duration", n.ID),
+				})
+			}
+			if len(outEdges[n.ID]) == 0 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("等待节点 %s 至少需要一条出边", n.ID),
+				})
+			}
+		case NodeScript:
+			nodeOutEdges := outEdges[n.ID]
+			if len(nodeOutEdges) != 1 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("脚本节点 %s 必须有且仅有一条出边", n.ID),
+				})
+			}
+			nd, err := ParseNodeData(n.Data)
+			if err != nil {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("脚本节点 %s 数据解析失败: %v", n.ID, err),
+				})
+				continue
+			}
+			if len(nd.Assignments) == 0 {
+				errs = append(errs, ValidationError{
+					NodeID:  n.ID,
+					Level:   "error",
+					Message: fmt.Sprintf("脚本节点 %s 必须配置 assignments", n.ID),
+				})
+			}
+			for j, assignment := range nd.Assignments {
+				if assignment.Variable == "" || assignment.Expression == "" {
+					errs = append(errs, ValidationError{
+						NodeID:  n.ID,
+						Level:   "error",
+						Message: fmt.Sprintf("脚本节点 %s 的第 %d 个 assignment 必须同时配置 variable 和 expression", n.ID, j+1),
+					})
+				}
+			}
 		}
 	}
 

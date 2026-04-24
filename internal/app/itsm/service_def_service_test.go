@@ -97,6 +97,34 @@ func TestServiceDefServiceCreate_RejectsAgentIDOnClassicService(t *testing.T) {
 	}
 }
 
+func TestServiceDefServiceCreate_RejectsInvalidClassicWorkflow(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+	catSvc := newCatalogServiceForTest(t, db)
+
+	root, _ := catSvc.Create("Root", "root", "", "", nil, 10)
+	_, err := svc.Create(&ServiceDefinition{
+		Name:       "Classic",
+		Code:       "classic-invalid-workflow",
+		CatalogID:  root.ID,
+		EngineType: "classic",
+		WorkflowJSON: JSONField(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"action","type":"action","data":{"label":"动作"}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"action","data":{}},
+				{"id":"e2","source":"action","target":"end","data":{}}
+			]
+		}`),
+	})
+	if !errors.Is(err, ErrWorkflowValidation) {
+		t.Fatalf("expected ErrWorkflowValidation, got %v", err)
+	}
+}
+
 func TestServiceDefServiceUpdate_RejectsInactiveAgent(t *testing.T) {
 	db := newTestDB(t)
 	svc := newServiceDefServiceForTest(t, db)

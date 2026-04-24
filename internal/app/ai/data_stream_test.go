@@ -32,6 +32,7 @@ func TestUIMessageStreamEncoder_TextDelta(t *testing.T) {
 	if len(lines) < 6 {
 		t.Fatalf("expected at least 6 data lines, got %d: %v", len(lines), lines)
 	}
+	assertAIUIMessageChunkSchemaSubset(t, lines)
 
 	assertJSONField(t, lines[0], "type", "start")
 	assertJSONField(t, lines[1], "type", "text-start")
@@ -40,9 +41,81 @@ func TestUIMessageStreamEncoder_TextDelta(t *testing.T) {
 	assertJSONField(t, lines[3], "type", "text-delta")
 	assertJSONField(t, lines[3], "delta", "world")
 	assertJSONField(t, lines[4], "type", "text-end")
-	assertJSONField(t, lines[5], "type", "finish")
+	assertJSONField(t, lines[5], "type", "message-metadata")
+	assertNestedJSONField(t, lines[5], "messageMetadata", "usage", map[string]any{
+		"promptTokens":     float64(10),
+		"completionTokens": float64(20),
+	})
+	assertJSONField(t, lines[6], "type", "finish")
+	assertJSONMissingField(t, lines[6], "usage")
 	if lines[len(lines)-1] != "[DONE]" {
 		t.Errorf("expected last line to be [DONE], got %s", lines[len(lines)-1])
+	}
+}
+
+func assertAIUIMessageChunkSchemaSubset(t *testing.T, lines []string) {
+	t.Helper()
+	allowed := map[string]map[string]bool{
+		"start":                 {"type": true, "messageId": true},
+		"text-start":            {"type": true, "id": true},
+		"text-delta":            {"type": true, "id": true, "delta": true},
+		"text-end":              {"type": true, "id": true},
+		"reasoning-start":       {"type": true, "id": true},
+		"reasoning-delta":       {"type": true, "id": true, "delta": true},
+		"reasoning-end":         {"type": true, "id": true},
+		"tool-input-available":  {"type": true, "toolCallId": true, "toolName": true, "input": true},
+		"tool-output-available": {"type": true, "toolCallId": true, "output": true},
+		"data-plan":             {"type": true, "data": true},
+		"data-step":             {"type": true, "data": true},
+		"data-ui-surface":       {"type": true, "data": true},
+		"message-metadata":      {"type": true, "messageMetadata": true},
+		"finish":                {"type": true, "finishReason": true},
+		"error":                 {"type": true, "errorText": true},
+	}
+	required := map[string][]string{
+		"start":                 {"messageId"},
+		"text-start":            {"id"},
+		"text-delta":            {"id", "delta"},
+		"text-end":              {"id"},
+		"reasoning-start":       {"id"},
+		"reasoning-delta":       {"id", "delta"},
+		"reasoning-end":         {"id"},
+		"tool-input-available":  {"toolCallId", "toolName", "input"},
+		"tool-output-available": {"toolCallId", "output"},
+		"data-plan":             {"data"},
+		"data-step":             {"data"},
+		"data-ui-surface":       {"data"},
+		"message-metadata":      {"messageMetadata"},
+		"finish":                {"finishReason"},
+		"error":                 {"errorText"},
+	}
+
+	for _, line := range lines {
+		if line == "[DONE]" {
+			continue
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			t.Fatalf("invalid json line %q: %v", line, err)
+		}
+		chunkType, ok := chunk["type"].(string)
+		if !ok || chunkType == "" {
+			t.Fatalf("chunk missing string type: %s", line)
+		}
+		allowedKeys, ok := allowed[chunkType]
+		if !ok {
+			t.Fatalf("unsupported chunk type %q in %s", chunkType, line)
+		}
+		for key := range chunk {
+			if !allowedKeys[key] {
+				t.Fatalf("chunk type %q has schema-incompatible key %q in %s", chunkType, key, line)
+			}
+		}
+		for _, key := range required[chunkType] {
+			if _, ok := chunk[key]; !ok {
+				t.Fatalf("chunk type %q missing required key %q in %s", chunkType, key, line)
+			}
+		}
 	}
 }
 
@@ -84,7 +157,7 @@ func TestUIMessageStreamEncoder_ToolCallAndResult(t *testing.T) {
 	assertJSONField(t, lines[5], "output", "result")
 }
 
-func assertNestedJSONField(t *testing.T, line, nestedKey, key, expected string) {
+func assertNestedJSONField(t *testing.T, line, nestedKey, key string, expected any) {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal([]byte(line), &m); err != nil {
@@ -98,9 +171,18 @@ func assertNestedJSONField(t *testing.T, line, nestedKey, key, expected string) 
 	if !ok {
 		t.Fatalf("missing key %q in nested %q of %s", key, nestedKey, line)
 	}
-	if got := v.(string); got != expected {
-		t.Errorf("%s.%s: expected %q, got %q", nestedKey, key, expected, got)
+	if gotJSON, expectedJSON := canonicalJSON(t, v), canonicalJSON(t, expected); gotJSON != expectedJSON {
+		t.Errorf("%s.%s: expected %s, got %s", nestedKey, key, expectedJSON, gotJSON)
 	}
+}
+
+func canonicalJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal value: %v", err)
+	}
+	return string(data)
 }
 
 func TestUIMessageStreamEncoder_PlanAndSteps(t *testing.T) {
@@ -204,5 +286,16 @@ func assertJSONField(t *testing.T, line, key, expected string) {
 	}
 	if got := v.(string); got != expected {
 		t.Errorf("%s: expected %q, got %q", key, expected, got)
+	}
+}
+
+func assertJSONMissingField(t *testing.T, line, key string) {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("invalid json line %q: %v", line, err)
+	}
+	if _, ok := m[key]; ok {
+		t.Fatalf("expected key %q to be absent in %s", key, line)
 	}
 }

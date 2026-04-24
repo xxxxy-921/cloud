@@ -23,6 +23,7 @@ func TestSeedAI_AddsPoliciesForRegisteredSessionRoutes(t *testing.T) {
 
 	policies := [][]string{
 		{"admin", "/api/v1/ai/sessions/:sid", "PUT"},
+		{"admin", "/api/v1/ai/sessions/:sid/chat", "POST"},
 		{"admin", "/api/v1/ai/sessions/:sid/messages/:mid", "PUT"},
 		{"admin", "/api/v1/ai/sessions/:sid/continue", "POST"},
 	}

@@ -37,6 +37,14 @@ import { type WFNodeData, type WFEdgeData, type NodeType } from "./types"
 import { getNodeAccent } from "./visual-data"
 import { applyDagreLayout } from "./auto-layout"
 import { useUndoRedo } from "./use-undo-redo"
+import {
+  collectDraftIssues,
+  defaultNodeData,
+  defaultWorkflowData,
+  getWorkflowNodeId,
+  normalizeWorkflowData,
+  prepareWorkflowForSave,
+} from "./workflow-contract"
 import "./style.css"
 
 const DEFAULT_VIEWPORT = { x: 96, y: 72, zoom: 0.86 }
@@ -51,102 +59,6 @@ interface WorkflowEditorProps {
   onIntakeFormSchemaChange?: (schema: unknown) => void
   inspectorFallback?: ReactNode
   validationErrors?: Array<{ nodeId?: string; edgeId?: string; message: string }>
-}
-
-let nodeId = 0
-function getNodeId() { return `node_${Date.now()}_${++nodeId}` }
-
-function defaultNodeData(nodeType: NodeType, label: string): WFNodeData {
-  return {
-    label,
-    nodeType,
-    ...(nodeType === "wait" || nodeType === "timer" ? { waitMode: nodeType === "timer" ? "timer" as const : "signal" as const } : {}),
-    ...(nodeType === "parallel" || nodeType === "inclusive" ? { gateway_direction: "fork" as const } : {}),
-  }
-}
-
-function defaultWorkflowData(t: (key: string) => string): { nodes: Node[]; edges: Edge[] } {
-  return {
-    nodes: [
-      {
-        id: "start",
-        type: "start",
-        position: { x: 0, y: 120 },
-        data: defaultNodeData("start", t("workflow.node.start")) as unknown as Record<string, unknown>,
-      },
-      {
-        id: "end",
-        type: "end",
-        position: { x: 360, y: 120 },
-        data: defaultNodeData("end", t("workflow.node.end")) as unknown as Record<string, unknown>,
-      },
-    ],
-    edges: [
-      {
-        id: "edge_start_end",
-        source: "start",
-        target: "end",
-        type: "workflow",
-        markerEnd: { type: MarkerType.ArrowClosed },
-        data: { outcome: "completed", default: true } satisfies WFEdgeData as Record<string, unknown>,
-      },
-    ],
-  }
-}
-
-function collectDraftIssues(nodes: Node[], edges: Edge[]) {
-  const issues: Array<{ nodeId?: string; edgeId?: string; message: string }> = []
-  const startNodes = nodes.filter((node) => ((node.data ?? {}) as unknown as WFNodeData).nodeType === "start" || node.type === "start")
-  const endNodes = nodes.filter((node) => ((node.data ?? {}) as unknown as WFNodeData).nodeType === "end" || node.type === "end")
-  const nodeIds = new Set(nodes.map((node) => node.id))
-  const incoming = new Map<string, number>()
-  const outgoing = new Map<string, Edge[]>()
-
-  for (const edge of edges) {
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
-      issues.push({ edgeId: edge.id, message: "连线引用了不存在的节点" })
-      continue
-    }
-    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1)
-    const list = outgoing.get(edge.source) ?? []
-    list.push(edge)
-    outgoing.set(edge.source, list)
-  }
-
-  if (startNodes.length !== 1) issues.push({ message: "工作流必须包含一个开始节点" })
-  if (endNodes.length < 1) issues.push({ message: "工作流必须包含结束节点" })
-
-  for (const node of nodes) {
-    const data = (node.data ?? {}) as unknown as WFNodeData
-    const nodeType = data.nodeType ?? (node.type as NodeType)
-    if (nodeType !== "start" && (incoming.get(node.id) ?? 0) === 0) {
-      issues.push({ nodeId: node.id, message: "节点不可达" })
-    }
-    if ((nodeType === "form" || nodeType === "process") && !data.participants?.length) {
-      issues.push({ nodeId: node.id, message: "人工节点缺少参与人" })
-    }
-    if ((nodeType === "parallel" || nodeType === "inclusive") && data.gateway_direction !== "fork" && data.gateway_direction !== "join") {
-      issues.push({ nodeId: node.id, message: "网关缺少方向" })
-    }
-    if (nodeType === "exclusive") {
-      const out = outgoing.get(node.id) ?? []
-      if (out.length < 2) {
-        issues.push({ nodeId: node.id, message: "排他网关至少需要两条出边" })
-      }
-      for (const edge of out) {
-        const edgeData = (edge.data ?? {}) as WFEdgeData
-        if (!(edgeData.default ?? edgeData.isDefault) && !edgeData.condition) {
-          issues.push({ nodeId: node.id, edgeId: edge.id, message: "分支连线缺少条件" })
-        }
-      }
-    }
-  }
-
-  if (startNodes[0] && (outgoing.get(startNodes[0].id)?.length ?? 0) !== 1) {
-    issues.push({ nodeId: startNodes[0].id, message: "开始节点必须有一条出边" })
-  }
-
-  return issues
 }
 
 function InnerEditor({
@@ -165,38 +77,10 @@ function InnerEditor({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
 
-  const startingData = initialData?.nodes?.length ? initialData : defaultWorkflowData(t)
+  const startingData = normalizeWorkflowData(initialData) ?? defaultWorkflowData(t)
 
-  // Migrate legacy "workflow" type to specific nodeType
-  const migratedNodes = (startingData.nodes ?? []).map((n) => {
-    const data = (n.data ?? {}) as unknown as WFNodeData
-    const nodeType = data.nodeType ?? (n.type as NodeType)
-    return {
-      ...n,
-      type: nodeType,
-      data: {
-        ...data,
-        nodeType,
-        ...(nodeType === "parallel" || nodeType === "inclusive" ? { gateway_direction: data.gateway_direction ?? "fork" } : {}),
-      } as unknown as Record<string, unknown>,
-    }
-  })
-  const migratedEdges = (startingData.edges ?? []).map((e) => {
-    const data = (e.data ?? {}) as unknown as WFEdgeData
-    return {
-      ...e,
-      type: "workflow",
-      markerEnd: { type: MarkerType.ArrowClosed },
-      data: {
-        ...data,
-        default: data.default ?? data.isDefault ?? false,
-        isDefault: undefined,
-      } as unknown as Record<string, unknown>,
-    }
-  })
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(migratedNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(migratedEdges)
+  const [nodes, setNodes, onNodesChange] = useNodesState(startingData.nodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(startingData.edges)
 
   const { undo, redo, push, canUndo, canRedo } = useUndoRedo()
   const clipboardRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null)
@@ -248,7 +132,7 @@ function InnerEditor({
     })
 
     const newNode: Node = {
-      id: getNodeId(),
+      id: getWorkflowNodeId(),
       type: nodeType,
       position,
       data: {
@@ -274,26 +158,7 @@ function InnerEditor({
   }, [])
 
   function handleSave() {
-    const cleanNodes = nodes.map((node) => ({
-      ...node,
-      data: { ...(node.data as Record<string, unknown>), _workflowState: undefined },
-    }))
-    const cleanEdges = edges.map((edge) => {
-      const data = { ...((edge.data ?? {}) as Record<string, unknown>) }
-      const isDefault = data.isDefault as boolean | undefined
-      delete data.readonly
-      delete data.visited
-      delete data.failed
-      delete data.isDefault
-      return {
-        ...edge,
-        data: {
-          ...data,
-          default: (data.default as boolean | undefined) ?? isDefault ?? false,
-        },
-      }
-    })
-    onSave({ nodes: cleanNodes, edges: cleanEdges })
+    onSave(prepareWorkflowForSave(nodes as Node[], edges as Edge[]))
   }
 
   function handleAutoLayout() {
@@ -331,7 +196,7 @@ function InnerEditor({
     if (!clip || clip.nodes.length === 0) return
     const idMap = new Map<string, string>()
     const newNodes = clip.nodes.map((n) => {
-      const newId = getNodeId()
+      const newId = getWorkflowNodeId()
       idMap.set(n.id, newId)
       return { ...n, id: newId, position: { x: n.position.x + 40, y: n.position.y + 40 }, selected: false }
     })

@@ -61,6 +61,9 @@ func writeFormBindings(tx *gorm.DB, ticketID uint, scopeID string, formSchemaJSO
 		if !exists {
 			continue
 		}
+		if isEmptyFormValue(val) {
+			continue
+		}
 
 		valueType := fieldTypeToValueType(field.Type, len(field.Options) > 0)
 		serialized := serializeVarValue(val)
@@ -81,6 +84,22 @@ func writeFormBindings(tx *gorm.DB, ticketID uint, scopeID string, formSchemaJSO
 		}
 	}
 	return nil
+}
+
+func isEmptyFormValue(val any) bool {
+	if val == nil {
+		return true
+	}
+	switch v := val.(type) {
+	case string:
+		return v == ""
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
+	default:
+		return false
+	}
 }
 
 // fieldTypeToValueType maps a form field type to a variable value_type.

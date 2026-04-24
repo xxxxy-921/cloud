@@ -698,6 +698,7 @@ func seedAI(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{"admin", "/api/v1/ai/sessions/:sid", "GET"},
 		{"admin", "/api/v1/ai/sessions/:sid", "PUT"},
 		{"admin", "/api/v1/ai/sessions/:sid", "DELETE"},
+		{"admin", "/api/v1/ai/sessions/:sid/chat", "POST"},
 		{"admin", "/api/v1/ai/sessions/:sid/messages", "POST"},
 		{"admin", "/api/v1/ai/sessions/:sid/messages/:mid", "PUT"},
 		{"admin", "/api/v1/ai/sessions/:sid/stream", "GET"},

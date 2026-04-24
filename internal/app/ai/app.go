@@ -324,6 +324,7 @@ func (a *AIApp) Routes(api *gin.RouterGroup) {
 		sessions.GET("/:sid", sessionH.Get)
 		sessions.PUT("/:sid", sessionH.Update)
 		sessions.DELETE("/:sid", sessionH.Delete)
+		sessions.POST("/:sid/chat", sessionH.Chat)
 		sessions.POST("/:sid/messages", sessionH.SendMessage)
 		sessions.PUT("/:sid/messages/:mid", sessionH.EditMessage)
 		sessions.GET("/:sid/stream", sessionH.Stream)

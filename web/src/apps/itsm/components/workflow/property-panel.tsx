@@ -165,28 +165,28 @@ export function NodePropertyPanel({ node, serviceId, intakeFormSchema, onIntakeF
             {hasAction && serviceId && (
               <ActionPicker
                 serviceId={serviceId}
-                actionId={data.actionId}
-                onChange={(actionId) => updateData({ actionId })}
+                actionId={data.action_id}
+                onChange={(actionId) => updateData({ action_id: actionId })}
               />
             )}
             {hasScript && (
               <ScriptAssignmentEditor
-                assignments={data.scriptAssignments ?? []}
-                onChange={(scriptAssignments) => updateData({ scriptAssignments })}
+                assignments={data.assignments ?? []}
+                onChange={(assignments) => updateData({ assignments })}
               />
             )}
             {hasNotify && (
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs">{t("workflow.prop.channelType")}</Label>
-                  <Select value={data.channelType ?? ""} onValueChange={(v) => updateData({ channelType: v })}>
-                    <SelectTrigger className="h-9 text-sm"><SelectValue placeholder={t("workflow.prop.selectChannel")} /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="email">{t("workflow.channel.email")}</SelectItem>
-                      <SelectItem value="internal">{t("workflow.channel.internal")}</SelectItem>
-                      <SelectItem value="webhook">{t("workflow.channel.webhook")}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={data.channel_id ?? ""}
+                    onChange={(e) => updateData({ channel_id: e.target.value ? Number(e.target.value) : undefined })}
+                    placeholder="channel_id"
+                    className="h-9 text-sm"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">{t("workflow.prop.template")}</Label>
@@ -197,14 +197,14 @@ export function NodePropertyPanel({ node, serviceId, intakeFormSchema, onIntakeF
             {hasWait && (
               <div className="space-y-1.5">
                 <Label className="text-xs">{t("workflow.prop.waitMode")}</Label>
-                <Select value={data.waitMode ?? "signal"} onValueChange={(v) => updateData({ waitMode: v as WFNodeData["waitMode"] })}>
+                <Select value={data.wait_mode ?? "signal"} onValueChange={(v) => updateData({ wait_mode: v as WFNodeData["wait_mode"] })}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="signal">{t("workflow.prop.waitSignal")}</SelectItem>
                     <SelectItem value="timer">{t("workflow.prop.waitTimer")}</SelectItem>
                   </SelectContent>
                 </Select>
-                {(data.waitMode === "timer" || nodeType === "timer") && (
+                {(data.wait_mode === "timer" || nodeType === "timer") && (
                   <div className="mt-2 space-y-1.5">
                     <Label className="text-xs">{t("workflow.prop.duration")}</Label>
                     <Input value={data.duration ?? ""} onChange={(e) => updateData({ duration: e.target.value })} placeholder="PT1H" className="h-9 text-sm" />

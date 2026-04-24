@@ -151,6 +151,60 @@ type sendMessageReq struct {
 	Images  []string `json:"images"` // base64 encoded images or URLs
 }
 
+type chatReq struct {
+	Messages []chatMessage `json:"messages"`
+	Trigger  string        `json:"trigger"`
+}
+
+type chatMessage struct {
+	Role  string         `json:"role"`
+	Parts []chatPart     `json:"parts"`
+	Text  string         `json:"text"`
+	Data  map[string]any `json:"data"`
+}
+
+type chatPart struct {
+	Type      string `json:"type"`
+	Text      string `json:"text"`
+	URL       string `json:"url"`
+	MediaType string `json:"mediaType"`
+}
+
+func latestUserInput(messages []chatMessage) (string, []string) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Role != "user" {
+			continue
+		}
+		var text strings.Builder
+		images := make([]string, 0)
+		if message.Text != "" {
+			text.WriteString(message.Text)
+		}
+		for _, part := range message.Parts {
+			switch part.Type {
+			case "text":
+				text.WriteString(part.Text)
+			case "file":
+				if part.URL != "" && strings.HasPrefix(part.MediaType, "image/") {
+					images = append(images, part.URL)
+				}
+			}
+		}
+		return strings.TrimSpace(text.String()), images
+	}
+	return "", nil
+}
+
+func imagesMetadata(images []string) json.RawMessage {
+	if len(images) == 0 {
+		return nil
+	}
+	meta := map[string]any{"images": images}
+	metadata, _ := json.Marshal(meta)
+	return metadata
+}
+
 func (h *SessionHandler) SendMessage(c *gin.Context) {
 	sid, _ := strconv.Atoi(c.Param("sid"))
 	userID, ok := requireUserID(c)
@@ -178,13 +232,7 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Store user message with images metadata if provided
-	var metadata json.RawMessage
-	if len(req.Images) > 0 {
-		meta := map[string]interface{}{"images": req.Images}
-		metadata, _ = json.Marshal(meta)
-	}
-	msg, err := h.svc.StoreMessage(session.ID, MessageRoleUser, req.Content, metadata, 0)
+	msg, err := h.svc.StoreMessage(session.ID, MessageRoleUser, req.Content, imagesMetadata(req.Images), 0)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -197,6 +245,52 @@ func (h *SessionHandler) SendMessage(c *gin.Context) {
 	// TODO: Trigger Gateway execution asynchronously
 	// For now, just store the message and return 202
 	c.JSON(http.StatusAccepted, handler.R{Code: 0, Message: "ok", Data: msg.ToResponse()})
+}
+
+func (h *SessionHandler) Chat(c *gin.Context) {
+	sid, _ := strconv.Atoi(c.Param("sid"))
+	userID, ok := requireUserID(c)
+	if !ok {
+		handler.Fail(c, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req chatReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	isRegenerate := req.Trigger == "regenerate-message"
+	content, images := latestUserInput(req.Messages)
+	if !isRegenerate {
+		if content == "" && len(images) == 0 {
+			handler.Fail(c, http.StatusBadRequest, "content or images required")
+			return
+		}
+	}
+
+	session, err := h.svc.GetOwned(uint(sid), userID)
+	if err != nil {
+		if errors.Is(err, ErrSessionNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if !isRegenerate {
+		if _, err := h.svc.StoreMessage(session.ID, MessageRoleUser, content, imagesMetadata(images), 0); err != nil {
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := h.svc.UpdateStatus(session.ID, SessionStatusRunning); err != nil {
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.writeGatewayStream(c, session.ID, userID)
 }
 
 func (h *SessionHandler) Stream(c *gin.Context) {
@@ -215,13 +309,17 @@ func (h *SessionHandler) Stream(c *gin.Context) {
 		return
 	}
 
+	h.writeGatewayStream(c, uint(sid), userID)
+}
+
+func (h *SessionHandler) writeGatewayStream(c *gin.Context, sessionID uint, userID uint) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Header("X-Vercel-AI-UI-Message-Stream", "v1")
 
-	streamReader, err := h.gateway.Run(c.Request.Context(), uint(sid), userID)
+	streamReader, err := h.gateway.Run(c.Request.Context(), sessionID, userID)
 	if err != nil {
 		data, _ := json.Marshal(map[string]any{"type": "error", "errorText": err.Error()})
 		c.Status(http.StatusOK)

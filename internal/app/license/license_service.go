@@ -301,10 +301,54 @@ func (s *LicenseService) RenewLicense(id uint, newValidUntil *time.Time, renewed
 	if detail.LifecycleStatus == LicenseLifecycleRevoked {
 		return ErrLicenseAlreadyRevoked
 	}
+	if detail.ProductID == nil {
+		return errors.New("license has no associated product")
+	}
+
+	key, err := s.keyRepo.FindCurrentByProductID(*detail.ProductID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrProductKeyNotFound
+		}
+		return err
+	}
+
+	encKey, err := GetEncryptionKeyWithFallback(s.licenseKeySecret, s.jwtSecret)
+	if err != nil {
+		return err
+	}
+
+	payload, err := buildLicensePayload(licensePayloadArgs{
+		ProductCode:      detail.ProductCode,
+		LicenseeCode:     detail.LicenseeCode,
+		LicenseeName:     detail.LicenseeName,
+		RegistrationCode: detail.RegistrationCode,
+		ConstraintValues: detail.ConstraintValues,
+		IssuedAt:         detail.CreatedAt,
+		ValidFrom:        detail.ValidFrom,
+		ValidUntil:       newValidUntil,
+		KeyVersion:       key.Version,
+	})
+	if err != nil {
+		return err
+	}
+
+	sig, err := SignLicense(payload, key.EncryptedPrivateKey, encKey)
+	if err != nil {
+		return fmt.Errorf("sign license: %w", err)
+	}
+
+	activationCode, err := GenerateActivationCode(payload, sig)
+	if err != nil {
+		return fmt.Errorf("generate activation code: %w", err)
+	}
 
 	updates := map[string]any{
-		"lifecycle_status": LicenseLifecycleActive,
+		"lifecycle_status": deriveLifecycleStatus(detail.ValidFrom, newValidUntil, timeNow()),
 		"valid_until":      newValidUntil,
+		"key_version":      key.Version,
+		"signature":        sig,
+		"activation_code":  activationCode,
 	}
 	return s.licenseRepo.UpdateStatus(id, updates)
 }

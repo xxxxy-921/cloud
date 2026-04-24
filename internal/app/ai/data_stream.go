@@ -195,13 +195,22 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 				return err
 			}
 		}
+		if evt.InputTokens > 0 || evt.OutputTokens > 0 {
+			if err := enc.writeLine(map[string]any{
+				"type": "message-metadata",
+				"messageMetadata": map[string]any{
+					"usage": map[string]any{
+						"promptTokens":     evt.InputTokens,
+						"completionTokens": evt.OutputTokens,
+					},
+				},
+			}); err != nil {
+				return err
+			}
+		}
 		return enc.writeLine(map[string]any{
 			"type":         "finish",
 			"finishReason": "stop",
-			"usage": map[string]any{
-				"promptTokens":     evt.InputTokens,
-				"completionTokens": evt.OutputTokens,
-			},
 		})
 
 	case EventTypeError:

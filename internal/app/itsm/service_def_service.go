@@ -570,10 +570,12 @@ func (s *ServiceDefService) checkFallbackRisk() *ServiceHealthItem {
 // validateWorkflowJSON runs the engine validator and wraps errors.
 func validateWorkflowJSON(raw json.RawMessage) error {
 	errs := engine.ValidateWorkflow(raw)
-	if len(errs) == 0 {
-		return nil
+	for _, err := range errs {
+		if !err.IsWarning() {
+			return fmt.Errorf("%w: %s", ErrWorkflowValidation, err.Message)
+		}
 	}
-	return fmt.Errorf("%w: %s", ErrWorkflowValidation, errs[0].Message)
+	return nil
 }
 
 func (s *ServiceDefService) validateCatalogID(catalogID uint) error {

@@ -74,7 +74,7 @@ function buildStringSchema(field: FormField): ZodTypeAny {
           s = s.email(rule.message)
           break
         case "url":
-          s = s.url(rule.message)
+          s = s.url(rule.message).refine((value) => value.startsWith("http://") || value.startsWith("https://"), rule.message)
           break
       }
     }

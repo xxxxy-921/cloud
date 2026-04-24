@@ -20,10 +20,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { NodeType, WFEdgeData, WFNodeData } from "./types"
+import type { NodeType, WFEdgeData } from "./types"
 import { conditionSummary } from "./types"
 import { WORKFLOW_NODE_GROUPS, getNodeAccent } from "./visual-data"
 import { WorkflowNodeIconGlyph } from "./visual"
+import { defaultNodeData } from "./workflow-contract"
 
 let insertedNodeId = 0
 const EDGE_HANDLE_GAP = 8
@@ -36,15 +37,6 @@ function getInsertedNodeId() {
 function getInsertedEdgeId(suffix: string) {
   insertedNodeId += 1
   return `edge_insert_${insertedNodeId}_${suffix}`
-}
-
-function defaultNodeData(nodeType: NodeType, label: string): WFNodeData {
-  return {
-    label,
-    nodeType,
-    ...(nodeType === "wait" || nodeType === "timer" ? { waitMode: nodeType === "timer" ? "timer" as const : "signal" as const } : {}),
-    ...(nodeType === "parallel" || nodeType === "inclusive" ? { gateway_direction: "fork" as const } : {}),
-  }
 }
 
 function WorkflowEdgeInner({

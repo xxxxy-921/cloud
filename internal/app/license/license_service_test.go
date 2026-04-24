@@ -430,6 +430,14 @@ func TestLicenseService_LifecycleStateMachine(t *testing.T) {
 
 	t.Run("renew extends expiration", func(t *testing.T) {
 		l := issue("RG-RENEW-001")
+		originalActivationCode := l.ActivationCode
+		originalSignature := l.Signature
+		originalKeyVersion := l.KeyVersion
+
+		if _, err := productSvc.RotateKey(product.ID); err != nil {
+			t.Fatalf("rotate key failed: %v", err)
+		}
+
 		newExpiry := timeNow().Add(30 * 24 * time.Hour)
 		if err := licenseSvc.RenewLicense(l.ID, &newExpiry, 4); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -441,6 +449,108 @@ func TestLicenseService_LifecycleStateMachine(t *testing.T) {
 		}
 		if renewed.ValidUntil == nil || !renewed.ValidUntil.Equal(newExpiry) {
 			t.Error("expected valid_until to be updated")
+		}
+		if renewed.ID != l.ID {
+			t.Errorf("ID = %d, want original ID %d", renewed.ID, l.ID)
+		}
+		if renewed.ActivationCode == originalActivationCode {
+			t.Error("expected activation code to change after renew")
+		}
+		if renewed.Signature == originalSignature {
+			t.Error("expected signature to change after renew")
+		}
+		if renewed.KeyVersion != originalKeyVersion+1 {
+			t.Errorf("KeyVersion = %d, want %d", renewed.KeyVersion, originalKeyVersion+1)
+		}
+
+		claims, err := DecodeActivationCode(renewed.ActivationCode)
+		if err != nil {
+			t.Fatalf("decode renewed activation code failed: %v", err)
+		}
+		exp, ok := claims["exp"].(float64)
+		if !ok {
+			t.Fatalf("exp claim type = %T, want number", claims["exp"])
+		}
+		if int64(exp) != newExpiry.Unix() {
+			t.Errorf("exp = %d, want %d", int64(exp), newExpiry.Unix())
+		}
+		sig, ok := claims["sig"].(string)
+		if !ok || sig == "" {
+			t.Fatalf("sig claim missing")
+		}
+		delete(claims, "sig")
+		key, err := licenseSvc.keyRepo.FindByProductIDAndVersion(product.ID, renewed.KeyVersion)
+		if err != nil {
+			t.Fatalf("find renewed key failed: %v", err)
+		}
+		valid, err := VerifyLicenseSignature(claims, sig, key.PublicKey)
+		if err != nil {
+			t.Fatalf("verify renewed signature failed: %v", err)
+		}
+		if !valid {
+			t.Fatal("expected renewed signature to be valid")
+		}
+	})
+
+	t.Run("renew to permanent clears expiration in certificate", func(t *testing.T) {
+		reg, _ := licenseSvc.CreateLicenseRegistration(CreateLicenseRegistrationParams{
+			ProductID:  &product.ID,
+			LicenseeID: &licensee.ID,
+			Code:       "RG-RENEW-PERM-001",
+		})
+		oldExpiry := timeNow().Add(24 * time.Hour)
+		l, err := licenseSvc.IssueLicense(IssueLicenseParams{
+			ProductID:        product.ID,
+			LicenseeID:       licensee.ID,
+			PlanName:         "Basic",
+			RegistrationCode: reg.Code,
+			ValidFrom:        timeNow().Add(-time.Hour),
+			ValidUntil:       &oldExpiry,
+			IssuedBy:         1,
+		})
+		if err != nil {
+			t.Fatalf("issue failed: %v", err)
+		}
+		if err := licenseSvc.RenewLicense(l.ID, nil, 4); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var renewed License
+		db.First(&renewed, l.ID)
+		if renewed.ValidUntil != nil {
+			t.Error("expected valid_until to be cleared")
+		}
+		claims, err := DecodeActivationCode(renewed.ActivationCode)
+		if err != nil {
+			t.Fatalf("decode renewed activation code failed: %v", err)
+		}
+		if claims["exp"] != nil {
+			t.Errorf("exp = %#v, want nil", claims["exp"])
+		}
+		sig := claims["sig"].(string)
+		delete(claims, "sig")
+		key, err := licenseSvc.keyRepo.FindByProductIDAndVersion(product.ID, renewed.KeyVersion)
+		if err != nil {
+			t.Fatalf("find renewed key failed: %v", err)
+		}
+		valid, err := VerifyLicenseSignature(claims, sig, key.PublicKey)
+		if err != nil {
+			t.Fatalf("verify renewed signature failed: %v", err)
+		}
+		if !valid {
+			t.Fatal("expected permanent renewed signature to be valid")
+		}
+	})
+
+	t.Run("renew to past expiration marks expired", func(t *testing.T) {
+		l := issue("RG-RENEW-EXPIRED-001")
+		newExpiry := timeNow().Add(-time.Minute)
+		if err := licenseSvc.RenewLicense(l.ID, &newExpiry, 4); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var renewed License
+		db.First(&renewed, l.ID)
+		if renewed.LifecycleStatus != LicenseLifecycleExpired {
+			t.Errorf("lifecycle = %q, want %q", renewed.LifecycleStatus, LicenseLifecycleExpired)
 		}
 	})
 
