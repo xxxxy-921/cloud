@@ -14,7 +14,7 @@ import (
 	. "metis/internal/app/itsm/domain"
 	"time"
 
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/engine"
 	"metis/internal/llm"
 )

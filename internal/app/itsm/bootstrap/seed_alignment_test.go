@@ -12,8 +12,9 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	aiapp "metis/internal/app/ai"
-	org "metis/internal/app/org"
+	aiapp "metis/internal/app/ai/runtime"
+	orgapp "metis/internal/app/org"
+	org "metis/internal/app/org/domain"
 	coremodel "metis/internal/model"
 )
 
@@ -96,7 +97,7 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 		t.Fatalf("create admin user: %v", err)
 	}
 
-	var orgApp org.OrgApp
+	var orgApp orgapp.OrgApp
 	if err := orgApp.Seed(db, enforcer, true); err != nil {
 		t.Fatalf("seed org: %v", err)
 	}

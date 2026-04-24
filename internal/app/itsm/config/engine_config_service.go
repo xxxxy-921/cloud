@@ -8,7 +8,7 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/database"
 	"metis/internal/model"
 	"metis/internal/repository"

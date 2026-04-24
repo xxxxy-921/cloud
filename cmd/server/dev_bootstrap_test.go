@@ -11,7 +11,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/config"
 	"metis/internal/database"
 	"metis/internal/model"

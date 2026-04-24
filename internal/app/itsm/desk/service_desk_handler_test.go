@@ -17,7 +17,7 @@ import (
 	"gorm.io/gorm"
 
 	appcore "metis/internal/app"
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/definition"
 	"metis/internal/app/itsm/engine"
 	"metis/internal/app/itsm/sla"

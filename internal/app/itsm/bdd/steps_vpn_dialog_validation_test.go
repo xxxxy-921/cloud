@@ -23,7 +23,7 @@ import (
 	"github.com/cucumber/godog"
 	"gorm.io/gorm"
 
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/tools"
 	"metis/internal/llm"
 )

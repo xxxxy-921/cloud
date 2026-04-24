@@ -9,7 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
-	aiapp "metis/internal/app/ai"
+	aiapp "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/tools"
 	"metis/internal/llm"
 )

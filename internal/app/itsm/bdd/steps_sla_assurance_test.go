@@ -9,7 +9,7 @@ import (
 
 	"github.com/cucumber/godog"
 
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/engine"
 )
 

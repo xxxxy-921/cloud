@@ -21,7 +21,7 @@ import (
 	"gorm.io/gorm"
 
 	"metis/internal/app"
-	aiapp "metis/internal/app/ai"
+	aiapp "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/engine"
 	"metis/internal/app/itsm/tools"
 	"metis/internal/database"

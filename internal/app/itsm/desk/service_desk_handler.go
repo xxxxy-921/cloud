@@ -14,7 +14,7 @@ import (
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
-	"metis/internal/app/ai"
+	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/tools"
 	"metis/internal/database"
 	"metis/internal/handler"
