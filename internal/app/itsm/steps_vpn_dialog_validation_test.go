@@ -135,7 +135,7 @@ const serviceDeskTestPrompt = `你是 IT 服务台智能体，帮助用户完成
 
 关键规则：
 - 调用 itsm.draft_prepare 时，summary 和 form_data 都必须传入；form_data 是 JSON 对象，key 为字段 key，value 为对应的值（必须使用 service_load 返回的字段定义中的 option value，而不是用户的原始措辞）
-- service_load 返回 prefill_suggestions 时，必须优先采用这些建议补齐同名表单字段，再判断必填缺失。用户给出的邮箱可作为 VPN 账号；"线上支持用/远程办公/故障排查"等用途短语可同时填入设备与用途说明和访问原因
+- service_load 返回 prefill_suggestions 时，必须优先采用这些建议补齐同名表单字段，再判断必填缺失。用户给出的邮箱可作为 VPN 账号；"线上支持用/远程办公/故障排查"等用途短语可填入设备与用途说明，访问原因必须填入结构化 option value
 - 设备与用途说明不是单独的设备型号字段，用户已给出用途时不要再追问设备型号；用户已给出访问原因时不要再问"是否还有其他具体原因"
 - 当用户提到多个访问原因且映射到同一路由分支时，合并为该分支对应的单个结构化值（取第一个匹配的 option value）填入路由字段，同时将用户原始的多个原因完整写入 summary 和 reason 字段
 - 在调用 itsm.draft_prepare 之前，必须先根据 service_load 返回的 routing_field_hint 中的 option_route_map 判断用户的诉求是否跨越了多条路由分支。如果用户同时提到了映射到不同处理路径的多种需求，你必须主动向用户说明这些需求分属不同处理路径，请用户明确选择当前要办理哪一个，而不是替用户做选择或直接提交
@@ -279,36 +279,22 @@ func toolCallCount(calls []toolCallRecord, name string) int {
 // Static VPN service for dialog validation (no LLM generation needed)
 // ---------------------------------------------------------------------------
 
-// vpnDialogWorkflowJSON provides a static workflow with an exclusive_gateway
-// routing on request_kind → network_support/remote_maintenance → 网络管理处理,
-//
-//	→ security → 安全管理处理.
+// vpnDialogWorkflowJSON provides a static workflow with edge conditions routing
+// request_kind values to network or security processing.
 var vpnDialogWorkflowJSON = json.RawMessage(`{
 	"nodes": [
-		{"id": "start", "type": "start", "label": "开始"},
-		{
-			"id": "gateway1",
-			"type": "exclusive_gateway",
-			"label": "路由网关",
-			"data": {
-				"conditions": [
-					{"field": "request_kind", "value": "network_support", "label": "网络管理处理"},
-					{"field": "request_kind", "value": "remote_maintenance", "label": "网络管理处理"},
-					{"field": "request_kind", "value": "security", "label": "安全管理处理"}
-				]
-			}
-		},
-		{"id": "process_net", "type": "process", "label": "网络管理处理", "data": {"participantType": "position_department", "positionCode": "network_admin", "departmentCode": "it"}},
-		{"id": "process_sec", "type": "process", "label": "安全管理处理", "data": {"participantType": "position_department", "positionCode": "security_admin", "departmentCode": "it"}},
-		{"id": "end", "type": "end", "label": "结束"}
+		{"id": "start", "type": "start", "data": {"label": "开始", "nodeType": "start"}},
+		{"id": "gateway1", "type": "exclusive", "data": {"label": "路由网关", "nodeType": "exclusive"}},
+		{"id": "process_net", "type": "process", "data": {"label": "网络管理处理", "nodeType": "process", "participants": [{"type": "position_department", "position_code": "network_admin", "department_code": "it"}]}},
+		{"id": "process_sec", "type": "process", "data": {"label": "信息安全管理员处理", "nodeType": "process", "participants": [{"type": "position_department", "position_code": "security_admin", "department_code": "it"}]}},
+		{"id": "end", "type": "end", "data": {"label": "结束", "nodeType": "end"}}
 	],
 	"edges": [
-		{"source": "start", "target": "gateway1"},
-		{"source": "gateway1", "target": "process_net", "condition": "network_support"},
-		{"source": "gateway1", "target": "process_net", "condition": "remote_maintenance"},
-		{"source": "gateway1", "target": "process_sec", "condition": "security"},
-		{"source": "process_net", "target": "end", "condition": "completed"},
-		{"source": "process_sec", "target": "end", "condition": "completed"}
+		{"id": "e1", "source": "start", "target": "gateway1"},
+		{"id": "e2", "source": "gateway1", "target": "process_net", "data": {"condition": {"field": "form.request_kind", "operator": "contains_any", "value": ["online_support", "troubleshooting", "production_emergency", "network_access_issue"]}}},
+		{"id": "e3", "source": "gateway1", "target": "process_sec", "data": {"condition": {"field": "form.request_kind", "operator": "contains_any", "value": ["external_collaboration", "long_term_remote_work", "cross_border_access", "security_compliance"]}}},
+		{"id": "e4", "source": "process_net", "target": "end"},
+		{"id": "e5", "source": "process_sec", "target": "end"}
 	]
 }`)
 
@@ -319,14 +305,19 @@ var vpnFormSchema = `{
 		{
 			"key": "request_kind",
 			"type": "select",
-			"label": "访问原因",
-			"required": true,
-			"options": [
-				{"label": "线上支持", "value": "network_support"},
-				{"label": "安全审计", "value": "security"},
-				{"label": "远程维护", "value": "remote_maintenance"}
-			]
-		},
+				"label": "访问原因",
+				"required": true,
+				"options": [
+					{"label": "线上支持", "value": "online_support"},
+					{"label": "故障排查", "value": "troubleshooting"},
+					{"label": "生产应急", "value": "production_emergency"},
+					{"label": "网络接入问题", "value": "network_access_issue"},
+					{"label": "外部协作", "value": "external_collaboration"},
+					{"label": "长期远程办公", "value": "long_term_remote_work"},
+					{"label": "跨境访问", "value": "cross_border_access"},
+					{"label": "安全合规事项", "value": "security_compliance"}
+				]
+			},
 		{
 			"key": "vpn_type",
 			"type": "select",

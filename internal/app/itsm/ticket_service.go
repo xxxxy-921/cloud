@@ -19,20 +19,21 @@ import (
 )
 
 var (
-	ErrTicketNotFound         = errors.New("ticket not found")
-	ErrTicketTerminal         = errors.New("ticket is in a terminal state and cannot be modified")
-	ErrServiceNotActive       = errors.New("service is not active")
-	ErrActivityNotOwner       = errors.New("only the assignee or admin can progress this activity")
-	ErrActivityNotWait        = errors.New("signal is only allowed on wait nodes")
-	ErrActivityAlready        = errors.New("activity already completed")
-	ErrSLAAlreadyPaused       = errors.New("SLA is already paused")
-	ErrSLANotPaused           = errors.New("SLA is not paused")
-	ErrAssignmentNotFound     = errors.New("assignment not found")
-	ErrAssignmentNotPending   = errors.New("assignment is not in pending status")
-	ErrNoActiveAssignment     = errors.New("no active pending assignment for this activity")
-	ErrNotRequester           = errors.New("only the ticket requester can withdraw")
-	ErrTicketClaimed          = errors.New("ticket has been claimed and cannot be withdrawn")
-	ErrInvalidProgressOutcome = errors.New("人工节点只能提交 approved 或 rejected")
+	ErrTicketNotFound          = errors.New("ticket not found")
+	ErrTicketTerminal          = errors.New("ticket is in a terminal state and cannot be modified")
+	ErrServiceNotActive        = errors.New("service is not active")
+	ErrActivityNotOwner        = errors.New("only the assignee or admin can progress this activity")
+	ErrActivityNotWait         = errors.New("signal is only allowed on wait nodes")
+	ErrActivityAlready         = errors.New("activity already completed")
+	ErrSLAAlreadyPaused        = errors.New("SLA is already paused")
+	ErrSLANotPaused            = errors.New("SLA is not paused")
+	ErrAssignmentNotFound      = errors.New("assignment not found")
+	ErrAssignmentNotPending    = errors.New("assignment is not in pending status")
+	ErrNoActiveAssignment      = errors.New("no active pending assignment for this activity")
+	ErrNotRequester            = errors.New("only the ticket requester can withdraw")
+	ErrTicketClaimed           = errors.New("ticket has been claimed and cannot be withdrawn")
+	ErrInvalidProgressOutcome  = errors.New("人工节点只能提交 approved 或 rejected")
+	errSubmissionAlreadyExists = errors.New("service desk submission already exists")
 )
 
 type TicketService struct {
@@ -66,62 +67,84 @@ func NewTicketService(i do.Injector) (*TicketService, error) {
 }
 
 type CreateTicketInput struct {
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	ServiceID   uint      `json:"serviceId"`
-	PriorityID  uint      `json:"priorityId"`
-	FormData    JSONField `json:"formData"`
+	Title          string    `json:"title"`
+	Description    string    `json:"description"`
+	ServiceID      uint      `json:"serviceId"`
+	PriorityID     uint      `json:"priorityId"`
+	FormData       JSONField `json:"formData"`
+	Source         string    `json:"source"`
+	AgentSessionID *uint     `json:"agentSessionId"`
 }
 
 func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Ticket, error) {
+	ticket, svc, err := s.prepareTicket(input, requesterID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
+		return s.createTicketLifecycleInTx(context.Background(), tx, ticket, svc, requesterID)
+	}); err != nil {
+		return nil, err
+	}
+
+	return s.ticketRepo.FindByID(ticket.ID)
+}
+
+func (s *TicketService) prepareTicket(input CreateTicketInput, requesterID uint) (*Ticket, *ServiceDefinition, error) {
 	// Validate service
 	svc, err := s.serviceRepo.FindByID(input.ServiceID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrServiceDefNotFound
+			return nil, nil, ErrServiceDefNotFound
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if !svc.IsActive {
-		return nil, ErrServiceNotActive
+		return nil, nil, ErrServiceNotActive
 	}
 
 	// Validate priority
 	if _, err := s.priorityRepo.FindByID(input.PriorityID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrPriorityNotFound
+			return nil, nil, ErrPriorityNotFound
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	// For classic engine, validate workflow_json before creating ticket
 	if svc.EngineType == "classic" {
 		if len(svc.WorkflowJSON) == 0 {
-			return nil, errors.New("服务未配置工作流")
+			return nil, nil, errors.New("服务未配置工作流")
 		}
 		if errs := engine.ValidateWorkflow(json.RawMessage(svc.WorkflowJSON)); len(errs) > 0 {
-			return nil, errors.New("工作流校验失败: " + errs[0].Message)
+			return nil, nil, errors.New("工作流校验失败: " + errs[0].Message)
 		}
 	}
 
 	// Generate ticket code
 	code, err := s.ticketRepo.NextCode()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	source := input.Source
+	if source == "" {
+		source = TicketSourceCatalog
 	}
 
 	ticket := &Ticket{
-		Code:        code,
-		Title:       input.Title,
-		Description: input.Description,
-		ServiceID:   input.ServiceID,
-		EngineType:  svc.EngineType,
-		Status:      TicketStatusPending,
-		PriorityID:  input.PriorityID,
-		RequesterID: requesterID,
-		Source:      TicketSourceCatalog,
-		FormData:    input.FormData,
-		SLAStatus:   SLAStatusOnTrack,
+		Code:           code,
+		Title:          input.Title,
+		Description:    input.Description,
+		ServiceID:      input.ServiceID,
+		EngineType:     svc.EngineType,
+		Status:         TicketStatusPending,
+		PriorityID:     input.PriorityID,
+		RequesterID:    requesterID,
+		Source:         source,
+		AgentSessionID: input.AgentSessionID,
+		FormData:       input.FormData,
+		SLAStatus:      SLAStatusOnTrack,
 	}
 
 	// Snapshot workflow_json for classic engine
@@ -140,72 +163,52 @@ func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Tick
 			ticket.SLAResolutionDeadline = &resolutionDeadline
 		}
 	}
-
-	// Create in transaction
-	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(ticket).Error; err != nil {
-			return err
-		}
-		// Record timeline
-		tl := &TicketTimeline{
-			TicketID:   ticket.ID,
-			OperatorID: requesterID,
-			EventType:  "ticket_created",
-			Message:    "工单已创建",
-		}
-		if err := tx.Create(tl).Error; err != nil {
-			return err
-		}
-
-		// Start engine workflow
-		switch svc.EngineType {
-		case "classic":
-			startParams := engine.StartParams{
-				TicketID:     ticket.ID,
-				WorkflowJSON: json.RawMessage(ticket.WorkflowJSON),
-				RequesterID:  requesterID,
-			}
-			// Load start form schema from inline IntakeFormSchema for variable binding
-			if len(svc.IntakeFormSchema) > 0 {
-				startParams.StartFormSchema = string(svc.IntakeFormSchema)
-				startParams.StartFormData = string(ticket.FormData)
-			}
-			return s.classicEngine.Start(context.Background(), tx, startParams)
-		case "smart":
-			return s.smartEngine.Start(context.Background(), tx, engine.StartParams{
-				TicketID:    ticket.ID,
-				RequesterID: requesterID,
-			})
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	if svc.EngineType == "smart" {
-		s.startSmartDecisionAsync(ticket.ID)
-	}
-
-	return s.ticketRepo.FindByID(ticket.ID)
+	return ticket, svc, nil
 }
 
-func (s *TicketService) startSmartDecisionAsync(ticketID uint) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
+func (s *TicketService) createTicketLifecycleInTx(ctx context.Context, tx *gorm.DB, ticket *Ticket, svc *ServiceDefinition, requesterID uint) error {
+	if err := tx.Create(ticket).Error; err != nil {
+		return err
+	}
+	// Record timeline
+	tl := &TicketTimeline{
+		TicketID:   ticket.ID,
+		OperatorID: requesterID,
+		EventType:  "ticket_created",
+		Message:    "工单已创建",
+	}
+	if err := tx.Create(tl).Error; err != nil {
+		return err
+	}
 
-		slog.Info("smart ticket: immediate decision started", "ticketID", ticketID)
-		err := s.smartEngine.RunDecisionCycleForTicket(ctx, s.ticketRepo.DB().WithContext(ctx), ticketID, nil)
-		if err != nil {
-			if errors.Is(err, engine.ErrAIDecisionFailed) || errors.Is(err, engine.ErrAIDisabled) {
-				slog.Warn("smart ticket: immediate decision ended with handled error", "ticketID", ticketID, "error", err)
-				return
-			}
-			slog.Error("smart ticket: immediate decision failed", "ticketID", ticketID, "error", err)
-			return
+	// Start engine workflow
+	switch svc.EngineType {
+	case "classic":
+		startParams := engine.StartParams{
+			TicketID:     ticket.ID,
+			WorkflowJSON: json.RawMessage(ticket.WorkflowJSON),
+			RequesterID:  requesterID,
 		}
-		slog.Info("smart ticket: immediate decision completed", "ticketID", ticketID)
-	}()
+		// Load start form schema from inline IntakeFormSchema for variable binding
+		if len(svc.IntakeFormSchema) > 0 {
+			startParams.StartFormSchema = string(svc.IntakeFormSchema)
+			startParams.StartFormData = string(ticket.FormData)
+		}
+		return s.classicEngine.Start(ctx, tx, startParams)
+	case "smart":
+		if err := s.smartEngine.Start(ctx, tx, engine.StartParams{
+			TicketID:    ticket.ID,
+			RequesterID: requesterID,
+		}); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(engine.SmartProgressPayload{
+			TicketID:      ticket.ID,
+			TriggerReason: "initial_decision",
+		})
+		return s.smartEngine.SubmitProgressTaskTx(tx, payload)
+	}
+	return nil
 }
 
 // CreateFromAgent creates a ticket from an AI agent session, using full TicketService processing
@@ -220,25 +223,18 @@ func (s *TicketService) CreateFromAgent(ctx context.Context, req tools.AgentTick
 
 	formJSON, _ := json.Marshal(req.FormData)
 	input := CreateTicketInput{
-		Title:       req.Summary,
-		Description: req.Summary,
-		ServiceID:   req.ServiceID,
-		PriorityID:  defaultPriority.ID,
-		FormData:    JSONField(formJSON),
+		Title:          req.Summary,
+		Description:    req.Summary,
+		ServiceID:      req.ServiceID,
+		PriorityID:     defaultPriority.ID,
+		FormData:       JSONField(formJSON),
+		Source:         TicketSourceAgent,
+		AgentSessionID: &req.SessionID,
 	}
 
-	ticket, err := s.Create(input, req.UserID)
+	ticket, err := s.createAgentTicket(ctx, input, req)
 	if err != nil {
 		return nil, err
-	}
-
-	// Update source and agent session binding
-	updates := map[string]any{
-		"source":           TicketSourceAgent,
-		"agent_session_id": req.SessionID,
-	}
-	if err := s.ticketRepo.DB().Model(&Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error; err != nil {
-		return nil, fmt.Errorf("update ticket source: %w", err)
 	}
 
 	return &tools.AgentTicketResult{
@@ -246,6 +242,126 @@ func (s *TicketService) CreateFromAgent(ctx context.Context, req tools.AgentTick
 		TicketCode: ticket.Code,
 		Status:     ticket.Status,
 	}, nil
+}
+
+func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicketInput, req tools.AgentTicketRequest) (*Ticket, error) {
+	if req.DraftVersion <= 0 || strings.TrimSpace(req.FieldsHash) == "" {
+		ticket, svc, err := s.prepareTicket(input, req.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
+			return s.createTicketLifecycleInTx(ctx, tx, ticket, svc, req.UserID)
+		}); err != nil {
+			return nil, err
+		}
+		return s.ticketRepo.FindByID(ticket.ID)
+	}
+
+	if ticket, ok, err := s.findSubmittedDraftTicket(req.SessionID, req.DraftVersion, req.FieldsHash); err != nil || ok {
+		return ticket, err
+	}
+
+	var created *Ticket
+	err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
+		var existing ServiceDeskSubmission
+		err := tx.Where("session_id = ? AND draft_version = ? AND fields_hash = ?", req.SessionID, req.DraftVersion, req.FieldsHash).
+			First(&existing).Error
+		if err == nil {
+			return errSubmissionAlreadyExists
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		submission := &ServiceDeskSubmission{
+			SessionID:    req.SessionID,
+			DraftVersion: req.DraftVersion,
+			FieldsHash:   req.FieldsHash,
+			RequestHash:  req.RequestHash,
+			Status:       "submitting",
+			SubmittedBy:  req.UserID,
+			SubmittedAt:  time.Now(),
+		}
+		if err := tx.Create(submission).Error; err != nil {
+			if isUniqueConstraintError(err) {
+				return errSubmissionAlreadyExists
+			}
+			return err
+		}
+
+		ticket, svc, err := s.prepareTicket(input, req.UserID)
+		if err != nil {
+			return err
+		}
+		if err := s.createTicketLifecycleInTx(ctx, tx, ticket, svc, req.UserID); err != nil {
+			return err
+		}
+		details, _ := json.Marshal(map[string]any{
+			"session_id":    req.SessionID,
+			"draft_version": req.DraftVersion,
+			"fields_hash":   req.FieldsHash,
+			"request_hash":  req.RequestHash,
+			"submitted_by":  req.UserID,
+		})
+		if err := tx.Create(&TicketTimeline{
+			TicketID:   ticket.ID,
+			OperatorID: req.UserID,
+			EventType:  "draft_submitted",
+			Message:    "服务台草稿已确认提交",
+			Details:    JSONField(details),
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(submission).Updates(map[string]any{
+			"ticket_id": ticket.ID,
+			"status":    "submitted",
+		}).Error; err != nil {
+			return err
+		}
+		created = ticket
+		return nil
+	})
+	if errors.Is(err, errSubmissionAlreadyExists) {
+		ticket, ok, findErr := s.findSubmittedDraftTicket(req.SessionID, req.DraftVersion, req.FieldsHash)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if ok {
+			return ticket, nil
+		}
+		return nil, fmt.Errorf("draft submission is already being created")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.ticketRepo.FindByID(created.ID)
+}
+
+func (s *TicketService) findSubmittedDraftTicket(sessionID uint, draftVersion int, fieldsHash string) (*Ticket, bool, error) {
+	var submission ServiceDeskSubmission
+	err := s.ticketRepo.DB().
+		Where("session_id = ? AND draft_version = ? AND fields_hash = ?", sessionID, draftVersion, fieldsHash).
+		First(&submission).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if submission.TicketID == 0 || submission.Status != "submitted" {
+		return nil, false, nil
+	}
+	ticket, err := s.ticketRepo.FindByID(submission.TicketID)
+	if err != nil {
+		return nil, false, err
+	}
+	return ticket, true, nil
+}
+
+func isUniqueConstraintError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate")
 }
 
 // Progress advances a workflow ticket. The operator must be the assignee or have admin privileges.

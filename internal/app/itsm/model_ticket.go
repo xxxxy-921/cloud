@@ -225,6 +225,22 @@ type TicketTimeline struct {
 
 func (TicketTimeline) TableName() string { return "itsm_ticket_timelines" }
 
+// ServiceDeskSubmission records the one-time confirmation boundary between a
+// service desk draft and the ticket created from it.
+type ServiceDeskSubmission struct {
+	model.BaseModel
+	SessionID    uint      `json:"sessionId" gorm:"not null;index;uniqueIndex:idx_itsm_submission_draft"`
+	DraftVersion int       `json:"draftVersion" gorm:"not null;uniqueIndex:idx_itsm_submission_draft"`
+	FieldsHash   string    `json:"fieldsHash" gorm:"size:128;not null;uniqueIndex:idx_itsm_submission_draft"`
+	RequestHash  string    `json:"requestHash" gorm:"size:128;not null"`
+	TicketID     uint      `json:"ticketId" gorm:"not null;index"`
+	Status       string    `json:"status" gorm:"size:32;not null"`
+	SubmittedBy  uint      `json:"submittedBy" gorm:"not null;index"`
+	SubmittedAt  time.Time `json:"submittedAt" gorm:"not null"`
+}
+
+func (ServiceDeskSubmission) TableName() string { return "itsm_service_desk_submissions" }
+
 type TicketTimelineResponse struct {
 	ID           uint      `json:"id"`
 	TicketID     uint      `json:"ticketId"`

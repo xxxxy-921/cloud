@@ -131,6 +131,7 @@ func (bc *bddContext) reset() {
 		&TicketAssignment{},
 		&TicketTimeline{},
 		&TicketActionExecution{},
+		&ServiceDeskSubmission{},
 		// ITSM — incident
 		&TicketLink{},
 		&PostMortem{},
@@ -139,6 +140,7 @@ func (bc *bddContext) reset() {
 		&ExecutionToken{},
 		// ITSM — knowledge
 		&ServiceKnowledgeDocument{},
+		&model.TaskExecution{},
 	); err != nil {
 		panic(fmt.Sprintf("bdd: failed to migrate: %v", err))
 	}

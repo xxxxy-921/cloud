@@ -43,7 +43,7 @@ func TestBuildInitialSeedIncludesDecisionTrigger(t *testing.T) {
 		Name:              "VPN 开通申请",
 		Description:       "VPN service",
 		CollaborationSpec: "处理完成后结束流程。",
-	}, "direct_first", &completedActivityID)
+	}, "direct_first", &completedActivityID, "activity_completed")
 	if err != nil {
 		t.Fatalf("build initial seed: %v", err)
 	}
@@ -147,11 +147,11 @@ func TestDecisionTicketContextReturnsStableDecisionAnchors(t *testing.T) {
 				SLAResponseDeadline:   &now,
 				SLAResolutionDeadline: &now,
 			},
-				history: []activityModel{
-					{ID: 9, Name: "处理", ActivityType: "process", Status: ActivityCompleted, TransitionOutcome: "completed", FinishedAt: &now},
-				},
-				activityByID: map[uint]activityModel{
-					9: {ID: 9, Name: "处理", ActivityType: "process", Status: ActivityCompleted, TransitionOutcome: "completed", FinishedAt: &now},
+			history: []activityModel{
+				{ID: 9, Name: "处理", ActivityType: "process", Status: ActivityCompleted, TransitionOutcome: "completed", FinishedAt: &now},
+			},
+			activityByID: map[uint]activityModel{
+				9: {ID: 9, Name: "处理", ActivityType: "process", Status: ActivityCompleted, TransitionOutcome: "completed", FinishedAt: &now},
 			},
 			assignments: map[uint][]ActivityAssignmentInfo{
 				9: {{ParticipantType: "user", UserID: uintPtrIf(1), AssigneeID: uintPtrIf(1), Status: "completed", FinishedAt: &now}},
@@ -166,7 +166,7 @@ func TestDecisionTicketContextReturnsStableDecisionAnchors(t *testing.T) {
 			totalActions: 2,
 			assignment:   &CurrentAssignmentInfo{AssigneeID: 1, AssigneeName: "admin"},
 			groups:       []ParallelGroupInfo{{ActivityGroupID: "group-1", Total: 2, Completed: 1}},
-				pendingNames: []string{"安全处理"},
+			pendingNames: []string{"安全处理"},
 		},
 	}, nil)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -122,6 +123,35 @@ func (o *Operator) CreateTicket(userID uint, serviceID uint, summary string, for
 	}, nil
 }
 
+// SubmitConfirmedDraft creates an ITSM ticket from a user-confirmed service desk
+// draft. It carries the draft identity so TicketService can enforce idempotency
+// and preserve the human confirmation boundary.
+func (o *Operator) SubmitConfirmedDraft(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
+	if o.ticketCreator == nil {
+		return nil, fmt.Errorf("ticket creation is not available")
+	}
+
+	result, err := o.ticketCreator.CreateFromAgent(context.Background(), AgentTicketRequest{
+		UserID:       userID,
+		ServiceID:    serviceID,
+		Summary:      summary,
+		FormData:     formData,
+		SessionID:    sessionID,
+		DraftVersion: draftVersion,
+		FieldsHash:   fieldsHash,
+		RequestHash:  requestHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("submit confirmed draft: %w", err)
+	}
+
+	return &TicketResult{
+		TicketID:   result.TicketID,
+		TicketCode: result.TicketCode,
+		Status:     result.Status,
+	}, nil
+}
+
 // ListMyTickets returns the user's non-terminal tickets.
 func (o *Operator) ListMyTickets(userID uint, status string) ([]TicketSummary, error) {
 	type row struct {
@@ -225,16 +255,24 @@ func (o *Operator) ValidateParticipants(serviceID uint, formData map[string]any)
 	}
 
 	// Parse workflow nodes.
+	type workflowParticipant struct {
+		Type           string `json:"type"`
+		Value          string `json:"value"`
+		PositionCode   string `json:"position_code"`
+		DepartmentCode string `json:"department_code"`
+	}
 	var workflow struct {
 		Nodes []struct {
 			ID    string `json:"id"`
 			Type  string `json:"type"`
 			Label string `json:"label"`
 			Data  struct {
-				ParticipantType string `json:"participantType"`
-				PositionCode    string `json:"positionCode"`
-				DepartmentCode  string `json:"departmentCode"`
-				UserID          *uint  `json:"userId"`
+				ParticipantType string                `json:"participantType"`
+				PositionCode    string                `json:"positionCode"`
+				DepartmentCode  string                `json:"departmentCode"`
+				UserID          *uint                 `json:"userId"`
+				Label           string                `json:"label"`
+				Participants    []workflowParticipant `json:"participants"`
 			} `json:"data"`
 		} `json:"nodes"`
 	}
@@ -242,53 +280,74 @@ func (o *Operator) ValidateParticipants(serviceID uint, formData map[string]any)
 		return &ParticipantValidation{OK: true}, nil // Can't parse, skip.
 	}
 
-		// Check each process node.
-		for _, node := range workflow.Nodes {
-			if node.Type != "process" {
-				continue
-			}
-		d := node.Data
-		if d.ParticipantType == "user" && d.UserID != nil {
-			// Direct user assignment — check user exists and is active.
-			var count int64
-			o.db.Table("users").Where("id = ? AND is_active = ?", *d.UserID, true).Count(&count)
-			if count == 0 {
-				return &ParticipantValidation{
-					OK:            false,
-					FailureReason: fmt.Sprintf("指定用户(ID=%d)不存在或已停用", *d.UserID),
-					NodeLabel:     node.Label,
-					Guidance:      "请联系管理员检查用户状态",
-				}, nil
-			}
+	// Check each process node.
+	for _, node := range workflow.Nodes {
+		if node.Type != "process" {
+			continue
 		}
-		if d.ParticipantType == "position" && d.PositionCode != "" {
-			if o.orgResolver == nil {
-				// Org App not installed — skip position validation.
-				continue
+		nodeLabel := node.Data.Label
+		if nodeLabel == "" {
+			nodeLabel = node.Label
+		}
+		participants := node.Data.Participants
+		if len(participants) == 0 && node.Data.ParticipantType != "" {
+			legacy := workflowParticipant{
+				Type:           node.Data.ParticipantType,
+				PositionCode:   node.Data.PositionCode,
+				DepartmentCode: node.Data.DepartmentCode,
 			}
-			// Position-based — check if any active user holds the position.
-			var userIDs []uint
-			var err error
-			if d.DepartmentCode != "" {
-				userIDs, err = o.orgResolver.FindUsersByPositionAndDepartment(d.PositionCode, d.DepartmentCode)
-			} else {
-				userIDs, err = o.orgResolver.FindUsersByPositionCode(d.PositionCode)
+			if node.Data.UserID != nil {
+				legacy.Value = fmt.Sprintf("%d", *node.Data.UserID)
 			}
-			if err != nil {
-				return nil, fmt.Errorf("validate participants: %w", err)
-			}
-			if len(userIDs) == 0 {
-				reason := fmt.Sprintf("岗位[%s]", d.PositionCode)
-				if d.DepartmentCode != "" {
-					reason += fmt.Sprintf("+部门[%s]", d.DepartmentCode)
+			participants = append(participants, legacy)
+		}
+		for _, participant := range participants {
+			if participant.Type == "user" && participant.Value != "" {
+				// Direct user assignment — check user exists and is active.
+				var userID uint
+				if _, err := fmt.Sscanf(participant.Value, "%d", &userID); err != nil {
+					continue
 				}
-				reason += " 下无可用人员"
-				return &ParticipantValidation{
-					OK:            false,
-					FailureReason: reason,
-					NodeLabel:     node.Label,
-					Guidance:      "请联系 IT 管理员补充人员配置后再提单",
-				}, nil
+				var count int64
+				o.db.Table("users").Where("id = ? AND is_active = ?", userID, true).Count(&count)
+				if count == 0 {
+					return &ParticipantValidation{
+						OK:            false,
+						FailureReason: fmt.Sprintf("指定用户(ID=%d)不存在或已停用", userID),
+						NodeLabel:     nodeLabel,
+						Guidance:      "请联系管理员检查用户状态",
+					}, nil
+				}
+			}
+			if (participant.Type == "position" || participant.Type == "position_department") && participant.PositionCode != "" {
+				if o.orgResolver == nil {
+					// Org App not installed — skip position validation.
+					continue
+				}
+				// Position-based — check if any active user holds the position.
+				var userIDs []uint
+				var err error
+				if participant.DepartmentCode != "" {
+					userIDs, err = o.orgResolver.FindUsersByPositionAndDepartment(participant.PositionCode, participant.DepartmentCode)
+				} else {
+					userIDs, err = o.orgResolver.FindUsersByPositionCode(participant.PositionCode)
+				}
+				if err != nil {
+					return nil, fmt.Errorf("validate participants: %w", err)
+				}
+				if len(userIDs) == 0 {
+					reason := fmt.Sprintf("岗位[%s]", participant.PositionCode)
+					if participant.DepartmentCode != "" {
+						reason += fmt.Sprintf("+部门[%s]", participant.DepartmentCode)
+					}
+					reason += " 下无可用人员"
+					return &ParticipantValidation{
+						OK:            false,
+						FailureReason: reason,
+						NodeLabel:     nodeLabel,
+						Guidance:      "请联系 IT 管理员补充人员配置后再提单",
+					}, nil
+				}
 			}
 		}
 	}
@@ -344,51 +403,89 @@ func computeFieldsHash(fields []FormField) string {
 func extractRoutingHint(workflowJSON string) *RoutingFieldHint {
 	var workflow struct {
 		Nodes []struct {
-			Type string `json:"type"`
-			Data struct {
-				Conditions []struct {
-					Field string `json:"field"`
-					Value string `json:"value"`
-					Label string `json:"label"`
-				} `json:"conditions"`
+			ID    string `json:"id"`
+			Label string `json:"label"`
+			Data  struct {
+				Label string `json:"label"`
 			} `json:"data"`
 		} `json:"nodes"`
+		Edges []struct {
+			Target string `json:"target"`
+			Data   struct {
+				Condition struct {
+					Field string `json:"field"`
+					Value any    `json:"value"`
+				} `json:"condition"`
+			} `json:"data"`
+		} `json:"edges"`
 	}
 	if err := json.Unmarshal([]byte(workflowJSON), &workflow); err != nil {
 		return nil
 	}
 
+	nodeLabels := make(map[string]string, len(workflow.Nodes))
 	for _, node := range workflow.Nodes {
-		if node.Type != "exclusive_gateway" {
-			continue
+		label := node.Data.Label
+		if label == "" {
+			label = node.Label
 		}
-		if len(node.Data.Conditions) == 0 {
-			continue
-		}
-
-		fieldKey := node.Data.Conditions[0].Field
-		if fieldKey == "" {
-			continue
-		}
-
-		routeMap := make(map[string]string)
-		for _, c := range node.Data.Conditions {
-			if c.Value != "" {
-				label := c.Label
-				if label == "" {
-					label = c.Value
-				}
-				routeMap[c.Value] = label
-			}
-		}
-
-		if len(routeMap) > 0 {
-			return &RoutingFieldHint{
-				FieldKey:       fieldKey,
-				OptionRouteMap: routeMap,
-			}
-		}
+		nodeLabels[node.ID] = label
 	}
 
-	return nil
+	var fieldKey string
+	routeMap := make(map[string]string)
+	for _, edge := range workflow.Edges {
+		condition := edge.Data.Condition
+		if condition.Field == "" {
+			continue
+		}
+		normalizedField := normalizeRoutingFieldKey(condition.Field)
+		if normalizedField == "" {
+			continue
+		}
+		if fieldKey == "" {
+			fieldKey = normalizedField
+		}
+		if fieldKey != normalizedField {
+			continue
+		}
+		routeLabel := nodeLabels[edge.Target]
+		for _, value := range routingConditionValues(condition.Value) {
+			if value == "" {
+				continue
+			}
+			if routeLabel == "" {
+				routeLabel = value
+			}
+			routeMap[value] = routeLabel
+		}
+	}
+	if fieldKey == "" || len(routeMap) == 0 {
+		return nil
+	}
+	return &RoutingFieldHint{FieldKey: fieldKey, OptionRouteMap: routeMap}
+}
+
+func normalizeRoutingFieldKey(field string) string {
+	field = strings.TrimSpace(field)
+	field = strings.TrimPrefix(field, "form.")
+	return field
+}
+
+func routingConditionValues(raw any) []string {
+	switch value := raw.(type) {
+	case string:
+		return []string{value}
+	case []any:
+		values := make([]string, 0, len(value))
+		for _, item := range value {
+			values = append(values, strings.TrimSpace(fmt.Sprintf("%v", item)))
+		}
+		return values
+	default:
+		if raw == nil {
+			return nil
+		}
+		return []string{strings.TrimSpace(fmt.Sprintf("%v", raw))}
+	}
 }

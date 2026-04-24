@@ -35,6 +35,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&TicketAssignment{},
 		&TicketTimeline{},
 		&TicketActionExecution{},
+		&ServiceDeskSubmission{},
 		&ai.Agent{},
 		&ai.AgentSession{},
 		&ai.SessionMessage{},
@@ -43,6 +44,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&model.Menu{},
 		&model.SystemConfig{},
 		&model.User{},
+		&model.TaskExecution{},
 	); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}

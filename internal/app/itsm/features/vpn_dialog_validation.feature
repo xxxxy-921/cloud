@@ -32,7 +32,7 @@ Feature: VPN 开通申请 — 服务台 Agent 对话校验
     And 回复内容匹配 "不同.*路|处理.*路|选择|冲突|分属|哪一个|分别"
 
   Scenario: 同路由多选 — Agent 合并后正常推进
-    Given 用户消息为 "我要申请VPN开通，访问原因选network_support，VPN类型L2TP，申请原因是需要远程访问内网进行网络调试和远程维护，访问时段2026-05-01 09:00:00~18:00:00"
+    Given 用户消息为 "我要申请VPN开通，访问原因选online_support，VPN类型L2TP，申请原因是需要远程访问内网进行线上支持和故障排查，访问时段2026-05-01 09:00:00~18:00:00"
     When 服务台 Agent 处理用户消息
     Then 工具调用序列包含 "itsm.service_match"
     And 工具调用序列包含 "itsm.service_load"

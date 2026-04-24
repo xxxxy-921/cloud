@@ -618,12 +618,14 @@ func seedServiceDefinitions(db *gorm.DB) error {
 		CatalogCode       string
 		SLACode           string
 		IntakeFormSchema  string
+		WorkflowJSON      string
 		CollaborationSpec string
 		Actions           []ServiceAction
 	}
 
 	serviceRequestFormSchema := `{"version":1,"fields":[{"key":"title","type":"text","label":"请求标题","required":true,"validation":[{"rule":"required","message":"请输入请求标题"}],"width":"full"},{"key":"description","type":"textarea","label":"请求描述","required":true,"validation":[{"rule":"required","message":"请输入请求描述"}],"width":"full","props":{"rows":4}},{"key":"expected_date","type":"date","label":"期望完成日期","width":"half"},{"key":"remarks","type":"textarea","label":"备注","width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"请求信息","fields":["title","description"]},{"title":"补充信息","fields":["expected_date","remarks"]}]}}`
-	vpnAccessFormSchema := `{"version":1,"fields":[{"key":"vpn_account","type":"text","label":"VPN账号","description":"用于登录 VPN 的账号；用户给出的邮箱可直接作为 VPN 账号。","placeholder":"例如：wenhaowu@dev.com","required":true,"validation":[{"rule":"required","message":"请输入 VPN 账号"}],"width":"half"},{"key":"device_usage","type":"textarea","label":"设备与用途说明","description":"说明访问 VPN 的设备或用途；用户已经说明用途时不必额外追问设备型号。","placeholder":"例如：线上支持用、远程办公访问内网","required":true,"validation":[{"rule":"required","message":"请输入设备与用途说明"}],"width":"full","props":{"rows":3}},{"key":"request_kind","type":"textarea","label":"访问原因","description":"申请 VPN 的业务原因，可复用用户已说明的用途或支持场景。","placeholder":"例如：线上支持、故障排查、远程办公","required":true,"validation":[{"rule":"required","message":"请输入访问原因"}],"width":"full","props":{"rows":3}}],"layout":{"columns":2,"sections":[{"title":"VPN 开通信息","fields":["vpn_account","device_usage","request_kind"]}]}}`
+	vpnAccessFormSchema := `{"version":1,"fields":[{"key":"vpn_account","type":"text","label":"VPN账号","description":"用于登录 VPN 的账号；用户给出的邮箱可直接作为 VPN 账号。","placeholder":"例如：wenhaowu@dev.com","required":true,"validation":[{"rule":"required","message":"请输入 VPN 账号"}],"width":"half"},{"key":"device_usage","type":"textarea","label":"设备与用途说明","description":"说明访问 VPN 的设备或用途；用户已经说明用途时不必额外追问设备型号。","placeholder":"例如：线上支持用、长期远程办公访问内网","required":true,"validation":[{"rule":"required","message":"请输入设备与用途说明"}],"width":"full","props":{"rows":3}},{"key":"request_kind","type":"select","label":"访问原因","description":"选择 VPN 访问原因；系统按该字段路由到网络管理员或信息安全管理员。","placeholder":"请选择访问原因","required":true,"validation":[{"rule":"required","message":"请选择访问原因"}],"width":"half","options":[{"label":"线上支持","value":"online_support"},{"label":"故障排查","value":"troubleshooting"},{"label":"生产应急","value":"production_emergency"},{"label":"网络接入问题","value":"network_access_issue"},{"label":"外部协作","value":"external_collaboration"},{"label":"长期远程办公","value":"long_term_remote_work"},{"label":"跨境访问","value":"cross_border_access"},{"label":"安全合规事项","value":"security_compliance"}]}],"layout":{"columns":2,"sections":[{"title":"VPN 开通信息","fields":["vpn_account","device_usage","request_kind"]}]}}`
+	vpnAccessWorkflowJSON := `{"nodes":[{"id":"start","type":"start","position":{"x":400,"y":50},"data":{"label":"开始","nodeType":"start"}},{"id":"request","type":"form","position":{"x":400,"y":200},"data":{"label":"填写 VPN 开通申请","nodeType":"form","participants":[{"type":"requester"}],"formSchema":{"fields":[{"key":"vpn_account","type":"text","label":"VPN账号"},{"key":"device_usage","type":"textarea","label":"设备与用途说明"},{"key":"request_kind","type":"select","label":"访问原因","options":["online_support","troubleshooting","production_emergency","network_access_issue","external_collaboration","long_term_remote_work","cross_border_access","security_compliance"]}]}}},{"id":"route","type":"exclusive","position":{"x":400,"y":380},"data":{"label":"访问原因路由","nodeType":"exclusive"}},{"id":"network_process","type":"process","position":{"x":160,"y":560},"data":{"label":"网络管理员处理","nodeType":"process","participants":[{"type":"position_department","department_code":"it","position_code":"network_admin"}]}},{"id":"security_process","type":"process","position":{"x":640,"y":560},"data":{"label":"信息安全管理员处理","nodeType":"process","participants":[{"type":"position_department","department_code":"it","position_code":"security_admin"}]}},{"id":"end","type":"end","position":{"x":400,"y":760},"data":{"label":"结束","nodeType":"end"}}],"edges":[{"id":"edge_start_request","source":"start","target":"request"},{"id":"edge_request_route","source":"request","target":"route"},{"id":"edge_route_network","source":"route","target":"network_process","data":{"condition":{"field":"form.request_kind","operator":"contains_any","value":["online_support","troubleshooting","production_emergency","network_access_issue"],"edge_id":"edge_route_network"}}},{"id":"edge_route_security","source":"route","target":"security_process","data":{"condition":{"field":"form.request_kind","operator":"contains_any","value":["external_collaboration","long_term_remote_work","cross_border_access","security_compliance"],"edge_id":"edge_route_security"}}},{"id":"edge_network_end","source":"network_process","target":"end"},{"id":"edge_security_end","source":"security_process","target":"end"}]}`
 
 	seeds := []serviceSeed{
 		{
@@ -680,6 +682,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 			CatalogCode:       "infra-network:network",
 			SLACode:           "standard",
 			IntakeFormSchema:  vpnAccessFormSchema,
+			WorkflowJSON:      vpnAccessWorkflowJSON,
 			CollaborationSpec: `用户在 IT 服务台提交 VPN 开通申请。服务台需要收集 VPN 账号、设备与用途说明、访问原因。如果访问原因属于线上支持、故障排查、生产应急或网络接入问题，则交给信息部网络管理员岗位处理，参与者类型必须使用 position_department，部门编码使用 it，岗位编码使用 network_admin。如果访问原因属于外部协作、长期远程办公、跨境访问或安全合规事项，则交给信息部信息安全管理员岗位处理，参与者类型必须使用 position_department，部门编码使用 it，岗位编码使用 security_admin。处理任务完成后直接结束流程。`,
 		},
 	}
@@ -700,6 +703,13 @@ func seedServiceDefinitions(db *gorm.DB) error {
 					slog.Error("seed: failed to update service intake form schema", "code", s.Code, "error", err)
 				} else {
 					slog.Info("seed: updated service intake form schema", "code", s.Code)
+				}
+			}
+			if s.Code == "vpn-access-request" && s.WorkflowJSON != "" && string(existing.WorkflowJSON) != s.WorkflowJSON {
+				if err := db.Model(&existing).Update("workflow_json", JSONField(s.WorkflowJSON)).Error; err != nil {
+					slog.Error("seed: failed to update service workflow json", "code", s.Code, "error", err)
+				} else {
+					slog.Info("seed: updated service workflow json", "code", s.Code)
 				}
 			}
 			continue
@@ -732,6 +742,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 			EngineType:        "smart",
 			SLAID:             slaID,
 			IntakeFormSchema:  intakeFormSchema,
+			WorkflowJSON:      JSONField(s.WorkflowJSON),
 			AgentID:           decisionAgentID,
 			CollaborationSpec: s.CollaborationSpec,
 			IsActive:          true,

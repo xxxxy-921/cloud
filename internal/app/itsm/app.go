@@ -104,6 +104,7 @@ func (a *ITSMApp) Models() []any {
 		&TicketAssignment{},
 		&TicketTimeline{},
 		&TicketActionExecution{},
+		&ServiceDeskSubmission{},
 		// Incident models
 		&TicketLink{},
 		&PostMortem{},

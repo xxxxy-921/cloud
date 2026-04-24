@@ -285,7 +285,7 @@ func (e *SmartEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPara
 // --- Decision cycle ---
 
 // runDecisionCycle executes the full AI decision cycle for a ticket.
-func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, svcInfo *serviceModel) error {
+func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, svcInfo *serviceModel, triggerReason string) error {
 	// Check if AI is disabled for this ticket
 	var ticket ticketModel
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&ticket, ticketID).Error; err != nil {
@@ -323,7 +323,7 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 	decisionCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	plan, err := e.agenticDecision(decisionCtx, tx, ticketID, completedActivityID, svcInfo)
+	plan, err := e.agenticDecision(decisionCtx, tx, ticketID, completedActivityID, svcInfo, triggerReason)
 	if err != nil {
 		reason := fmt.Sprintf("AI 决策失败: %v", err)
 		if decisionCtx.Err() == context.DeadlineExceeded {
@@ -1090,6 +1090,7 @@ func (e *SmartEngine) ensureContinuation(tx *gorm.DB, ticket *ticketModel, compl
 		payload, _ := json.Marshal(SmartProgressPayload{
 			TicketID:            ticket.ID,
 			CompletedActivityID: uintPtrIf(completedActivityID),
+			TriggerReason:       "activity_completed",
 		})
 		if err := submitTaskInTx(e.scheduler, tx, "itsm-smart-progress", payload); err != nil {
 			slog.Error("ensureContinuation: failed to submit smart-progress task", "error", err, "ticketID", ticket.ID)
@@ -1129,19 +1130,19 @@ func (e *SmartEngine) SubmitProgressTaskTx(tx *gorm.DB, payload json.RawMessage)
 }
 
 // RunDecisionCycleForTicket runs the decision cycle for a ticket (used by scheduler task).
-func (e *SmartEngine) RunDecisionCycleForTicket(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint) error {
+func (e *SmartEngine) RunDecisionCycleForTicket(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, triggerReasons ...string) error {
 	svcInfo, err := e.loadServiceForTicket(tx, ticketID)
 	if err != nil {
 		return fmt.Errorf("load service: %w", err)
 	}
-	return e.runDecisionCycle(ctx, tx, ticketID, completedActivityID, svcInfo)
+	return e.runDecisionCycle(ctx, tx, ticketID, completedActivityID, svcInfo, normalizedTriggerReason(completedActivityID, triggerReasons...))
 }
 
 // --- Agentic decision (delegates to DecisionExecutor) ---
 
 // agenticDecision builds domain context and tools, then delegates the ReAct loop
 // to the DecisionExecutor (implemented by the AI App).
-func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, svc *serviceModel) (*DecisionPlan, error) {
+func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, svc *serviceModel, triggerReason string) (*DecisionPlan, error) {
 	var agentID uint
 	if e.configProvider != nil {
 		agentID = e.configProvider.DecisionAgentID()
@@ -1155,7 +1156,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 	if e.configProvider != nil {
 		decisionMode = e.configProvider.DecisionMode()
 	}
-	systemMsg, userMsg, err := e.buildInitialSeed(tx, ticketID, svc, decisionMode, completedActivityID)
+	systemMsg, userMsg, err := e.buildInitialSeed(tx, ticketID, svc, decisionMode, completedActivityID, triggerReason)
 	if err != nil {
 		return nil, fmt.Errorf("build initial seed: %w", err)
 	}
@@ -1219,7 +1220,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 
 // buildInitialSeed constructs the system and user messages for the agentic decision.
 // The seed is intentionally lightweight — the agent queries detailed context via tools.
-func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceModel, decisionMode string, completedActivityID *uint) (string, string, error) {
+func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceModel, decisionMode string, completedActivityID *uint, triggerReason string) (string, string, error) {
 	// System message (domain context only; agent's system prompt is prepended by DecisionExecutor)
 	systemMsg := buildAgenticSystemPrompt(svc.CollaborationSpec, decisionMode, svc.WorkflowJSON)
 
@@ -1255,7 +1256,7 @@ func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceM
 
 	seed := map[string]any{
 		"decision_cycle": map[string]any{
-			"trigger_reason":        decisionTriggerReason(completedActivityID),
+			"trigger_reason":        triggerReason,
 			"completed_activity_id": completedActivityID,
 			"decision_mode":         normalizedDecisionMode(decisionMode),
 		},
@@ -1294,6 +1295,15 @@ func decisionTriggerReason(completedActivityID *uint) string {
 		return "activity_completed"
 	}
 	return "initial_decision"
+}
+
+func normalizedTriggerReason(completedActivityID *uint, triggerReasons ...string) string {
+	for _, reason := range triggerReasons {
+		if reason = strings.TrimSpace(reason); reason != "" {
+			return reason
+		}
+	}
+	return decisionTriggerReason(completedActivityID)
 }
 
 func normalizedDecisionMode(decisionMode string) string {

@@ -71,6 +71,7 @@ func HandleActionExecute(db *gorm.DB, classicEngine *ClassicEngine, smartEngine 
 			payload, _ := json.Marshal(SmartProgressPayload{
 				TicketID:            p.TicketID,
 				CompletedActivityID: &p.ActivityID,
+				TriggerReason:       "action_completed",
 			})
 			if smartEngine != nil {
 				if err := smartEngine.SubmitProgressTask(payload); err != nil {
@@ -205,8 +206,9 @@ func HandleWaitTimer(db *gorm.DB, classicEngine *ClassicEngine) func(ctx context
 
 // SmartProgressPayload is the async task payload for itsm-smart-progress.
 type SmartProgressPayload struct {
-	TicketID            uint  `json:"ticket_id"`
-	CompletedActivityID *uint `json:"completed_activity_id"`
+	TicketID            uint   `json:"ticket_id"`
+	CompletedActivityID *uint  `json:"completed_activity_id"`
+	TriggerReason       string `json:"trigger_reason,omitempty"`
 }
 
 // BoundaryTimerPayload is the async task payload for itsm-boundary-timer.
@@ -355,7 +357,7 @@ func HandleSmartRecovery(db *gorm.DB, smartEngine *SmartEngine) func(ctx context
 			}
 
 			// Submit recovery task
-			payload, _ := json.Marshal(SmartProgressPayload{TicketID: t.ID})
+			payload, _ := json.Marshal(SmartProgressPayload{TicketID: t.ID, TriggerReason: "recovery"})
 			if err := smartEngine.SubmitProgressTask(payload); err != nil {
 				slog.Error("smart recovery: failed to submit progress task", "ticketID", t.ID, "error", err)
 				continue
@@ -378,9 +380,9 @@ func HandleSmartProgress(db *gorm.DB, smartEngine *SmartEngine) func(ctx context
 			return fmt.Errorf("invalid payload: %w", err)
 		}
 
-		slog.Info("smart-progress: running decision cycle", "ticketID", p.TicketID, "completedActivityID", p.CompletedActivityID)
+		slog.Info("smart-progress: running decision cycle", "ticketID", p.TicketID, "completedActivityID", p.CompletedActivityID, "triggerReason", p.TriggerReason)
 
-		err := smartEngine.RunDecisionCycleForTicket(ctx, db.WithContext(ctx), p.TicketID, p.CompletedActivityID)
+		err := smartEngine.RunDecisionCycleForTicket(ctx, db.WithContext(ctx), p.TicketID, p.CompletedActivityID, p.TriggerReason)
 
 		if err != nil {
 			// Decision failures are handled internally (failure count incremented),
