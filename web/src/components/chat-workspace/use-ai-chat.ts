@@ -5,12 +5,17 @@ import { Chat, useChat, type UseChatHelpers } from "@ai-sdk/react"
 import type { ChatTransport, UIMessage } from "ai"
 import { sessionApi, type SessionMessage } from "@/lib/api"
 import { TOKEN_KEY } from "@/lib/constants"
+import { storedSessionMessageUIId } from "./message-id"
 import { createStreamFromSSE } from "./sse-stream"
 
 export function sessionMessagesToUIMessages(messages: SessionMessage[]): UIMessage[] {
+  const seenIds = new Map<string, number>()
   return messages.map((m) => {
+    const baseId = storedSessionMessageUIId(m)
+    const seenCount = seenIds.get(baseId) ?? 0
+    seenIds.set(baseId, seenCount + 1)
     const base: UIMessage = {
-      id: String(m.id),
+      id: seenCount === 0 ? baseId : `${baseId}-${seenCount + 1}`,
       role: m.role === "user" ? "user" : "assistant",
       metadata: { originalRole: m.role, ...m.metadata },
       parts: [{ type: "text", text: m.content || "", state: "done" }],

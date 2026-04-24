@@ -1,4 +1,4 @@
-import { expect, type Browser } from "@playwright/test"
+import { expect, type Page } from "@playwright/test"
 import { createBdd, test as base } from "playwright-bdd"
 
 import { MyTicketsActor } from "../actors/itsm/my-tickets"
@@ -6,6 +6,7 @@ import { ServiceCatalogActor } from "../actors/itsm/service-catalog"
 import { ServiceDeskActor } from "../actors/itsm/service-desk"
 import { AgenticITSMActorFactory, type AgenticITSMActorSession, type VPNTicketRef } from "../actors/itsm/session"
 import { TicketApprovalActor } from "../actors/itsm/ticket-approval"
+import { TicketEvidence } from "../support/ticket-evidence"
 
 type AgenticITSMSharedState = {
   vpnTicket: VPNTicketRef | null
@@ -20,10 +21,10 @@ export class AgenticITSMScenario {
   private session: AgenticITSMActorSession | null = null
 
   constructor(
-    browser: Browser,
+    page: Page,
     private readonly state: AgenticITSMSharedState,
   ) {
-    this.actorFactory = new AgenticITSMActorFactory(browser)
+    this.actorFactory = new AgenticITSMActorFactory(page)
   }
 
   async loginAs(user: Parameters<AgenticITSMActorFactory["loginAs"]>[0]) {
@@ -50,6 +51,10 @@ export class AgenticITSMScenario {
     return new MyTicketsActor(this.currentSession())
   }
 
+  ticketEvidence() {
+    return new TicketEvidence(this.currentSession())
+  }
+
   rememberVPNTicket(ticket: VPNTicketRef) {
     this.state.vpnTicket = ticket
   }
@@ -70,8 +75,8 @@ export class AgenticITSMScenario {
 }
 
 export const test = base.extend<{ agenticItsm: AgenticITSMScenario }>({
-  agenticItsm: async ({ browser }, run) => {
-    const scenario = new AgenticITSMScenario(browser, sharedState)
+  agenticItsm: async ({ page }, run) => {
+    const scenario = new AgenticITSMScenario(page, sharedState)
     try {
       await run(scenario)
     } finally {

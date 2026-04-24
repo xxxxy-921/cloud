@@ -6,6 +6,8 @@ import {
   shouldProcessServiceDeskHistorySnapshot,
   shouldSyncServiceDeskHistory,
 } from "./service-desk-chat-sync"
+import type { SessionMessage } from "../../../../lib/api"
+import { ensureUniqueUIMessageIds, storedSessionMessageUIId } from "../../../../components/chat-workspace/message-id"
 
 describe("shouldSyncServiceDeskHistory", () => {
   test("does not apply server history while a live run is submitted or streaming", () => {
@@ -189,5 +191,60 @@ describe("doesServiceDeskHistoryCoverLiveMessages", () => {
     ] as UIMessage[]
 
     expect(doesServiceDeskHistoryCoverLiveMessages(serverMessages, liveMessages)).toBe(true)
+  })
+})
+
+describe("storedSessionMessageUIId", () => {
+  test("uses stable stored ids that cannot collide with live chat message ids", () => {
+    const messages = [
+      {
+        id: 1,
+        sessionId: 101,
+        sequence: 1,
+        role: "user",
+        content: "我想申请 VPN",
+        tokenCount: 0,
+        createdAt: "2026-04-24T00:00:00Z",
+      },
+      {
+        id: 2,
+        sessionId: 101,
+        sequence: 2,
+        role: "assistant",
+        content: "请补充 VPN 账号",
+        tokenCount: 0,
+        createdAt: "2026-04-24T00:00:01Z",
+      },
+    ] satisfies SessionMessage[]
+
+    expect(messages.map(storedSessionMessageUIId)).toEqual([
+      "stored-101-1-user-1",
+      "stored-101-2-assistant-2",
+    ])
+  })
+})
+
+describe("ensureUniqueUIMessageIds", () => {
+  test("keeps message ids unchanged when they are already unique", () => {
+    const messages = [
+      { id: "a", role: "user", parts: [{ type: "text", text: "1" }] },
+      { id: "b", role: "assistant", parts: [{ type: "text", text: "2" }] },
+    ] as UIMessage[]
+
+    expect(ensureUniqueUIMessageIds(messages)).toBe(messages)
+  })
+
+  test("adds stable suffixes to repeated runtime message ids", () => {
+    const messages = [
+      { id: "same", role: "user", parts: [{ type: "text", text: "1" }] },
+      { id: "same", role: "assistant", parts: [{ type: "text", text: "2" }] },
+      { id: "same", role: "assistant", parts: [{ type: "text", text: "3" }] },
+    ] as UIMessage[]
+
+    expect(ensureUniqueUIMessageIds(messages).map((message) => message.id)).toEqual([
+      "same",
+      "same#2",
+      "same#3",
+    ])
   })
 })

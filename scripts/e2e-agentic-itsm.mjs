@@ -240,6 +240,7 @@ async function main() {
         ...process.env,
         E2E_BASE_URL: webURL,
         E2E_SLOW_MO: e2eSlowMo,
+        E2E_WORKERS: process.env.E2E_WORKERS || "1",
       },
     })
   } finally {

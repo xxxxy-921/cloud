@@ -1,4 +1,4 @@
-import { expect, type Browser, type BrowserContext, type Page } from "@playwright/test"
+import { expect, type Page } from "@playwright/test"
 
 import { type APIResult, apiRequest } from "../../support/api-client"
 import { type E2EUserCredentials, loginAs } from "../../support/auth-behavior"
@@ -9,31 +9,30 @@ export type VPNTicketRef = {
 }
 
 export class AgenticITSMActorFactory {
-  private readonly contexts: BrowserContext[] = []
+  private session: AgenticITSMActorSession | null = null
 
-  constructor(private readonly browser: Browser) {}
+  constructor(private readonly page: Page) {}
 
   async loginAs(user: E2EUserCredentials) {
-    const context = await this.browser.newContext()
-    this.contexts.push(context)
-    const page = await context.newPage()
-    const session = new AgenticITSMActorSession(page, user)
-    await session.login()
-    return session
+    await this.page.context().clearCookies()
+    await this.page.goto("/login")
+    await this.page.evaluate(() => {
+      window.localStorage.clear()
+      window.sessionStorage.clear()
+    })
+
+    this.session ??= new AgenticITSMActorSession(this.page)
+    await this.session.login(user)
+    return this.session
   }
 
-  async close() {
-    await Promise.all(this.contexts.map((context) => context.close()))
-  }
+  async close() {}
 }
 
 export class AgenticITSMActorSession {
-  private readonly runtimeErrors: string[] = []
+  private runtimeErrors: string[] = []
 
-  constructor(
-    readonly page: Page,
-    private readonly user: E2EUserCredentials,
-  ) {
+  constructor(readonly page: Page) {
     this.page.on("pageerror", (error) => this.runtimeErrors.push(error.message))
     this.page.on("console", (message) => {
       if (message.type() === "error") {
@@ -42,8 +41,9 @@ export class AgenticITSMActorSession {
     })
   }
 
-  async login() {
-    await loginAs(this.page, this.user)
+  async login(user: E2EUserCredentials) {
+    this.runtimeErrors = []
+    await loginAs(this.page, user)
   }
 
   async api<T>(method: string, path: string, body?: unknown): Promise<T> {

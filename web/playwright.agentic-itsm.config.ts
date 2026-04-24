@@ -6,6 +6,11 @@ function e2eSlowMo() {
   return Number.isFinite(value) && value >= 0 ? value : 220
 }
 
+function e2eWorkers() {
+  const value = Number(process.env.E2E_WORKERS ?? "1")
+  return Number.isInteger(value) && value > 0 ? value : 1
+}
+
 const testDir = defineBddConfig({
   features: "e2e/features/**/*.feature",
   steps: ["e2e/fixtures/**/*.ts", "e2e/steps/**/*.ts"],
@@ -17,6 +22,7 @@ const testDir = defineBddConfig({
 export default defineConfig({
   testDir,
   timeout: 180_000,
+  workers: e2eWorkers(),
   expect: {
     timeout: 5_000,
   },

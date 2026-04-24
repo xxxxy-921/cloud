@@ -7,6 +7,7 @@ import { DefaultChatTransport, type UIMessage } from "ai"
 
 import { api, sessionApi, type SessionMessage } from "@/lib/api"
 import { sessionMessagesToUIMessages } from "@/components/chat-workspace"
+import { ensureUniqueUIMessageIds } from "@/components/chat-workspace/message-id"
 import {
   doesServiceDeskHistoryCoverLiveMessages,
   shouldProcessServiceDeskHistorySnapshot,
@@ -92,7 +93,15 @@ export function useServiceDeskChat(
   const chat = useChat({
     chat: chatInstance,
   }) as UseChatHelpers<UIMessage>
-  const runtime = useAISDKRuntime(chat)
+  const runtimeMessages = useMemo(
+    () => ensureUniqueUIMessageIds(chat.messages),
+    [chat.messages],
+  )
+  const runtimeChat = useMemo(
+    () => ({ ...chat, messages: runtimeMessages }) as UseChatHelpers<UIMessage>,
+    [chat, runtimeMessages],
+  )
+  const runtime = useAISDKRuntime(runtimeChat)
   const localMessagesSignature = useMemo(
     () => uiMessagesSignature(chat.messages),
     [chat.messages],
@@ -136,5 +145,5 @@ export function useServiceDeskChat(
     setChatMessages,
   ])
 
-  return { chat, runtime }
+  return { chat: runtimeChat, runtime }
 }
