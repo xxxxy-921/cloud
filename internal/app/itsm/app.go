@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
@@ -392,6 +393,7 @@ func (a *ITSMApp) Tasks() []scheduler.TaskDef {
 		{
 			Name:        "itsm-smart-progress",
 			Type:        scheduler.TypeAsync,
+			Timeout:     2 * time.Minute,
 			Description: "Execute AI decision cycle for smart engine tickets",
 			Handler:     engine.HandleSmartProgress(db.DB, smartEngine),
 		},

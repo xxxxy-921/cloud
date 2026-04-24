@@ -182,7 +182,30 @@ func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Tick
 		return nil, err
 	}
 
+	if svc.EngineType == "smart" {
+		s.startSmartDecisionAsync(ticket.ID)
+	}
+
 	return s.ticketRepo.FindByID(ticket.ID)
+}
+
+func (s *TicketService) startSmartDecisionAsync(ticketID uint) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		slog.Info("smart ticket: immediate decision started", "ticketID", ticketID)
+		err := s.smartEngine.RunDecisionCycleForTicket(ctx, s.ticketRepo.DB().WithContext(ctx), ticketID, nil)
+		if err != nil {
+			if errors.Is(err, engine.ErrAIDecisionFailed) || errors.Is(err, engine.ErrAIDisabled) {
+				slog.Warn("smart ticket: immediate decision ended with handled error", "ticketID", ticketID, "error", err)
+				return
+			}
+			slog.Error("smart ticket: immediate decision failed", "ticketID", ticketID, "error", err)
+			return
+		}
+		slog.Info("smart ticket: immediate decision completed", "ticketID", ticketID)
+	}()
 }
 
 // CreateFromAgent creates a ticket from an AI agent session, using full TicketService processing

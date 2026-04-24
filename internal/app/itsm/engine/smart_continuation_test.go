@@ -16,6 +16,8 @@ import (
 type txRecordingSubmitter struct {
 	regularCalls int
 	txCalls      int
+	lastName     string
+	lastPayload  json.RawMessage
 }
 
 func (s *txRecordingSubmitter) SubmitTask(string, json.RawMessage) error {
@@ -23,11 +25,13 @@ func (s *txRecordingSubmitter) SubmitTask(string, json.RawMessage) error {
 	return errors.New("regular submitter must not be used from workflow transaction")
 }
 
-func (s *txRecordingSubmitter) SubmitTaskTx(tx *gorm.DB, _ string, _ json.RawMessage) error {
+func (s *txRecordingSubmitter) SubmitTaskTx(tx *gorm.DB, name string, payload json.RawMessage) error {
 	if tx == nil {
 		return errors.New("missing transaction")
 	}
 	s.txCalls++
+	s.lastName = name
+	s.lastPayload = append(s.lastPayload[:0], payload...)
 	return nil
 }
 
@@ -179,6 +183,66 @@ func TestSmartProgressContinuationWaitsForParallelGroupConvergence(t *testing.T)
 	}
 }
 
+func TestSmartStartInitializesWorkflowWithoutRunningDecision(t *testing.T) {
+	db := newSmartContinuationDB(t)
+
+	agentID := uint(11)
+	service := serviceModel{
+		Name:       "智能 VPN 服务",
+		EngineType: "smart",
+		AgentID:    &agentID,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	ticket := ticketModel{
+		ServiceID:   service.ID,
+		Status:      "pending",
+		EngineType:  "smart",
+		RequesterID: 7,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, nil, nil)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return eng.Start(context.Background(), tx, StartParams{
+			TicketID:    ticket.ID,
+			RequesterID: ticket.RequesterID,
+		})
+	})
+	if err != nil {
+		t.Fatalf("start smart workflow: %v", err)
+	}
+
+	var reloaded ticketModel
+	if err := db.First(&reloaded, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if reloaded.Status != "in_progress" {
+		t.Fatalf("expected ticket status in_progress, got %q", reloaded.Status)
+	}
+
+	var timelineCount int64
+	if err := db.Model(&timelineModel{}).
+		Where("ticket_id = ? AND event_type = ?", ticket.ID, "workflow_started").
+		Count(&timelineCount).Error; err != nil {
+		t.Fatalf("count timeline: %v", err)
+	}
+	if timelineCount != 1 {
+		t.Fatalf("expected one workflow_started timeline, got %d", timelineCount)
+	}
+
+	var activityCount int64
+	if err := db.Model(&activityModel{}).Where("ticket_id = ?", ticket.ID).Count(&activityCount).Error; err != nil {
+		t.Fatalf("count activities: %v", err)
+	}
+	if activityCount != 0 {
+		t.Fatalf("initial smart start should not run decision synchronously, got %d activities", activityCount)
+	}
+}
+
 func newSmartContinuationDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
@@ -187,7 +251,7 @@ func newSmartContinuationDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&ticketModel{}, &activityModel{}, &assignmentModel{}, &timelineModel{}); err != nil {
+	if err := db.AutoMigrate(&serviceModel{}, &ticketModel{}, &activityModel{}, &assignmentModel{}, &timelineModel{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
 	return db

@@ -53,6 +53,40 @@ func TestUIMessageStreamEncoder_TextDelta(t *testing.T) {
 	}
 }
 
+func TestUIMessageStreamEncoder_EmitsSingleStartAcrossReactTurns(t *testing.T) {
+	var buf bytes.Buffer
+	enc := NewUIMessageStreamEncoder(&buf)
+
+	_ = enc.Encode(Event{Type: EventTypeLLMStart, Sequence: 1})
+	_ = enc.Encode(Event{Type: EventTypeToolCall, Sequence: 2, ToolCallID: "call_1", ToolName: "search", ToolArgs: json.RawMessage(`{"q":"x"}`)})
+	_ = enc.Encode(Event{Type: EventTypeToolResult, Sequence: 3, ToolCallID: "call_1", ToolOutput: "result"})
+	_ = enc.Encode(Event{Type: EventTypeLLMStart, Sequence: 4})
+	_ = enc.Encode(Event{Type: EventTypeContentDelta, Sequence: 5, Text: "Done"})
+	_ = enc.Encode(Event{Type: EventTypeDone})
+	_ = enc.Close()
+
+	lines := extractDataLines(t, &buf)
+	startCount := 0
+	for _, line := range lines {
+		if line == "[DONE]" {
+			continue
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			t.Fatalf("invalid json line %q: %v", line, err)
+		}
+		if chunk["type"] == "start" {
+			startCount++
+			if chunk["messageId"] != "msg-1" {
+				t.Fatalf("expected first start messageId to remain stable, got %#v", chunk["messageId"])
+			}
+		}
+	}
+	if startCount != 1 {
+		t.Fatalf("expected one start chunk across one gateway run, got %d: %v", startCount, lines)
+	}
+}
+
 func assertAIUIMessageChunkSchemaSubset(t *testing.T, lines []string) {
 	t.Helper()
 	allowed := map[string]map[string]bool{

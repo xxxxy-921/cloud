@@ -2,12 +2,44 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"metis/internal/llm"
 )
+
+type controlledStreamLLMClient struct {
+	streams []chan llm.StreamEvent
+	next    int
+}
+
+func newControlledStreamLLMClient(turns int) *controlledStreamLLMClient {
+	streams := make([]chan llm.StreamEvent, turns)
+	for i := range streams {
+		streams[i] = make(chan llm.StreamEvent, 8)
+	}
+	return &controlledStreamLLMClient{streams: streams}
+}
+
+func (c *controlledStreamLLMClient) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return nil, llm.ErrNotSupported
+}
+
+func (c *controlledStreamLLMClient) ChatStream(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	if c.next >= len(c.streams) {
+		return nil, errors.New("unexpected chat stream request")
+	}
+	stream := c.streams[c.next]
+	c.next++
+	return stream, nil
+}
+
+func (c *controlledStreamLLMClient) Embedding(context.Context, llm.EmbeddingRequest) (*llm.EmbeddingResponse, error) {
+	return nil, llm.ErrNotSupported
+}
 
 func collectEvents(ch <-chan Event) []Event {
 	var events []Event
@@ -15,6 +47,20 @@ func collectEvents(ch <-chan Event) []Event {
 		events = append(events, evt)
 	}
 	return events
+}
+
+func waitEvent(t *testing.T, ch <-chan Event) Event {
+	t.Helper()
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("event channel closed")
+		}
+		return evt
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for executor event")
+	}
+	return Event{}
 }
 
 func TestReactExecutor_DirectContent(t *testing.T) {
@@ -128,6 +174,59 @@ func TestReactExecutor_ToolCallRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReactExecutor_EmitsToolCallBeforeLLMTurnDone(t *testing.T) {
+	mockLLM := newControlledStreamLLMClient(2)
+	mockExec := newMockToolExecutor()
+	mockExec.SetResult("search", ToolResult{Output: "result from search"})
+
+	exec := NewReactExecutor(mockLLM, mockExec)
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "Search x"}},
+		Tools:    []ToolDefinition{{Name: "search", Parameters: []byte(`{"type":"object"}`)}},
+		MaxTurns: 2,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected first event to be LLM start, got %+v", evt)
+	}
+
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "tool_call", ToolCall: &llm.ToolCall{ID: "call_1", Name: "search", Arguments: `{"q":"x"}`}}
+	toolCall := waitEvent(t, ch)
+	if toolCall.Type != EventTypeToolCall || toolCall.ToolCallID != "call_1" || toolCall.ToolName != "search" {
+		t.Fatalf("expected live tool call before LLM turn done, got %+v", toolCall)
+	}
+
+	select {
+	case evt := <-ch:
+		t.Fatalf("did not expect tool execution before LLM turn done, got %+v", evt)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 3, OutputTokens: 5}}
+	close(mockLLM.streams[0])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeToolResult || !strings.Contains(evt.ToolOutput, "result from search") {
+		t.Fatalf("expected tool result after LLM turn done, got %+v", evt)
+	}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected second turn LLM start, got %+v", evt)
+	}
+
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "content_delta", Content: "Done"}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeContentDelta || evt.Text != "Done" {
+		t.Fatalf("expected final content delta, got %+v", evt)
+	}
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 8, OutputTokens: 1}}
+	close(mockLLM.streams[1])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeDone {
+		t.Fatalf("expected done event, got %+v", evt)
+	}
+}
+
 func TestReactExecutor_UnknownToolReturnsToolResult(t *testing.T) {
 	mockLLM := newMockLLMClient([]llm.StreamEvent{
 		{Type: "tool_call", ToolCall: &llm.ToolCall{ID: "call_1", Name: "missing_tool", Arguments: `{}`}},
@@ -193,6 +292,76 @@ func TestReactExecutor_ToolExecutionErrorReturnsToolResult(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected tool_result event, got %#v", events)
+	}
+}
+
+func TestReactExecutor_ITSMDraftPrepareSurfacesUseStableID(t *testing.T) {
+	mockExec := newMockToolExecutor()
+	mockExec.SetResult("itsm.service_load", ToolResult{Output: `{"service_id":5,"name":"VPN 开通申请","engine_type":"smart"}`})
+	mockExec.SetResult("itsm.draft_prepare", ToolResult{Output: `{
+		"ok": true,
+		"ready_for_confirmation": true,
+		"service_id": 5,
+		"service_name": "VPN 开通申请",
+		"service_engine_type": "smart",
+		"draft_version": 2,
+		"summary": "申请 VPN",
+		"form_data": {"vpn_account": "wenhaowu@dev.com"},
+		"form_schema": {"version": 1, "fields": [{"key": "vpn_account", "type": "text", "label": "VPN账号"}]}
+	}`})
+
+	mockLLM := newMockLLMClient([]llm.StreamEvent{
+		{Type: "tool_call", ToolCall: &llm.ToolCall{ID: "call_load", Name: "itsm.service_load", Arguments: `{"service_id":5}`}},
+		{Type: "done", Usage: &llm.Usage{}},
+		{Type: "tool_call", ToolCall: &llm.ToolCall{ID: "call_draft", Name: "itsm.draft_prepare", Arguments: `{"service_id":5}`}},
+		{Type: "done", Usage: &llm.Usage{}},
+		{Type: "content_delta", Content: "请确认草稿。"},
+		{Type: "done", Usage: &llm.Usage{}},
+	}, nil)
+
+	exec := NewReactExecutor(mockLLM, mockExec)
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "申请 VPN"}},
+		Tools: []ToolDefinition{
+			{Name: "itsm.service_load"},
+			{Name: "itsm.draft_prepare"},
+		},
+		MaxTurns: 3,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	events := collectEvents(ch)
+	var surfaces []Event
+	toolCallCounts := map[string]int{}
+	for _, evt := range events {
+		if evt.Type == EventTypeToolCall {
+			toolCallCounts[evt.ToolCallID]++
+		}
+		if evt.Type == EventTypeUISurface && evt.SurfaceType == itsmDraftFormSurfaceType {
+			surfaces = append(surfaces, evt)
+		}
+	}
+	if toolCallCounts["call_draft"] != 1 {
+		t.Fatalf("expected one draft_prepare tool call event, got %d in %+v", toolCallCounts["call_draft"], events)
+	}
+	if len(surfaces) != 2 {
+		t.Fatalf("expected loading and ready draft surfaces, got %+v", surfaces)
+	}
+	if surfaces[0].SurfaceID != surfaces[1].SurfaceID || surfaces[0].SurfaceID != "itsm-draft-form-call_draft" {
+		t.Fatalf("expected stable draft surface id, got %q and %q", surfaces[0].SurfaceID, surfaces[1].SurfaceID)
+	}
+
+	var loadingPayload, readyPayload map[string]any
+	if err := json.Unmarshal(surfaces[0].SurfaceData, &loadingPayload); err != nil {
+		t.Fatalf("unmarshal loading surface: %v", err)
+	}
+	if err := json.Unmarshal(surfaces[1].SurfaceData, &readyPayload); err != nil {
+		t.Fatalf("unmarshal ready surface: %v", err)
+	}
+	if loadingPayload["status"] != "loading" || readyPayload["status"] != "ready" {
+		t.Fatalf("expected loading then ready surfaces, got %#v then %#v", loadingPayload, readyPayload)
 	}
 }
 

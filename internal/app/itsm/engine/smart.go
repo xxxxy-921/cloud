@@ -179,8 +179,7 @@ func (e *SmartEngine) Start(ctx context.Context, tx *gorm.DB, params StartParams
 	// Record timeline: workflow started
 	e.recordTimeline(tx, params.TicketID, nil, params.RequesterID, "workflow_started", "智能流程已启动", "")
 
-	// Execute the decision cycle
-	return e.runDecisionCycle(ctx, tx, params.TicketID, nil, svcInfo)
+	return nil
 }
 
 // Progress advances the workflow after an activity is completed.

@@ -27,6 +27,7 @@ type UIMessageStreamEncoder struct {
 	mu          sync.Mutex
 	w           io.Writer
 	messageID   string
+	started     bool
 	textBlock   blockState
 	reasonBlock blockState
 }
@@ -52,6 +53,10 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 
 	switch evt.Type {
 	case EventTypeLLMStart:
+		if enc.started {
+			return nil
+		}
+		enc.started = true
 		enc.messageID = fmt.Sprintf("msg-%d", evt.Sequence)
 		return enc.writeLine(map[string]any{
 			"type":      "start",

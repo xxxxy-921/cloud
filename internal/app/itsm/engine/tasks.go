@@ -380,9 +380,7 @@ func HandleSmartProgress(db *gorm.DB, smartEngine *SmartEngine) func(ctx context
 
 		slog.Info("smart-progress: running decision cycle", "ticketID", p.TicketID, "completedActivityID", p.CompletedActivityID)
 
-		err := db.Transaction(func(tx *gorm.DB) error {
-			return smartEngine.RunDecisionCycleForTicket(ctx, tx, p.TicketID, p.CompletedActivityID)
-		})
+		err := smartEngine.RunDecisionCycleForTicket(ctx, db.WithContext(ctx), p.TicketID, p.CompletedActivityID)
 
 		if err != nil {
 			// Decision failures are handled internally (failure count incremented),
@@ -395,6 +393,7 @@ func HandleSmartProgress(db *gorm.DB, smartEngine *SmartEngine) func(ctx context
 			return err
 		}
 
+		slog.Info("smart-progress: decision cycle completed", "ticketID", p.TicketID, "completedActivityID", p.CompletedActivityID)
 		return nil
 	}
 }

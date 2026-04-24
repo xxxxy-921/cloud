@@ -90,6 +90,12 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 				case "tool_call":
 					if evt.ToolCall != nil {
 						toolCalls = append(toolCalls, *evt.ToolCall)
+						emit(Event{
+							Type:       EventTypeToolCall,
+							ToolCallID: evt.ToolCall.ID,
+							ToolName:   evt.ToolCall.Name,
+							ToolArgs:   json.RawMessage(evt.ToolCall.Arguments),
+						})
 					}
 				case "done":
 					if evt.Usage != nil {
@@ -127,12 +133,6 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 
 			// Execute each tool call
 			for _, tc := range toolCalls {
-				emit(Event{
-					Type:       EventTypeToolCall,
-					ToolCallID: tc.ID,
-					ToolName:   tc.Name,
-					ToolArgs:   json.RawMessage(tc.Arguments),
-				})
 				if tc.Name == "itsm.draft_prepare" && currentITSMServiceEngine == "smart" {
 					emit(makeITSMDraftLoadingSurface(tc.ID))
 				}

@@ -77,6 +77,7 @@ func (e *decisionExecutor) Execute(ctx context.Context, agentID uint, req app.AI
 	// ReAct loop
 	var totalInputTokens, totalOutputTokens int
 	for turn := 0; turn < maxTurns; turn++ {
+		slog.Info("decision executor: starting LLM turn", "agentID", agentID, "turn", turn+1, "maxTurns", maxTurns, "model", agentCfg.Model)
 		chatReq := llm.ChatRequest{
 			Model:       agentCfg.Model,
 			Messages:    messages,
@@ -89,6 +90,7 @@ func (e *decisionExecutor) Execute(ctx context.Context, agentID uint, req app.AI
 		if err != nil {
 			return nil, fmt.Errorf("llm chat (turn %d): %w", turn, err)
 		}
+		slog.Info("decision executor: completed LLM turn", "agentID", agentID, "turn", turn+1, "toolCalls", len(resp.ToolCalls))
 
 		totalInputTokens += resp.Usage.InputTokens
 		totalOutputTokens += resp.Usage.OutputTokens
