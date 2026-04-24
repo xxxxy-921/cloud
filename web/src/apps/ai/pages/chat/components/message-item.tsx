@@ -457,6 +457,10 @@ export function QAPair({
       .join("") || ""
   )
   const showMainResponse = !suppressTextWhenDataPart || renderedDataParts.length === 0
+  const hasAuxiliaryResponse = toolActivities.length > 0 || renderedDataParts.length > 0
+  const showAssistantHeader = Boolean(
+    agentName && (hasAuxiliaryResponse || showMainResponse && (mainAiMessage || streamingContent)),
+  )
 
   return (
     <div className="py-6">
@@ -466,6 +470,10 @@ export function QAPair({
         messageId={Number(userMessage.id)}
         onEdit={onEditMessage}
       />
+
+      {showAssistantHeader && (
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">{agentName}</div>
+      )}
 
       {/* Streaming extras (thinking block, plan progress, loading dots) */}
       {streamingExtras}
@@ -482,7 +490,6 @@ export function QAPair({
       {showMainResponse && (mainAiMessage || streamingContent) && (
         <AIResponse
           content={mainContent}
-          agentName={agentName}
           isStreaming={isStreaming}
           onRegenerate={onRegenerate}
           doneMetrics={doneMetrics}
