@@ -785,6 +785,7 @@ export function Component() {
 
                 {isActive && !isDecisioning && activeHumanActivity && isCurrentUserResponsible && getNodeOutcomes(activeHumanActivity.activityType).map((outcome) => (
                   <Button
+                    data-testid={outcome === "approved" ? "itsm-ticket-approve-button" : "itsm-ticket-reject-button"}
                     key={`${activeHumanActivity.id}-${outcome}`}
                     size="sm"
                     className={outcome === "rejected" ? "w-full text-destructive" : "w-full"}
@@ -903,6 +904,7 @@ export function Component() {
               )} />
               <SheetFooter>
                 <Button
+                  data-testid={approvalOutcome === "approved" ? "itsm-ticket-confirm-approve-button" : "itsm-ticket-confirm-reject-button"}
                   type="submit"
                   size="sm"
                   variant={approvalOutcome === "approved" ? "default" : "destructive"}

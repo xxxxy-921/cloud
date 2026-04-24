@@ -292,7 +292,7 @@ function ITSMDraftFormSurfaceCard({
           </div>
         </div>
         {currentPayload.ticketCode && (
-          <div className="mt-3 inline-flex items-center rounded-full border border-emerald-500/20 bg-background/70 px-3 py-1 text-sm text-foreground">
+          <div data-testid="itsm-submitted-ticket-code" className="mt-3 inline-flex items-center rounded-full border border-emerald-500/20 bg-background/70 px-3 py-1 text-sm text-foreground">
             工单编号：<span className="ml-1 font-semibold">{currentPayload.ticketCode}</span>
           </div>
         )}
@@ -339,6 +339,7 @@ function ITSMDraftFormSurfaceCard({
 
       <div className="mt-4 flex justify-end">
         <Button
+          data-testid="itsm-submit-draft-button"
           type="button"
           onClick={() => submitMutation.mutate()}
           disabled={submitMutation.isPending}

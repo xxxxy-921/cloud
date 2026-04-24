@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/casbin/casbin/v2"
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
 
@@ -26,8 +27,17 @@ import (
 
 const (
 	seedDevAdminUsername = "admin"
-	seedDevAdminPassword = "password"
 	seedDevAdminEmail    = "admin@local.dev"
+	seedDevPassword      = "password"
+
+	seedDevRoleITSMServiceManager = "itsm_service_manager"
+	seedDevRoleVPNApplicant       = "vpn_applicant"
+	seedDevRoleVPNApprover        = "vpn_approver"
+
+	seedDevUserITSMServiceManager  = "itsm_service_manager"
+	seedDevUserVPNApplicant        = "vpn_applicant"
+	seedDevUserVPNNetworkApprover  = "vpn_network_approver"
+	seedDevUserVPNSecurityApprover = "vpn_security_approver"
 
 	seedDevITSMFallbackAssigneeKey = "itsm.smart_ticket.guard.fallback_assignee"
 )
@@ -42,7 +52,7 @@ func runSeedDevCommand(args []string) {
 		slog.Error("seed-dev failed", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("seed-dev: all done", "admin_username", seedDevAdminUsername, "admin_password", seedDevAdminPassword)
+	slog.Info("seed-dev: all done", "admin_username", seedDevAdminUsername, "admin_password", seedDevPassword)
 }
 
 func maybeRunSeedDev(configPath, envPath string, cfg *config.MetisConfig) (bool, error) {
@@ -144,7 +154,7 @@ func runSeedDev(configPath, envPath string) error {
 	if err != nil {
 		return fmt.Errorf("admin role not found: %w", err)
 	}
-	if err := seed.UpsertInstallAdmin(db.DB, seedDevAdminUsername, seedDevAdminPassword, seedDevAdminEmail, adminRole.ID); err != nil {
+	if err := seed.UpsertInstallAdmin(db.DB, seedDevAdminUsername, seedDevPassword, seedDevAdminEmail, adminRole.ID); err != nil {
 		return fmt.Errorf("upsert dev admin: %w", err)
 	}
 	if err := seed.AssignInstallAdminOrgIdentity(db.DB, seedDevAdminUsername); err != nil {
@@ -152,6 +162,9 @@ func runSeedDev(configPath, envPath string) error {
 	}
 	if err := seedDevDefaultITSMFallbackAssignee(db.DB); err != nil {
 		return fmt.Errorf("seed dev ITSM fallback assignee: %w", err)
+	}
+	if err := seedDevVPNUsersAndRoles(db.DB, enforcer); err != nil {
+		return fmt.Errorf("seed dev VPN users and roles: %w", err)
 	}
 
 	if err := runDevBootstrap(db.DB, cfg, envPath); err != nil {
@@ -190,6 +203,149 @@ func seedDevDefaultITSMFallbackAssignee(db *gorm.DB) error {
 	cfg.Value = strconv.FormatUint(uint64(admin.ID), 10)
 	if err := db.Save(&cfg).Error; err != nil {
 		return fmt.Errorf("update %s: %w", seedDevITSMFallbackAssigneeKey, err)
+	}
+	return nil
+}
+
+func seedDevVPNUsersAndRoles(db *gorm.DB, enforcer *casbin.Enforcer) error {
+	roles := []model.Role{
+		{Name: "ITSM 服务目录管理员", Code: seedDevRoleITSMServiceManager, Description: "开发环境服务目录与参考路径生成测试角色", Sort: 20, DataScope: model.DataScopeAll},
+		{Name: "VPN 申请人", Code: seedDevRoleVPNApplicant, Description: "开发环境 VPN 申请测试角色", Sort: 21, DataScope: model.DataScopeSelf},
+		{Name: "VPN 处理人", Code: seedDevRoleVPNApprover, Description: "开发环境 VPN 待办处理测试角色", Sort: 22, DataScope: model.DataScopeSelf},
+	}
+	roleIDs := make(map[string]uint, len(roles))
+	for _, role := range roles {
+		id, err := upsertSeedDevRole(db, role)
+		if err != nil {
+			return err
+		}
+		roleIDs[role.Code] = id
+	}
+
+	users := []struct {
+		Username   string
+		Email      string
+		RoleCode   string
+		Identities []seed.UserOrgIdentity
+	}{
+		{Username: seedDevUserITSMServiceManager, Email: "itsm_service_manager@local.dev", RoleCode: seedDevRoleITSMServiceManager},
+		{Username: seedDevUserVPNApplicant, Email: "vpn_applicant@local.dev", RoleCode: seedDevRoleVPNApplicant},
+		{
+			Username: seedDevUserVPNNetworkApprover,
+			Email:    "vpn_network_approver@local.dev",
+			RoleCode: seedDevRoleVPNApprover,
+			Identities: []seed.UserOrgIdentity{
+				{DeptCode: "it", PosCode: "network_admin", Primary: true},
+			},
+		},
+		{
+			Username: seedDevUserVPNSecurityApprover,
+			Email:    "vpn_security_approver@local.dev",
+			RoleCode: seedDevRoleVPNApprover,
+			Identities: []seed.UserOrgIdentity{
+				{DeptCode: "it", PosCode: "security_admin", Primary: true},
+			},
+		},
+	}
+	for _, user := range users {
+		roleID := roleIDs[user.RoleCode]
+		if roleID == 0 {
+			return fmt.Errorf("missing seed-dev role id: %s", user.RoleCode)
+		}
+		if err := seed.UpsertLocalUser(db, user.Username, seedDevPassword, user.Email, roleID); err != nil {
+			return fmt.Errorf("upsert dev user %s: %w", user.Username, err)
+		}
+		if len(user.Identities) > 0 {
+			if err := seed.AssignUserOrgIdentities(db, user.Username, user.Identities); err != nil {
+				return fmt.Errorf("assign dev user %s org identities: %w", user.Username, err)
+			}
+		}
+	}
+
+	return seedDevVPNPolicies(enforcer)
+}
+
+func upsertSeedDevRole(db *gorm.DB, role model.Role) (uint, error) {
+	var existing model.Role
+	err := db.Where("code = ?", role.Code).First(&existing).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, fmt.Errorf("load role %s: %w", role.Code, err)
+		}
+		if err := db.Create(&role).Error; err != nil {
+			return 0, fmt.Errorf("create role %s: %w", role.Code, err)
+		}
+		return role.ID, nil
+	}
+	updates := map[string]any{
+		"name":        role.Name,
+		"description": role.Description,
+		"sort":        role.Sort,
+		"is_system":   false,
+		"data_scope":  role.DataScope,
+	}
+	if err := db.Model(&existing).Updates(updates).Error; err != nil {
+		return 0, fmt.Errorf("update role %s: %w", role.Code, err)
+	}
+	return existing.ID, nil
+}
+
+func seedDevVPNPolicies(enforcer *casbin.Enforcer) error {
+	policies := map[string][][]string{
+		seedDevRoleITSMServiceManager: {
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/catalogs/tree", "GET"},
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/services", "GET"},
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/services/:id", "GET"},
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/services/:id/actions", "GET"},
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/services/:id/knowledge-documents", "GET"},
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/sla", "GET"},
+			{seedDevRoleITSMServiceManager, "/api/v1/itsm/workflows/generate", "POST"},
+			{seedDevRoleITSMServiceManager, "itsm", "read"},
+			{seedDevRoleITSMServiceManager, "itsm:service:list", "read"},
+		},
+		seedDevRoleVPNApplicant: {
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/smart-staffing/config", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/service-desk/sessions/:sid/state", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/service-desk/sessions/:sid/draft/submit", "POST"},
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/tickets/mine", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/tickets/:id", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/tickets/:id/timeline", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/itsm/tickets/:id/activities", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions", "POST"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions/:sid", "GET"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions/:sid", "DELETE"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions/:sid/chat", "POST"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions/:sid/cancel", "POST"},
+			{seedDevRoleVPNApplicant, "/api/v1/ai/sessions/:sid/images", "POST"},
+			{seedDevRoleVPNApplicant, "itsm", "read"},
+			{seedDevRoleVPNApplicant, "itsm:service-desk:use", "read"},
+			{seedDevRoleVPNApplicant, "itsm:ticket:mine", "read"},
+		},
+		seedDevRoleVPNApprover: {
+			{seedDevRoleVPNApprover, "/api/v1/itsm/tickets/approvals/pending", "GET"},
+			{seedDevRoleVPNApprover, "/api/v1/itsm/tickets/approvals/history", "GET"},
+			{seedDevRoleVPNApprover, "/api/v1/itsm/tickets/:id", "GET"},
+			{seedDevRoleVPNApprover, "/api/v1/itsm/tickets/:id/timeline", "GET"},
+			{seedDevRoleVPNApprover, "/api/v1/itsm/tickets/:id/activities", "GET"},
+			{seedDevRoleVPNApprover, "/api/v1/itsm/tickets/:id/progress", "POST"},
+			{seedDevRoleVPNApprover, "itsm", "read"},
+			{seedDevRoleVPNApprover, "itsm:ticket", "read"},
+			{seedDevRoleVPNApprover, "itsm:ticket:approval:pending", "read"},
+			{seedDevRoleVPNApprover, "itsm:ticket:approval:history", "read"},
+		},
+	}
+
+	for roleCode, rolePolicies := range policies {
+		if _, err := enforcer.RemoveFilteredPolicy(0, roleCode); err != nil {
+			return fmt.Errorf("clear policies for %s: %w", roleCode, err)
+		}
+		if len(rolePolicies) == 0 {
+			continue
+		}
+		if _, err := enforcer.AddPolicies(rolePolicies); err != nil {
+			return fmt.Errorf("add policies for %s: %w", roleCode, err)
+		}
 	}
 	return nil
 }

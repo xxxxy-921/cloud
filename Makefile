@@ -4,6 +4,7 @@
 EDITION ?=
 APPS    ?=
 BUN     ?= $(shell command -v bun 2>/dev/null || echo $(HOME)/.bun/bin/bun)
+E2E_SLOW_MO ?= 220
 
 GO_TAGS := $(if $(EDITION),-tags $(EDITION),)
 
@@ -35,7 +36,7 @@ web-install:
 	cd ./web && $(BUN) install
 
 test-e2e-agentic-itsm: web-full-registry
-	BUN="$(BUN)" $(BUN) scripts/e2e-agentic-itsm.mjs
+	BUN="$(BUN)" E2E_SLOW_MO="$(E2E_SLOW_MO)" $(BUN) scripts/e2e-agentic-itsm.mjs
 
 # --- Development ---
 

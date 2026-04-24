@@ -123,6 +123,7 @@ export function ApprovalListPage({ mode }: { mode: ApprovalListMode }) {
             ) : (
               items.map((item) => (
                 <TableRow
+                  data-testid={`itsm-ticket-row-${item.code}`}
                   key={item.id}
                   className="cursor-pointer"
                   onClick={() => navigate(`/itsm/tickets/${item.id}`, { state: withActiveMenuPermission(config.permission) })}

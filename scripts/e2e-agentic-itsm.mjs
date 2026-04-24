@@ -11,6 +11,7 @@ const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = path.resolve(path.dirname(scriptPath), "..")
 const webRoot = path.join(repoRoot, "web")
 const bunBin = process.env.BUN || "bun"
+const e2eSlowMo = process.env.E2E_SLOW_MO || "220"
 const timeoutMs = 120_000
 const children = []
 
@@ -238,6 +239,7 @@ async function main() {
       env: {
         ...process.env,
         E2E_BASE_URL: webURL,
+        E2E_SLOW_MO: e2eSlowMo,
       },
     })
   } finally {

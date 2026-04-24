@@ -685,7 +685,7 @@ func seedServiceDefinitions(db *gorm.DB) error {
 			SLACode:           "standard",
 			IntakeFormSchema:  vpnAccessFormSchema,
 			WorkflowJSON:      vpnAccessWorkflowJSON,
-			CollaborationSpec: `用户在 IT 服务台提交 VPN 开通申请。服务台需要收集 VPN 账号、设备与用途说明、访问原因。如果访问原因属于线上支持、故障排查、生产应急或网络接入问题，则交给信息部网络管理员岗位处理，参与者类型必须使用 position_department，部门编码使用 it，岗位编码使用 network_admin。如果访问原因属于外部协作、长期远程办公、跨境访问或安全合规事项，则交给信息部信息安全管理员岗位处理，参与者类型必须使用 position_department，部门编码使用 it，岗位编码使用 security_admin。处理任务完成后直接结束流程。`,
+			CollaborationSpec: `用户在 IT 服务台提交 VPN 开通申请。参考路径必须包含名为“填写 VPN 开通申请”的申请填写节点，收集 VPN 账号、设备与用途说明、访问原因。如果访问原因属于线上支持、故障排查、生产应急或网络接入问题，则进入名为“网络管理员处理”的处理节点，交给信息部网络管理员岗位处理，参与者类型必须使用 position_department，部门编码使用 it，岗位编码使用 network_admin。如果访问原因属于外部协作、长期远程办公、跨境访问或安全合规事项，则进入名为“信息安全管理员处理”的处理节点，交给信息部信息安全管理员岗位处理，参与者类型必须使用 position_department，部门编码使用 it，岗位编码使用 security_admin。处理任务完成后直接结束流程。`,
 		},
 	}
 

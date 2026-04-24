@@ -340,6 +340,7 @@ function GenerateWorkflowButton({ serviceId, collaborationSpec }: {
   return (
     <>
       <Button
+        data-testid="itsm-generate-workflow-button"
         type="button"
         variant="outline"
         onClick={() => generateMut.mutate()}

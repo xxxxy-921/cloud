@@ -128,6 +128,7 @@ export function Component() {
             ) : (
               items.map((item) => (
                 <TableRow
+                  data-testid={`itsm-ticket-row-${item.code}`}
                   key={item.id}
                   className="cursor-pointer"
                   onClick={() => navigate(`/itsm/tickets/${item.id}`, { state: withActiveMenuPermission(TICKET_MENU_PERMISSION.mine) })}

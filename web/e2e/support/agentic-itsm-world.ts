@@ -1,5 +1,7 @@
 import { expect, type Page } from "@playwright/test"
 
+import { devUsers, expectAuthenticatedAs, loginAs, openLoginPage } from "./auth-behavior"
+
 export class AgenticITSMLiveWorld {
   private readonly runtimeErrors: string[] = []
 
@@ -15,35 +17,19 @@ export class AgenticITSMLiveWorld {
   }
 
   async givenIsolatedDevEnvironmentIsReady() {
-    await this.page.goto("/login")
-    await expect(this.page.locator("#username")).toBeVisible()
-    await expect(this.page.locator("#password")).toBeVisible()
+    await openLoginPage(this.page)
   }
 
   async whenAdminOpensLoginPage() {
-    await expect(this.page).toHaveURL(/\/login$/)
+    await openLoginPage(this.page)
   }
 
   async whenAdminSubmitsDevCredentials() {
-    await this.page.locator("#username").fill("admin")
-    await this.page.locator("#password").fill("password")
-
-    const [loginResponse] = await Promise.all([
-      this.page.waitForResponse((response) => {
-        const url = new URL(response.url())
-        return url.pathname === "/api/v1/auth/login" && response.request().method() === "POST"
-      }),
-      this.page.locator('button[type="submit"]').click(),
-    ])
-
-    expect(loginResponse.ok()).toBeTruthy()
-    const body = await loginResponse.json()
-    expect(body.code).toBe(0)
+    await loginAs(this.page, devUsers.admin)
   }
 
   async thenAdminCanSeeAuthenticatedShell() {
-    await expect(this.page).not.toHaveURL(/\/login$/)
-    await expect(this.page.getByRole("button", { name: /admin/ })).toBeVisible()
+    await expectAuthenticatedAs(this.page, devUsers.admin)
   }
 
   async thenNoRuntimeErrorsAppeared() {

@@ -152,7 +152,7 @@ export function FormRenderer({
                 control={form.control}
                 name={field.key}
                 render={({ field: controllerField, fieldState: { error } }) => (
-                  <div className="space-y-1.5">
+                  <div className="space-y-1.5" data-testid={`itsm-form-field-${field.key}`}>
                     <label className="text-sm font-medium leading-none">
                       {field.label}
                       {field.required && <span className="text-destructive ml-0.5">*</span>}
