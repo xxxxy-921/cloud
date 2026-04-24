@@ -154,6 +154,36 @@ func (e *SmartEngine) SetActionExecutor(executor *ActionExecutor) {
 	e.actionExecutor = executor
 }
 
+// Initialize sets up the workflow record for a smart-engine ticket without running the
+// AI decision cycle. The caller is responsible for triggering the decision cycle outside
+// the database transaction to prevent long-lived LLM calls from holding DB connections.
+func (e *SmartEngine) Initialize(ctx context.Context, tx *gorm.DB, params StartParams) error {
+	if !e.IsAvailable() {
+		return ErrSmartEngineUnavailable
+	}
+
+	// Load service definition for agent config
+	svcInfo, err := e.loadServiceForTicket(tx, params.TicketID)
+	if err != nil {
+		return fmt.Errorf("load service: %w", err)
+	}
+
+	if svcInfo.AgentID == nil || *svcInfo.AgentID == 0 {
+		return fmt.Errorf("智能服务未绑定 Agent")
+	}
+
+	// Update ticket status to in_progress
+	if err := tx.Model(&ticketModel{}).Where("id = ?", params.TicketID).
+		Update("status", "in_progress").Error; err != nil {
+		return err
+	}
+
+	// Record timeline: workflow started
+	e.recordTimeline(tx, params.TicketID, nil, params.RequesterID, "workflow_started", "智能流程已启动", "")
+
+	return nil
+}
+
 // Start initialises the workflow for a smart-engine ticket.
 func (e *SmartEngine) Start(ctx context.Context, tx *gorm.DB, params StartParams) error {
 	if !e.IsAvailable() {

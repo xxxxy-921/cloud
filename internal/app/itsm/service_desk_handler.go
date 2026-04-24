@@ -94,7 +94,12 @@ func (h *ServiceDeskHandler) SubmitDraft(c *gin.Context) {
 
 	result, err := tools.SubmitDraft(h.operator, h.stateStore, sid, userID, req)
 	if err != nil {
-		handler.Fail(c, http.StatusBadRequest, err.Error())
+		var ve *tools.DraftValidationError
+		if errors.As(err, &ve) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		} else {
+			handler.Fail(c, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	if result.Surface != nil {

@@ -59,8 +59,8 @@ func Open(driver, dsn string) (*DB, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to configure sqlite connection pool: %w", err)
 		}
-		sqlDB.SetMaxOpenConns(1)
-		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetMaxOpenConns(4)
+		sqlDB.SetMaxIdleConns(4)
 	}
 
 	// OpenTelemetry: auto-trace all DB queries (noop when OTel is disabled)

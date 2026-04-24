@@ -248,6 +248,14 @@ type ResolvedValue struct {
 	Route string `json:"route"`
 }
 
+// DraftValidationError represents a user-facing validation failure during draft submission.
+// Handlers should surface these as HTTP 400; other errors should be HTTP 500.
+type DraftValidationError struct {
+	Reason string
+}
+
+func (e *DraftValidationError) Error() string { return e.Reason }
+
 type DraftSubmitRequest struct {
 	DraftVersion int            `json:"draftVersion"`
 	Summary      string         `json:"summary"`
@@ -275,13 +283,13 @@ func SubmitDraft(op ServiceDeskOperator, store StateStore, sessionID uint, userI
 		return nil, fmt.Errorf("get state: %w", err)
 	}
 	if state == nil || state.Stage != "awaiting_confirmation" {
-		return nil, fmt.Errorf("当前阶段不允许提交草稿，请先完成草稿整理")
+		return nil, &DraftValidationError{Reason: "当前阶段不允许提交草稿，请先完成草稿整理"}
 	}
 	if state.LoadedServiceID == 0 {
-		return nil, fmt.Errorf("请先加载服务")
+		return nil, &DraftValidationError{Reason: "请先加载服务"}
 	}
 	if req.DraftVersion == 0 || req.DraftVersion != state.DraftVersion {
-		return nil, fmt.Errorf("草稿已变更（当前版本 %d，提交版本 %d），请重新确认表单", state.DraftVersion, req.DraftVersion)
+		return nil, &DraftValidationError{Reason: fmt.Sprintf("草稿已变更（当前版本 %d，提交版本 %d），请重新确认表单", state.DraftVersion, req.DraftVersion)}
 	}
 
 	detail, err := op.LoadService(state.LoadedServiceID)
@@ -289,10 +297,10 @@ func SubmitDraft(op ServiceDeskOperator, store StateStore, sessionID uint, userI
 		return nil, fmt.Errorf("load service for submit: %w", err)
 	}
 	if detail.EngineType != "smart" {
-		return nil, fmt.Errorf("仅支持 Agentic 服务提交")
+		return nil, &DraftValidationError{Reason: "仅支持 Agentic 服务提交"}
 	}
 	if detail.FieldsHash != state.FieldsHash {
-		return nil, fmt.Errorf("服务表单字段已变更，请重新整理草稿")
+		return nil, &DraftValidationError{Reason: "服务表单字段已变更，请重新整理草稿"}
 	}
 
 	formData := normalizeFormDataKeys(req.FormData, detail.FormFields)
@@ -338,9 +346,9 @@ func SubmitDraft(op ServiceDeskOperator, store StateStore, sessionID uint, userI
 	if err := state.TransitionTo("confirmed"); err != nil {
 		return nil, err
 	}
-	if err := store.SaveState(sessionID, state); err != nil {
-		return nil, fmt.Errorf("save confirmed state: %w", err)
-	}
+	// NOTE: Do NOT persist "confirmed" state before CreateTicket.
+	// If CreateTicket fails, the session state remains "awaiting_confirmation"
+	// in the database, allowing the user to retry without getting a 400.
 
 	ticket, err := op.CreateTicket(userID, state.LoadedServiceID, summary, formData, sessionID)
 	if err != nil {
@@ -548,21 +556,98 @@ func normalizeFormDataKeys(data map[string]any, fields []FormField) map[string]a
 	if len(data) == 0 {
 		return map[string]any{}
 	}
-	byLabel := make(map[string]string, len(fields))
+	byExact := make(map[string]string, len(fields)*2)
 	for _, f := range fields {
+		if f.Key != "" {
+			byExact[strings.TrimSpace(f.Key)] = f.Key
+		}
 		if f.Label != "" {
-			byLabel[strings.TrimSpace(f.Label)] = f.Key
+			byExact[strings.TrimSpace(f.Label)] = f.Key
 		}
 	}
+
 	normalized := make(map[string]any, len(data))
+	pendingAlias := make(map[string]any, len(data))
 	for key, val := range data {
 		canonicalKey := strings.TrimSpace(key)
-		if mapped, ok := byLabel[canonicalKey]; ok {
+		if mapped, ok := byExact[canonicalKey]; ok {
+			canonicalKey = mapped
+			normalized[canonicalKey] = val
+			continue
+		}
+		pendingAlias[canonicalKey] = val
+	}
+
+	for key, val := range pendingAlias {
+		canonicalKey := key
+		if mapped, ok := inferFormFieldAlias(key, fields); ok {
+			if _, exists := normalized[mapped]; exists {
+				continue
+			}
 			canonicalKey = mapped
 		}
 		normalized[canonicalKey] = val
 	}
 	return normalized
+}
+
+func inferFormFieldAlias(inputKey string, fields []FormField) (string, bool) {
+	key := normalizeFieldToken(inputKey)
+	if key == "" {
+		return "", false
+	}
+	for _, f := range fields {
+		fieldKey := normalizeFieldToken(f.Key)
+		semantic := normalizeFieldToken(strings.Join([]string{f.Key, f.Label, f.Description, f.Placeholder}, " "))
+		switch {
+		case isReasonAlias(key) && (fieldKey == "requestkind" || fieldKey == "accessreason" || strings.Contains(semantic, "requestkind")):
+			return f.Key, true
+		case isAccountAlias(key) && (fieldKey == "vpnaccount" || strings.Contains(semantic, "vpnaccount") || strings.Contains(semantic, "account")):
+			return f.Key, true
+		case isDeviceUsageAlias(key) && (fieldKey == "deviceusage" || strings.Contains(semantic, "deviceusage")):
+			return f.Key, true
+		}
+	}
+	return "", false
+}
+
+func normalizeFieldToken(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isReasonAlias(key string) bool {
+	switch key {
+	case "accessreason", "reason", "requestreason", "requestkind", "kind":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAccountAlias(key string) bool {
+	switch key {
+	case "account", "email", "useremail", "vpnaccount", "vpnemail":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDeviceUsageAlias(key string) bool {
+	switch key {
+	case "device", "deviceusage", "devicepurpose", "usage", "purpose", "usecase":
+		return true
+	default:
+		return false
+	}
 }
 
 func mergePrefillFormData(data map[string]any, prefill map[string]any) map[string]any {

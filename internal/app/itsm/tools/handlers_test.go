@@ -364,6 +364,72 @@ func TestDraftPrepare_UsesPrefillSuggestionsBeforeRequiredValidation(t *testing.
 	}
 }
 
+func TestDraftPrepare_NormalizesCommonAliasKeys(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: smartVPNServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "service_loaded",
+		LoadedServiceID: 5,
+		FieldsHash:      "vpn123",
+	}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	result, err := draftPrepareHandler(op, store)(ctx, 1, []byte(`{
+		"summary":"VPN access request",
+		"form_data":{
+			"email":"test@123.com",
+			"device":"Windows online support",
+			"access_reason":"online support"
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("prepare draft: %v", err)
+	}
+
+	var resp struct {
+		OK                   bool           `json:"ok"`
+		ReadyForConfirmation bool           `json:"ready_for_confirmation"`
+		NextRequiredTool     string         `json:"next_required_tool"`
+		FormData             map[string]any `json:"form_data"`
+		MissingRequired      []struct {
+			Key string `json:"key"`
+		} `json:"missing_required_fields"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !resp.OK || !resp.ReadyForConfirmation || resp.NextRequiredTool != "itsm.draft_confirm" {
+		t.Fatalf("expected ready draft, got %s", string(result))
+	}
+	if len(resp.MissingRequired) != 0 {
+		t.Fatalf("expected no missing required fields, got %+v", resp.MissingRequired)
+	}
+	if resp.FormData["vpn_account"] != "test@123.com" ||
+		resp.FormData["device_usage"] != "Windows online support" ||
+		resp.FormData["request_kind"] != "online support" {
+		t.Fatalf("expected aliases normalized to canonical keys, got %+v", resp.FormData)
+	}
+}
+
+func TestNormalizeFormDataKeysKeepsExactKeyBeforeAlias(t *testing.T) {
+	fields := []FormField{
+		{Key: "device_usage", Label: "Device usage", Type: "textarea"},
+		{Key: "purpose", Label: "Purpose", Type: "textarea"},
+	}
+
+	got := normalizeFormDataKeys(map[string]any{
+		"purpose": "keep exact purpose field",
+		"device":  "map device alias",
+	}, fields)
+
+	if got["purpose"] != "keep exact purpose field" {
+		t.Fatalf("expected exact purpose key to be preserved, got %+v", got)
+	}
+	if got["device_usage"] != "map device alias" {
+		t.Fatalf("expected device alias to map to device_usage, got %+v", got)
+	}
+}
+
 func TestDraftPrepare_StillReportsMissingAccountWhenRequestHasNoAccount(t *testing.T) {
 	store := newMemStateStore()
 	op := &stubOperator{detail: vpnServiceDetail(5)}

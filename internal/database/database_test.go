@@ -22,8 +22,8 @@ func TestOpenSQLiteAddsBusyTimeoutWhenMissing(t *testing.T) {
 	}
 }
 
-func TestOpenSQLiteLimitsConnectionPoolToSingleWriter(t *testing.T) {
-	db, err := Open("sqlite", "file:single_writer?mode=memory&cache=shared")
+func TestOpenSQLiteUsesSmallConnectionPool(t *testing.T) {
+	db, err := Open("sqlite", "file:small_pool?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestOpenSQLiteLimitsConnectionPoolToSingleWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get sql db: %v", err)
 	}
-	if got := sqlDB.Stats().MaxOpenConnections; got != 1 {
-		t.Fatalf("expected max open connections to be 1, got %d", got)
+	if got := sqlDB.Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("expected max open connections to be 4, got %d", got)
 	}
 }

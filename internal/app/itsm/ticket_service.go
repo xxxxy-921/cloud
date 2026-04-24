@@ -172,7 +172,10 @@ func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Tick
 			}
 			return s.classicEngine.Start(context.Background(), tx, startParams)
 		case "smart":
-			return s.smartEngine.Start(context.Background(), tx, engine.StartParams{
+			// Only initialize (update status + record timeline) inside the transaction.
+			// The AI decision cycle is enqueued after commit so LLM calls never hold
+			// the ticket creation transaction or block the request path.
+			return s.smartEngine.Initialize(context.Background(), tx, engine.StartParams{
 				TicketID:    ticket.ID,
 				RequesterID: requesterID,
 			})
@@ -180,6 +183,16 @@ func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Tick
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+
+	// For smart-engine tickets, enqueue the decision cycle after the transaction
+	// commits. The scheduler executes it outside the request path.
+	if svc.EngineType == "smart" && s.smartEngine.IsAvailable() {
+		payload, _ := json.Marshal(engine.SmartProgressPayload{TicketID: ticket.ID})
+		if err := s.smartEngine.SubmitProgressTask(payload); err != nil {
+			slog.Error("smart engine decision cycle enqueue failed after ticket creation",
+				"ticketID", ticket.ID, "error", err)
+		}
 	}
 
 	return s.ticketRepo.FindByID(ticket.ID)
