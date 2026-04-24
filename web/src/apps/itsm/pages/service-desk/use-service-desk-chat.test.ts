@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import type { UIMessage } from "ai"
 
 import {
+  doesServiceDeskHistoryCoverLiveMessages,
   shouldProcessServiceDeskHistorySnapshot,
   shouldSyncServiceDeskHistory,
 } from "./service-desk-chat-sync"
@@ -58,8 +60,7 @@ describe("shouldProcessServiceDeskHistorySnapshot", () => {
       shouldProcessServiceDeskHistorySnapshot({
         status: "ready",
         hasServerSnapshot: true,
-        serverMessageCount: 0,
-        localMessageCount: 0,
+        serverCoversLiveMessages: true,
         serverSnapshotKey: "101:empty-history",
         syncedServerSnapshotKey: "101:empty-history",
       }),
@@ -71,8 +72,7 @@ describe("shouldProcessServiceDeskHistorySnapshot", () => {
       shouldProcessServiceDeskHistorySnapshot({
         status: "ready",
         hasServerSnapshot: true,
-        serverMessageCount: 2,
-        localMessageCount: 2,
+        serverCoversLiveMessages: true,
         serverSnapshotKey: "101:persisted-history",
         syncedServerSnapshotKey: "101:empty-history",
       }),
@@ -81,8 +81,7 @@ describe("shouldProcessServiceDeskHistorySnapshot", () => {
       shouldProcessServiceDeskHistorySnapshot({
         status: "streaming",
         hasServerSnapshot: true,
-        serverMessageCount: 2,
-        localMessageCount: 2,
+        serverCoversLiveMessages: true,
         serverSnapshotKey: "101:persisted-history",
         syncedServerSnapshotKey: "101:empty-history",
       }),
@@ -94,11 +93,101 @@ describe("shouldProcessServiceDeskHistorySnapshot", () => {
       shouldProcessServiceDeskHistorySnapshot({
         status: "ready",
         hasServerSnapshot: true,
-        serverMessageCount: 1,
-        localMessageCount: 2,
+        serverCoversLiveMessages: false,
         serverSnapshotKey: "101:user-only",
         syncedServerSnapshotKey: "101:empty-history",
       }),
     ).toBe(false)
+  })
+})
+
+describe("doesServiceDeskHistoryCoverLiveMessages", () => {
+  test("does not treat a user-only server snapshot as covering a live assistant response", () => {
+    const serverMessages = [
+      {
+        id: "1",
+        role: "user",
+        parts: [{ type: "text", text: "我想申请 VPN" }],
+      },
+    ] as UIMessage[]
+    const liveMessages = [
+      ...serverMessages,
+      {
+        id: "msg-1",
+        role: "assistant",
+        parts: [{ type: "text", text: "正在为你匹配服务" }],
+      },
+    ] as UIMessage[]
+
+    expect(doesServiceDeskHistoryCoverLiveMessages(serverMessages, liveMessages)).toBe(false)
+  })
+
+  test("requires persisted tool results before replacing a completed live tool", () => {
+    const liveMessages = [
+      {
+        id: "msg-1",
+        role: "assistant",
+        parts: [{
+          type: "tool-itsm.service_match",
+          toolCallId: "call-1",
+          state: "output-available",
+          input: { query: "VPN" },
+          output: { selected_service_id: 5 },
+        }],
+      },
+    ] as UIMessage[]
+    const serverToolCallOnly = [
+      {
+        id: "2",
+        role: "assistant",
+        metadata: { originalRole: "tool_call", tool_call_id: "call-1" },
+        parts: [{ type: "text", text: "" }],
+      },
+    ] as UIMessage[]
+    const serverWithResult = [
+      ...serverToolCallOnly,
+      {
+        id: "3",
+        role: "assistant",
+        metadata: { originalRole: "tool_result", tool_call_id: "call-1" },
+        parts: [{ type: "text", text: "" }],
+      },
+    ] as UIMessage[]
+
+    expect(doesServiceDeskHistoryCoverLiveMessages(serverToolCallOnly, liveMessages)).toBe(false)
+    expect(doesServiceDeskHistoryCoverLiveMessages(serverWithResult, liveMessages)).toBe(true)
+  })
+
+  test("covers live surfaces by stable surface id", () => {
+    const liveMessages = [
+      {
+        id: "msg-1",
+        role: "assistant",
+        parts: [{
+          type: "data-ui-surface",
+          data: {
+            surfaceId: "itsm-draft-form-call-1",
+            surfaceType: "itsm.draft_form",
+            payload: { status: "ready" },
+          },
+        }],
+      },
+    ] as UIMessage[]
+    const serverMessages = [
+      {
+        id: "4",
+        role: "assistant",
+        parts: [{
+          type: "data-ui-surface",
+          data: {
+            surfaceId: "itsm-draft-form-call-1",
+            surfaceType: "itsm.draft_form",
+            payload: { status: "ready" },
+          },
+        }],
+      },
+    ] as UIMessage[]
+
+    expect(doesServiceDeskHistoryCoverLiveMessages(serverMessages, liveMessages)).toBe(true)
   })
 })

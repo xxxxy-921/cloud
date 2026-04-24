@@ -67,7 +67,7 @@ func assertAIUIMessageChunkSchemaSubset(t *testing.T, lines []string) {
 		"tool-output-available": {"type": true, "toolCallId": true, "output": true},
 		"data-plan":             {"type": true, "data": true},
 		"data-step":             {"type": true, "data": true},
-		"data-ui-surface":       {"type": true, "data": true},
+		"data-ui-surface":       {"type": true, "id": true, "data": true},
 		"message-metadata":      {"type": true, "messageMetadata": true},
 		"finish":                {"type": true, "finishReason": true},
 		"error":                 {"type": true, "errorText": true},
@@ -84,7 +84,7 @@ func assertAIUIMessageChunkSchemaSubset(t *testing.T, lines []string) {
 		"tool-output-available": {"toolCallId", "output"},
 		"data-plan":             {"data"},
 		"data-step":             {"data"},
-		"data-ui-surface":       {"data"},
+		"data-ui-surface":       {"id", "data"},
 		"message-metadata":      {"messageMetadata"},
 		"finish":                {"finishReason"},
 		"error":                 {"errorText"},
@@ -221,6 +221,7 @@ func TestUIMessageStreamEncoder_UISurface(t *testing.T) {
 
 	lines := extractDataLines(t, &buf)
 	assertJSONField(t, lines[1], "type", "data-ui-surface")
+	assertJSONField(t, lines[1], "id", "draft-1")
 	assertNestedJSONField(t, lines[1], "data", "surfaceId", "draft-1")
 	assertNestedJSONField(t, lines[1], "data", "surfaceType", "itsm.draft_form")
 }

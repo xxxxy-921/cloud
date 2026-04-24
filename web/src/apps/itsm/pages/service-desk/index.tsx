@@ -384,12 +384,14 @@ function ServiceDeskConversation({
     queryClient.invalidateQueries({ queryKey: ["ai-sessions"] })
   }, [queryClient, session.id])
 
+  const handleChatError = useCallback((err: Error) => {
+    toast.error(err.message)
+    invalidateWorkspace()
+  }, [invalidateWorkspace])
+
   const { chat, runtime } = useServiceDeskChat(session.id, sessionData?.messages, {
     onFinish: invalidateWorkspace,
-    onError: (err) => {
-      toast.error(err.message)
-      invalidateWorkspace()
-    },
+    onError: handleChatError,
   })
 
   const chatBusy = chat.status === "streaming" || chat.status === "submitted"

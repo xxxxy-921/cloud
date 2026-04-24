@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
-import { isDataUIPart, isReasoningUIPart, type DynamicToolUIPart, type ToolUIPart, type UIMessage } from "ai"
+import { isDataUIPart, isReasoningUIPart, type UIMessage } from "ai"
 import {
   AlertCircle,
   Check,
@@ -27,19 +27,9 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { PlanProgress } from "./plan-progress"
 import { ThinkingBlock } from "./thinking-block"
+import { collectToolActivitiesFromParts, type ToolActivity, type ToolActivityStatus } from "./tool-activities"
 
-type ToolActivityStatus = "preparing" | "running" | "completed" | "error"
-type ChatToolPart = DynamicToolUIPart | ToolUIPart
 type FilePart = { type: "file"; url?: string; mediaType: string }
-
-interface ToolActivity {
-  id: string
-  toolName: string
-  toolArgs?: unknown
-  durationMs?: number
-  status: ToolActivityStatus
-  errorText?: string
-}
 
 interface MessageTimelineProps {
   messages: UIMessage[]
@@ -311,10 +301,6 @@ function ToolActivityRow({ activity }: { activity: ToolActivity }) {
   )
 }
 
-function isChatToolPart(part: UIMessage["parts"][number]): part is ChatToolPart {
-  return part.type === "dynamic-tool" || part.type.startsWith("tool-")
-}
-
 function isDataPart(part: UIMessage["parts"][number]) {
   return part.type.startsWith("data-")
 }
@@ -326,35 +312,6 @@ function dataPartIdentity(part: UIMessage["parts"][number], fallback: number) {
     if (typeof surfaceId === "string" && surfaceId) return `${part.type}:${surfaceId}`
   }
   return `${part.type}:${fallback}`
-}
-
-function getToolName(part: ChatToolPart) {
-  return part.type === "dynamic-tool" ? part.toolName : part.type.split("-").slice(1).join("-")
-}
-
-function getToolStatusFromPart(part: ChatToolPart): ToolActivityStatus {
-  if (part.state === "input-streaming") return "preparing"
-  if (part.state === "input-available") return "running"
-  if (part.state === "output-error" || Boolean(part.errorText)) return "error"
-  if (part.state === "output-available") {
-    if (typeof part.output === "string" && (part.output.startsWith("Error:") || part.output.includes("unknown tool:"))) {
-      return "error"
-    }
-    return "completed"
-  }
-  return "running"
-}
-
-function collectToolActivitiesFromParts(message: UIMessage): ToolActivity[] {
-  return message.parts
-    ?.filter(isChatToolPart)
-    .map((part) => ({
-      id: part.toolCallId,
-      toolName: getToolName(part),
-      toolArgs: part.input,
-      status: getToolStatusFromPart(part),
-      errorText: part.errorText,
-    })) ?? []
 }
 
 function getAssistantExtras(message: UIMessage, isStreaming?: boolean) {

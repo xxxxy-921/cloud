@@ -138,6 +138,7 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		}
 		return enc.writeLine(map[string]any{
 			"type": "data-ui-surface",
+			"id":   evt.SurfaceID,
 			"data": map[string]any{
 				"surfaceId":   evt.SurfaceID,
 				"surfaceType": evt.SurfaceType,

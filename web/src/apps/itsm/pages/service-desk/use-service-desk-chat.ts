@@ -8,6 +8,7 @@ import { DefaultChatTransport, type UIMessage } from "ai"
 import { api, sessionApi, type SessionMessage } from "@/lib/api"
 import { sessionMessagesToUIMessages } from "@/components/chat-workspace"
 import {
+  doesServiceDeskHistoryCoverLiveMessages,
   shouldProcessServiceDeskHistorySnapshot,
   shouldSyncServiceDeskHistory,
 } from "./service-desk-chat-sync"
@@ -52,11 +53,7 @@ export function useServiceDeskChat(
   initialSessionMessages?: SessionMessage[],
   options?: UseServiceDeskChatOptions,
 ) {
-  const optionsRef = useRef(options)
   const syncedServerSnapshotRef = useRef("")
-  useEffect(() => {
-    optionsRef.current = options
-  }, [options])
 
   const initialSignature = useMemo(
     () => sessionMessagesSignature(initialSessionMessages),
@@ -64,7 +61,7 @@ export function useServiceDeskChat(
   )
   const serverMessages = useMemo(
     () => sessionMessagesToUIMessages(initialSessionMessages ?? []),
-    [initialSessionMessages, initialSignature],
+    [initialSessionMessages],
   )
   const serverMessagesSignature = useMemo(
     () => uiMessagesSignature(serverMessages),
@@ -85,12 +82,12 @@ export function useServiceDeskChat(
     const chat = new Chat<UIMessage>({
       id: String(sessionId),
       transport,
-      onFinish: () => optionsRef.current?.onFinish?.(),
-      onError: (error) => optionsRef.current?.onError?.(error),
+      onFinish: options?.onFinish,
+      onError: options?.onError,
     })
     ;(chat as unknown as { state: { snapshot: typeof fastSnapshot } }).state.snapshot = fastSnapshot
     return chat
-  }, [sessionId, transport])
+  }, [sessionId, transport, options?.onFinish, options?.onError])
 
   const chat = useChat({
     chat: chatInstance,
@@ -101,15 +98,14 @@ export function useServiceDeskChat(
     [chat.messages],
   )
 
-  const { setMessages: setChatMessages, status: chatStatus } = chat
+  const { messages: chatMessages, setMessages: setChatMessages, status: chatStatus } = chat
   useEffect(() => {
     const serverSnapshotKey = `${sessionId}:${initialSignature}`
     if (
       !shouldProcessServiceDeskHistorySnapshot({
         status: chatStatus,
         hasServerSnapshot: initialSessionMessages !== undefined,
-        serverMessageCount: serverMessages.length,
-        localMessageCount: chat.messages.length,
+        serverCoversLiveMessages: doesServiceDeskHistoryCoverLiveMessages(serverMessages, chatMessages),
         serverSnapshotKey,
         syncedServerSnapshotKey: syncedServerSnapshotRef.current,
       })
@@ -130,9 +126,9 @@ export function useServiceDeskChat(
     }
   }, [
     chatStatus,
+    chatMessages,
     initialSignature,
     initialSessionMessages,
-    chat.messages.length,
     localMessagesSignature,
     serverMessages,
     serverMessagesSignature,
