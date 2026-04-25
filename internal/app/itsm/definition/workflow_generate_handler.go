@@ -43,5 +43,10 @@ func (h *WorkflowGenerateHandler) Generate(c *gin.Context) {
 	c.Set("audit_resource", "itsm_workflow")
 	c.Set("audit_summary", "Generated workflow from collaboration spec")
 
+	if !resp.Saved && len(resp.Errors) > 0 {
+		c.JSON(http.StatusBadRequest, handler.R{Code: -1, Message: "工作流存在阻断性错误，未保存", Data: resp})
+		return
+	}
+
 	handler.OK(c, resp)
 }

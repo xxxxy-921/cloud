@@ -591,6 +591,18 @@ func (p *bddConfigProvider) AuditLevel() string {
 	return "full"
 }
 
+func (p *bddConfigProvider) SLACriticalThresholdSeconds() int {
+	return 1800
+}
+
+func (p *bddConfigProvider) SLAWarningThresholdSeconds() int {
+	return 3600
+}
+
+func (p *bddConfigProvider) SimilarHistoryLimit() int {
+	return 5
+}
+
 var _ engine.EngineConfigProvider = (*bddConfigProvider)(nil)
 
 // ---------------------------------------------------------------------------

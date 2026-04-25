@@ -163,9 +163,9 @@ func TestBuildUserMessage_WithActions(t *testing.T) {
 func TestBuildUserMessage_WithPrevErrors(t *testing.T) {
 	svc := &WorkflowGenerateService{}
 	prevErrors := []engine.ValidationError{
-		{NodeID: "node-1", Level: "error", Message: "缺少出边"},
-		{EdgeID: "edge-2", Level: "error", Message: "引用了不存在的目标节点"},
-		{NodeID: "node-3", Level: "error", Message: "人工节点 node-3 必须配置处理人"},
+		{NodeID: "node-1", Level: "blocking", Message: "缺少出边"},
+		{EdgeID: "edge-2", Level: "blocking", Message: "引用了不存在的目标节点"},
+		{NodeID: "node-3", Level: "blocking", Message: "人工节点 node-3 必须配置处理人"},
 	}
 	msg := svc.buildUserMessage("处理流程", "", prevErrors)
 
@@ -336,15 +336,15 @@ func TestGenerate_RetriesValidationFailure(t *testing.T) {
 
 func TestWorkflowValidationErrorsLogValue(t *testing.T) {
 	got := workflowValidationErrorsLogValue([]engine.ValidationError{
-		{NodeID: "gateway-1", EdgeID: "edge-2", Level: "error", Message: "排他网关缺少默认分支"},
+		{NodeID: "gateway-1", EdgeID: "edge-2", Level: "blocking", Message: "排他网关缺少默认分支"},
 		{NodeID: "approve-1", Message: "处理节点缺少参与人"},
 	})
 
-	if !strings.Contains(got, "[error] node=gateway-1 edge=edge-2 排他网关缺少默认分支") {
+	if !strings.Contains(got, "[blocking] node=gateway-1 edge=edge-2 排他网关缺少默认分支") {
 		t.Fatalf("expected first validation error details, got %q", got)
 	}
-	if !strings.Contains(got, "[error] node=approve-1 处理节点缺少参与人") {
-		t.Fatalf("expected default error level and node details, got %q", got)
+	if !strings.Contains(got, "[blocking] node=approve-1 处理节点缺少参与人") {
+		t.Fatalf("expected default blocking level and node details, got %q", got)
 	}
 }
 

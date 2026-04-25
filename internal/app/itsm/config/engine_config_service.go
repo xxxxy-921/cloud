@@ -583,3 +583,15 @@ func (s *EngineConfigService) IntakeAgentID() uint {
 func (s *EngineConfigService) AuditLevel() string {
 	return s.getConfigValue(SmartTicketGuardAuditLevelKey, "full")
 }
+
+func (s *EngineConfigService) SLACriticalThresholdSeconds() int {
+	return 1800
+}
+
+func (s *EngineConfigService) SLAWarningThresholdSeconds() int {
+	return 3600
+}
+
+func (s *EngineConfigService) SimilarHistoryLimit() int {
+	return 5
+}

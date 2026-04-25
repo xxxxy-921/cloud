@@ -29,6 +29,7 @@ type decisionToolContext struct {
 	knowledgeBaseIDs    []uint
 	actionExecutor      *ActionExecutor
 	completedActivityID *uint
+	configProvider      EngineConfigProvider
 }
 
 // allDecisionTools returns the complete set of decision domain tools.
@@ -500,7 +501,14 @@ func toolSimilarHistory() decisionToolDef {
 				return toolError(fmt.Sprintf("参数格式错误: %v", err))
 			}
 			if params.Limit <= 0 {
-				params.Limit = 5
+				defaultLimit := 5
+				if ctx.configProvider != nil {
+					defaultLimit = ctx.configProvider.SimilarHistoryLimit()
+					if defaultLimit <= 0 {
+						defaultLimit = 5
+					}
+				}
+				params.Limit = defaultLimit
 			}
 
 			rows, _ := ctx.data.GetSimilarHistory(ctx.serviceID, ctx.ticketID, params.Limit)
@@ -571,6 +579,14 @@ func toolSLAStatus() decisionToolDef {
 				})
 			}
 
+			// Resolve thresholds from config or use defaults
+			criticalThreshold := int64(1800)
+			warningThreshold := int64(3600)
+			if ctx.configProvider != nil {
+				criticalThreshold = int64(ctx.configProvider.SLACriticalThresholdSeconds())
+				warningThreshold = int64(ctx.configProvider.SLAWarningThresholdSeconds())
+			}
+
 			now := time.Now()
 			result := map[string]any{
 				"has_sla":    true,
@@ -583,9 +599,9 @@ func toolSLAStatus() decisionToolDef {
 				result["response_remaining_seconds"] = remaining
 				if remaining < 0 {
 					urgency = "breached"
-				} else if remaining < 1800 { // 30 minutes
+				} else if remaining < criticalThreshold {
 					urgency = "critical"
-				} else if remaining < 3600 { // 1 hour
+				} else if remaining < warningThreshold {
 					urgency = "warning"
 				}
 			}

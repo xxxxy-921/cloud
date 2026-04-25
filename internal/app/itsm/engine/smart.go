@@ -46,6 +46,12 @@ type EngineConfigProvider interface {
 	DecisionAgentID() uint
 	// AuditLevel returns how much AI reasoning is written to the ticket timeline.
 	AuditLevel() string
+	// SLACriticalThresholdSeconds returns the SLA critical urgency threshold in seconds (default 1800).
+	SLACriticalThresholdSeconds() int
+	// SLAWarningThresholdSeconds returns the SLA warning urgency threshold in seconds (default 3600).
+	SLAWarningThresholdSeconds() int
+	// SimilarHistoryLimit returns the max number of similar history records (default 5).
+	SimilarHistoryLimit() int
 }
 
 // ParticipantCandidate is a user available for assignment.
@@ -180,6 +186,15 @@ func (e *SmartEngine) Start(ctx context.Context, tx *gorm.DB, params StartParams
 	// Record timeline: workflow started
 	e.recordTimeline(tx, params.TicketID, nil, params.RequesterID, "workflow_started", "智能流程已启动", "")
 
+	// Trigger initial decision cycle
+	var ticket ticketModel
+	if err := tx.First(&ticket, params.TicketID).Error; err != nil {
+		return fmt.Errorf("load ticket for continuation: %w", err)
+	}
+	if _, err := e.ensureContinuation(tx, &ticket, 0); err != nil {
+		slog.Warn("failed to trigger initial decision cycle", "ticketID", params.TicketID, "error", err)
+	}
+
 	return nil
 }
 
@@ -280,7 +295,18 @@ func (e *SmartEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPara
 			msg = "工单已取消: " + params.Reason
 		}
 	}
-	return e.recordTimeline(tx, params.TicketID, nil, params.OperatorID, eventType, msg, "")
+	if err := e.recordTimeline(tx, params.TicketID, nil, params.OperatorID, eventType, msg, ""); err != nil {
+		return err
+	}
+
+	// Note: ensureContinuation gates on terminal status, so this is currently a no-op
+	// for cancelled tickets. Included for completeness in case gate logic evolves.
+	var ticket ticketModel
+	if err := tx.First(&ticket, params.TicketID).Error; err == nil {
+		e.ensureContinuation(tx, &ticket, 0)
+	}
+
+	return nil
 }
 
 // --- Decision cycle ---
@@ -396,11 +422,25 @@ func (e *SmartEngine) handleDecisionFailure(tx *gorm.DB, ticketID uint, reason s
 func (e *SmartEngine) handleComplete(tx *gorm.DB, ticketID uint, plan *DecisionPlan) error {
 	now := time.Now()
 
+	// Find the end node ID from workflow_json
+	var endNodeID string
+	if svc, err := e.loadServiceForTicket(tx, ticketID); err == nil && svc.WorkflowJSON != "" {
+		if def, err := ParseWorkflowDef(json.RawMessage(svc.WorkflowJSON)); err == nil {
+			for _, n := range def.Nodes {
+				if n.Type == NodeEnd {
+					endNodeID = n.ID
+					break
+				}
+			}
+		}
+	}
+
 	// Create a completed end activity
 	act := &activityModel{
 		TicketID:          ticketID,
 		Name:              "流程完结",
 		ActivityType:      "complete",
+		NodeID:            endNodeID,
 		Status:            ActivityCompleted,
 		AIDecision:        mustJSON(plan),
 		AIReasoning:       plan.Reasoning,
@@ -1014,6 +1054,16 @@ func parseDecisionPlan(content string) (*DecisionPlan, error) {
 	if err := json.Unmarshal([]byte(jsonStr), &plan); err != nil {
 		return nil, fmt.Errorf("JSON 解析失败: %w", err)
 	}
+
+	// Validate execution_mode
+	switch plan.ExecutionMode {
+	case "", "single", "parallel":
+		// valid
+	default:
+		slog.Warn("invalid execution_mode, defaulting to single", "mode", plan.ExecutionMode)
+		plan.ExecutionMode = ""
+	}
+
 	return &plan, nil
 }
 
@@ -1296,6 +1346,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 		resolver:            e.resolver,
 		actionExecutor:      e.actionExecutor,
 		completedActivityID: completedActivityID,
+		configProvider:      e.configProvider,
 	}
 	if svc.KnowledgeBaseIDs != "" {
 		var kbIDs []uint
@@ -1454,7 +1505,7 @@ func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceM
 			} else if isPositiveActivityOutcome(completed.TransitionOutcome) && completed.NodeID != "" {
 				// Symmetric approved path injection
 				if targetID, targetLabel, targetType := findOutcomeEdgeTargetInfo(svc.WorkflowJSON, completed.NodeID, "approved"); targetID != "" {
-					instruction := fmt.Sprintf("workflow_json 的 approved 出边指向 %s，应遵循此路径继续", targetLabel)
+					instruction := fmt.Sprintf("workflow_json 的 approved 出边指向 %s，应遵循此路径继续推进，不应偏离", targetLabel)
 					if targetType == "end" {
 						instruction += "。目标是 end 节点，流程可能即将结束"
 					}

@@ -427,7 +427,8 @@ func (a *ITSMApp) Tasks() []scheduler.TaskDef {
 		},
 		{
 			Name:        "itsm-smart-recovery",
-			Type:        scheduler.TypeStartup,
+			Type:        scheduler.TypeScheduled,
+			CronExpr:    "@every 10m",
 			Description: "Recover in_progress smart tickets that lost their decision cycle",
 			Handler:     engine.HandleSmartRecovery(db.DB, smartEngine),
 		},

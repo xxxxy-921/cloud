@@ -36,6 +36,18 @@ func (p *testConfigProvider) AuditLevel() string {
 	return "full"
 }
 
+func (p *testConfigProvider) SLACriticalThresholdSeconds() int {
+	return 1800
+}
+
+func (p *testConfigProvider) SLAWarningThresholdSeconds() int {
+	return 3600
+}
+
+func (p *testConfigProvider) SimilarHistoryLimit() int {
+	return 5
+}
+
 var _ engine.EngineConfigProvider = (*testConfigProvider)(nil)
 
 // registerParticipantSteps registers participant validation step definitions.

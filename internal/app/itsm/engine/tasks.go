@@ -5,12 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"metis/internal/scheduler"
+)
+
+var (
+	recoverySubmissions   = make(map[uint]time.Time)
+	recoverySubmissionsMu sync.Mutex
 )
 
 // ActionExecutePayload is the async task payload for itsm-action-execute.
@@ -315,9 +321,20 @@ func HandleBoundaryTimer(db *gorm.DB, classicEngine *ClassicEngine) func(ctx con
 
 // HandleSmartRecovery scans in_progress smart tickets and resubmits decision cycles
 // for any that have no active activities and haven't been circuit-broken.
-// This runs once at startup to recover from server restarts.
+// Runs periodically (@every 10m) to recover from server restarts or lost decision cycles.
+// A per-ticket dedup map prevents resubmitting the same ticket within 10 minutes.
 func HandleSmartRecovery(db *gorm.DB, smartEngine *SmartEngine) func(ctx context.Context, payload json.RawMessage) error {
 	return func(ctx context.Context, _ json.RawMessage) error {
+		// Prune dedup entries older than 10 minutes
+		recoverySubmissionsMu.Lock()
+		cutoff := time.Now().Add(-10 * time.Minute)
+		for id, ts := range recoverySubmissions {
+			if ts.Before(cutoff) {
+				delete(recoverySubmissions, id)
+			}
+		}
+		recoverySubmissionsMu.Unlock()
+
 		// Find all in_progress smart tickets
 		type ticketRow struct {
 			ID             uint
@@ -356,12 +373,27 @@ func HandleSmartRecovery(db *gorm.DB, smartEngine *SmartEngine) func(ctx context
 				continue
 			}
 
+			// Dedup: skip if submitted within the last 10 minutes
+			recoverySubmissionsMu.Lock()
+			if lastSubmit, ok := recoverySubmissions[t.ID]; ok && time.Since(lastSubmit) < 10*time.Minute {
+				recoverySubmissionsMu.Unlock()
+				slog.Debug("smart recovery: skipping recently submitted ticket", "ticketID", t.ID, "code", t.Code)
+				continue
+			}
+			recoverySubmissionsMu.Unlock()
+
 			// Submit recovery task
 			payload, _ := json.Marshal(SmartProgressPayload{TicketID: t.ID, TriggerReason: "recovery"})
 			if err := smartEngine.SubmitProgressTask(payload); err != nil {
 				slog.Error("smart recovery: failed to submit progress task", "ticketID", t.ID, "error", err)
 				continue
 			}
+
+			// Record submission time
+			recoverySubmissionsMu.Lock()
+			recoverySubmissions[t.ID] = time.Now()
+			recoverySubmissionsMu.Unlock()
+
 			recovered++
 			slog.Info("smart recovery: submitted progress task for orphaned ticket", "ticketID", t.ID, "code", t.Code)
 		}

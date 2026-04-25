@@ -58,6 +58,7 @@ type GenerateResponse struct {
 	WorkflowJSON json.RawMessage            `json:"workflowJson"`
 	Retries      int                        `json:"retries"`
 	Errors       []engine.ValidationError   `json:"errors,omitempty"`
+	Saved        bool                       `json:"saved"`
 	Service      *ServiceDefinitionResponse `json:"service,omitempty"`
 	HealthCheck  *ServiceHealthCheck        `json:"healthCheck,omitempty"`
 }
@@ -149,8 +150,9 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 		validationErrors := engine.ValidateWorkflow(workflowJSON)
 		lastWorkflowJSON = workflowJSON
 
-		if len(validationErrors) == 0 {
-			return s.buildGenerateResponse(req, workflowJSON, attempt, nil)
+		if len(validationErrors) == 0 || !hasBlockingErrors(validationErrors) {
+			// No errors, or only warnings — save and return
+			return s.buildGenerateResponse(req, workflowJSON, attempt, validationErrors)
 		}
 
 		slog.Warn("workflow generate: validation failed",
@@ -165,7 +167,7 @@ func (s *WorkflowGenerateService) Generate(ctx context.Context, req *GenerateReq
 			continue
 		}
 
-		// Return last attempt with errors
+		// Return last attempt with blocking errors — will NOT save
 		return s.buildGenerateResponse(req, lastWorkflowJSON, attempt, validationErrors)
 	}
 
@@ -192,7 +194,7 @@ func workflowValidationErrorsLogValue(validationErrors []engine.ValidationError)
 		validationErr := validationErrors[i]
 		level := validationErr.Level
 		if level == "" {
-			level = "error"
+			level = "blocking"
 		}
 		sb.WriteString("[")
 		sb.WriteString(level)
@@ -222,7 +224,14 @@ func (s *WorkflowGenerateService) buildGenerateResponse(req *GenerateRequest, wo
 		Retries:      retries,
 		Errors:       validationErrors,
 	}
+
+	// If there are blocking errors, return without saving
+	if hasBlockingErrors(validationErrors) {
+		return resp, nil
+	}
+
 	if req.ServiceID == 0 || s.serviceDefSvc == nil {
+		resp.Saved = true
 		return resp, nil
 	}
 
@@ -244,7 +253,18 @@ func (s *WorkflowGenerateService) buildGenerateResponse(req *GenerateRequest, wo
 	serviceResp := updated.ToResponse()
 	resp.Service = &serviceResp
 	resp.HealthCheck = health
+	resp.Saved = true
 	return resp, nil
+}
+
+// hasBlockingErrors returns true if any validation error has Level "blocking".
+func hasBlockingErrors(errs []engine.ValidationError) bool {
+	for _, e := range errs {
+		if !e.IsWarning() {
+			return true
+		}
+	}
+	return false
 }
 
 // buildActionsContext formats available service actions for the LLM prompt.
