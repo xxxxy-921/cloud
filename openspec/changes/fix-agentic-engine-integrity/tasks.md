@@ -1,8 +1,8 @@
 ## 1. 后端表单验证激活（P0）
 
-- [ ] 1.1 在 `variable_writer.go` 的 `writeFormBindings()` 入口调用 `form.ValidateFormData(schema, data)`，验证失败时返回 error 且不写入任何流程变量
+- [x] 1.1 在 `variable_writer.go` 的 `writeFormBindings()` 入口调用 `form.ValidateFormData(schema, data)`，验证失败时返回 error 且不写入任何流程变量
 - [ ] 1.2 在 `writeFormBindings()` 调用方（activity 完成路径）处理验证错误：记录 `form_validation_failed` timeline 事件，活动完成不阻塞但表单数据不传播
-- [ ] 1.3 为 `writeFormBindings` 新增 `currentNodeID` 参数，供权限校验使用（先传入，P1 任务中激活校验逻辑）
+- [x] 1.3 为 `writeFormBindings` 新增 `currentNodeID` 参数，供权限校验使用（先传入，P1 任务中激活校验逻辑）
 - [ ] 1.4 编写单元测试：合法数据通过 → 变量写入；非法数据 → 原子拒绝 + error 返回；部分非法 → 全部拒绝
 
 ## 2. ensureContinuation 补齐（P0）

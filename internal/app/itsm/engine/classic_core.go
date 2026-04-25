@@ -92,8 +92,12 @@ func (e *ClassicEngine) Start(ctx context.Context, tx *gorm.DB, params StartPara
 
 	// Write start form bindings as process variables
 	if params.StartFormSchema != "" && params.StartFormData != "" {
-		if err := writeFormBindings(tx, params.TicketID, token.ScopeID, params.StartFormSchema, params.StartFormData, "form:start"); err != nil {
+		if err := writeFormBindings(tx, params.TicketID, token.ScopeID, params.StartFormSchema, params.StartFormData, "form:start", ""); err != nil {
 			slog.Warn("failed to write start form bindings", "ticketID", params.TicketID, "error", err)
+			if fve, ok := err.(*FormValidationError); ok {
+				e.recordTimeline(tx, params.TicketID, nil, params.RequesterID, "form_validation_failed",
+					fmt.Sprintf("开始表单验证失败: %s", fve.Error()))
+			}
 		}
 	}
 
@@ -179,7 +183,7 @@ func (e *ClassicEngine) Progress(ctx context.Context, tx *gorm.DB, params Progre
 	// Write form bindings as process variables (if activity had a form with bindings)
 	if activity.FormSchema != "" && len(params.Result) > 0 {
 		source := fmt.Sprintf("form:%d", params.ActivityID)
-		if err := writeFormBindings(tx, params.TicketID, token.ScopeID, activity.FormSchema, string(params.Result), source); err != nil {
+		if err := writeFormBindings(tx, params.TicketID, token.ScopeID, activity.FormSchema, string(params.Result), source, activity.NodeID); err != nil {
 			slog.Warn("failed to write form bindings on progress", "ticketID", params.TicketID, "activityID", params.ActivityID, "error", err)
 		}
 	}

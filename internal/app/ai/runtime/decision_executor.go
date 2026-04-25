@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"metis/internal/app"
 	"metis/internal/llm"
@@ -114,19 +115,32 @@ func (e *decisionExecutor) Execute(ctx context.Context, agentID uint, req app.AI
 
 		// Execute tool calls via the provided handler
 		for _, tc := range resp.ToolCalls {
+			start := time.Now()
 			result, err := req.ToolHandler(tc.Name, json.RawMessage(tc.Arguments))
+			elapsed := time.Since(start)
+
+			// Build log attrs: always include tool name and duration, plus caller metadata
+			attrs := []any{
+				"tool", tc.Name,
+				"durationMs", elapsed.Milliseconds(),
+			}
+			for k, v := range req.Metadata {
+				attrs = append(attrs, k, v)
+			}
+
 			var content string
 			if err != nil {
 				content = fmt.Sprintf(`{"error": "%s"}`, err.Error())
+				slog.Warn("decision-tool: error", append(attrs, "error", err.Error())...)
 			} else {
 				content = string(result)
+				slog.Info("decision-tool: call", append(attrs, "ok", true)...)
 			}
 			messages = append(messages, llm.Message{
 				Role:       llm.RoleTool,
 				Content:    content,
 				ToolCallID: tc.ID,
 			})
-			slog.Debug("decision tool called", "turn", turn, "tool", tc.Name)
 		}
 	}
 

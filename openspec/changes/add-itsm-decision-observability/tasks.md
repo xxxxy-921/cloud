@@ -1,24 +1,24 @@
 ## 1. AIDecisionRequest Metadata 扩展
 
-- [ ] 1.1 在 `internal/app/app.go` 的 `AIDecisionRequest` 结构体中添加 `Metadata map[string]any` 字段
-- [ ] 1.2 在 `internal/app/itsm/engine/smart.go:agenticDecision()` 构建 `AIDecisionRequest` 时填入 `Metadata: map[string]any{"ticketID": ticketID, "serviceID": svc.ID}`
+- [x] 1.1 在 `internal/app/app.go` 的 `AIDecisionRequest` 结构体中添加 `Metadata map[string]any` 字段
+- [x] 1.2 在 `internal/app/itsm/engine/smart.go:agenticDecision()` 构建 `AIDecisionRequest` 时填入 `Metadata: map[string]any{"ticketID": ticketID, "serviceID": svc.ID}`
 
 ## 2. DecisionExecutor Tool Dispatch 日志
 
-- [ ] 2.1 在 `internal/app/ai/runtime/decision_executor.go` 的 tool 调用循环中，将 `slog.Debug` 替换为结构化 Info 日志：记录 tool 名称、耗时（`time.Since`）、ok 状态，并从 `req.Metadata` 展开上下文字段
-- [ ] 2.2 在 tool 错误路径（`err != nil`）增加 `slog.Warn("decision-tool: error", ...)` 输出 tool 名称、错误信息、ticketID
+- [x] 2.1 在 `internal/app/ai/runtime/decision_executor.go` 的 tool 调用循环中，将 `slog.Debug` 替换为结构化 Info 日志：记录 tool 名称、耗时（`time.Since`）、ok 状态，并从 `req.Metadata` 展开上下文字段
+- [x] 2.2 在 tool 错误路径（`err != nil`）增加 `slog.Warn("decision-tool: error", ...)` 输出 tool 名称、错误信息、ticketID
 
 ## 3. SmartEngine 决策周期入口/出口日志
 
-- [ ] 3.1 在 `smart.go:runDecisionCycle()` 入口增加 Info 日志 "decision-cycle: starting"，包含 ticketID、triggerReason、serviceID、agentID、decisionMode
-- [ ] 3.2 在 `runDecisionCycle()` 的 terminal state / AI disabled 分支增加日志 "decision-cycle: skipped"，包含 ticketID 和具体原因
-- [ ] 3.3 在 `agenticDecision()` 返回后、`validateDecisionPlan()` 前，增加 Info 日志 "decision-cycle: plan"，记录 nextStepType、confidence、activityCount、executionMode
-- [ ] 3.4 在 `validateDecisionPlan()` 失败路径增加 Warn 日志 "decision-cycle: validation-failed"，包含 ticketID 和校验错误
+- [x] 3.1 在 `smart.go:runDecisionCycle()` 入口增加 Info 日志 "decision-cycle: starting"，包含 ticketID、triggerReason、serviceID、agentID、decisionMode
+- [x] 3.2 在 `runDecisionCycle()` 的 terminal state / AI disabled 分支增加日志 "decision-cycle: skipped"，包含 ticketID 和具体原因
+- [x] 3.3 在 `agenticDecision()` 返回后、`validateDecisionPlan()` 前，增加 Info 日志 "decision-cycle: plan"，记录 nextStepType、confidence、activityCount、executionMode
+- [x] 3.4 在 `validateDecisionPlan()` 失败路径增加 Warn 日志 "decision-cycle: validation-failed"，包含 ticketID 和校验错误
 
 ## 4. SmartEngine Tool Handler 包装层日志
 
-- [ ] 4.1 在 `smart.go:agenticDecision()` 的 toolHandler 闭包内增加 logging wrapper：在调用 `handlerMap[name](toolCtx, args)` 前后计时，调用后输出 Info 日志 "decision-tool: call"，错误时输出 Warn "decision-tool: error"
-- [ ] 4.2 在 handler 未找到（unknown tool）时输出 Warn "decision-tool: unknown"
+- [x] 4.1 在 `smart.go:agenticDecision()` 的 toolHandler 闭包内增加 logging wrapper：在调用 `handlerMap[name](toolCtx, args)` 前后计时，调用后输出 Info 日志 "decision-tool: call"，错误时输出 Warn "decision-tool: error"
+- [x] 4.2 在 handler 未找到（unknown tool）时输出 Warn "decision-tool: unknown"
 
 ## 5. Plan 执行结果日志
 

@@ -287,6 +287,17 @@ func (e *SmartEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPara
 
 // runDecisionCycle executes the full AI decision cycle for a ticket.
 func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketID uint, completedActivityID *uint, svcInfo *serviceModel, triggerReason string) error {
+	// Resolve agentID and decisionMode early for logging
+	var agentID uint
+	var decisionMode string
+	if e.configProvider != nil {
+		agentID = e.configProvider.DecisionAgentID()
+		decisionMode = e.configProvider.DecisionMode()
+	}
+	slog.Info("decision-cycle: starting",
+		"ticketID", ticketID, "triggerReason", triggerReason,
+		"serviceID", svcInfo.ID, "agentID", agentID, "decisionMode", decisionMode)
+
 	// Check if AI is disabled for this ticket
 	var ticket ticketModel
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&ticket, ticketID).Error; err != nil {
@@ -294,6 +305,7 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 	}
 
 	if ticket.AIFailureCount >= MaxAIFailureCount {
+		slog.Warn("decision-cycle: skipped", "ticketID", ticketID, "reason", "ai_disabled", "failureCount", ticket.AIFailureCount)
 		e.recordTimeline(tx, ticketID, nil, 0, "ai_disabled",
 			fmt.Sprintf("AI 决策已停用（连续 %d 次失败），请手动处理", ticket.AIFailureCount), "")
 		return ErrAIDisabled
@@ -304,6 +316,7 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 	// Check terminal state
 	switch ticket.Status {
 	case "completed", "cancelled", "failed":
+		slog.Info("decision-cycle: skipped", "ticketID", ticketID, "reason", "terminal_state", "status", ticket.Status)
 		return nil
 	}
 
@@ -314,8 +327,8 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 		return err
 	}
 	if activeCount > 0 {
-		slog.Info("smart-progress: active activities already exist, skipping duplicate continuation",
-			"ticketID", ticketID, "activeCount", activeCount, "completedActivityID", completedActivityID)
+		slog.Info("decision-cycle: skipped",
+			"ticketID", ticketID, "reason", "active_activities", "activeCount", activeCount)
 		return nil
 	}
 
@@ -333,8 +346,15 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 		return e.handleDecisionFailure(tx, ticketID, reason)
 	}
 
+	// Log decision plan summary
+	slog.Info("decision-cycle: plan",
+		"ticketID", ticketID, "nextStepType", plan.NextStepType,
+		"confidence", plan.Confidence, "activityCount", len(plan.Activities),
+		"executionMode", plan.ExecutionMode)
+
 	// Validate decision plan
 	if err := e.validateDecisionPlan(tx, ticketID, plan, svcInfo, completedActivityID); err != nil {
+		slog.Warn("decision-cycle: validation-failed", "ticketID", ticketID, "error", err.Error())
 		return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("AI 决策校验失败: %v", err))
 	}
 
@@ -401,6 +421,7 @@ func (e *SmartEngine) handleComplete(tx *gorm.DB, ticketID uint, plan *DecisionP
 		return err
 	}
 
+	slog.Info("decision-cycle: completed", "ticketID", ticketID)
 	return e.recordTimeline(tx, ticketID, &act.ID, 0, "workflow_completed",
 		"智能流程已完结", plan.Reasoning)
 }
@@ -482,6 +503,9 @@ func (e *SmartEngine) executeParallelPlan(tx *gorm.DB, ticketID uint, plan *Deci
 	}
 
 	_ = firstActID
+	slog.Info("decision-cycle: executed",
+		"ticketID", ticketID, "activityCount", len(plan.Activities),
+		"executionMode", "parallel", "groupID", groupID)
 	return nil
 }
 
@@ -555,6 +579,14 @@ func (e *SmartEngine) executeSinglePlan(tx *gorm.DB, ticketID uint, plan *Decisi
 	e.recordTimeline(tx, ticketID, &act.ID, 0, "ai_decision_executed",
 		fmt.Sprintf("AI 自动执行：%s（信心 %.0f%%）", decisionActivityName(da), plan.Confidence*100),
 		plan.Reasoning)
+
+	var assigneeID uint
+	if da.ParticipantID != nil {
+		assigneeID = *da.ParticipantID
+	}
+	slog.Info("decision-cycle: executed",
+		"ticketID", ticketID, "activityType", da.Type, "activityID", act.ID,
+		"assigneeID", assigneeID, "executionMode", "single")
 
 	return nil
 }
@@ -1284,13 +1316,24 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 		handlerMap[t.Def.Name] = t.Handler
 	}
 
-	// Build tool handler closure
+	// Build tool handler closure with logging wrapper
 	toolHandler := func(name string, args json.RawMessage) (json.RawMessage, error) {
 		handler, ok := handlerMap[name]
 		if !ok {
+			slog.Warn("decision-tool: unknown", "ticketID", ticketID, "tool", name)
 			return toolError(fmt.Sprintf("未知工具: %s", name))
 		}
-		return handler(toolCtx, args)
+		start := time.Now()
+		result, err := handler(toolCtx, args)
+		elapsed := time.Since(start)
+		if err != nil {
+			slog.Warn("decision-tool: error",
+				"ticketID", ticketID, "tool", name, "durationMs", elapsed.Milliseconds(), "error", err.Error())
+		} else {
+			slog.Info("decision-tool: call",
+				"ticketID", ticketID, "tool", name, "durationMs", elapsed.Milliseconds(), "ok", true)
+		}
+		return result, err
 	}
 
 	resp, err := e.decisionExecutor.Execute(ctx, agentID, app.AIDecisionRequest{
@@ -1299,6 +1342,7 @@ func (e *SmartEngine) agenticDecision(ctx context.Context, tx *gorm.DB, ticketID
 		Tools:        toolDefs,
 		ToolHandler:  toolHandler,
 		MaxTurns:     DecisionToolMaxTurns,
+		Metadata:     map[string]any{"ticketID": ticketID, "serviceID": svc.ID},
 	})
 	if err != nil {
 		return nil, err
