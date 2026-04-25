@@ -49,6 +49,8 @@ func (p *testConfigProvider) SimilarHistoryLimit() int {
 	return 5
 }
 
+func (p *testConfigProvider) ParallelConvergenceTimeout() time.Duration { return 72 * time.Hour }
+
 var _ engine.EngineConfigProvider = (*testConfigProvider)(nil)
 
 // registerParticipantSteps registers participant validation step definitions.

@@ -9,10 +9,16 @@ import {
 } from "@/components/ui/select"
 import type { FieldOption, FormField, FieldType, TableColumn, ValidationRule, VisibilityCondition } from "../types"
 
+export interface WorkflowNodeRef {
+  id: string
+  label: string
+}
+
 interface FieldPropertyEditorProps {
   field: FormField
   allFields: FormField[]
   onChange: (updated: FormField) => void
+  workflowNodes?: WorkflowNodeRef[]
 }
 
 const NEEDS_OPTIONS: FieldType[] = ["select", "multi_select", "radio", "checkbox"]
@@ -47,7 +53,7 @@ function parseColumnOptions(input: string): FieldOption[] {
     .filter((option) => option.label && String(option.value))
 }
 
-export function FieldPropertyEditor({ field, allFields, onChange }: FieldPropertyEditorProps) {
+export function FieldPropertyEditor({ field, allFields, onChange, workflowNodes }: FieldPropertyEditorProps) {
   const { t } = useTranslation("itsm")
 
   function update(patch: Partial<FormField>) {
@@ -430,6 +436,41 @@ export function FieldPropertyEditor({ field, allFields, onChange }: FieldPropert
           </div>
         ))}
       </section>
+
+      {/* Node Permissions — only shown when workflowNodes are provided */}
+      {workflowNodes && workflowNodes.length > 0 && (
+        <section className="space-y-2 rounded-xl border border-border/60 bg-white/70 p-3">
+          <Label className="text-xs font-medium">{t("forms.nodePermissions", { defaultValue: "节点权限" })}</Label>
+          <p className="text-[10px] text-muted-foreground">{t("forms.nodePermissionsHint", { defaultValue: "控制该字段在各流程节点的可见性和可编辑性" })}</p>
+          {workflowNodes.map((wfNode) => {
+            const perm = field.permissions?.[wfNode.id] ?? "editable"
+            return (
+              <div key={wfNode.id} className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-xs">{wfNode.label || wfNode.id}</span>
+                <Select
+                  value={perm}
+                  onValueChange={(v) => {
+                    const next: Record<string, "editable" | "readonly" | "hidden"> = { ...(field.permissions ?? {}) }
+                    if (v === "editable") {
+                      delete next[wfNode.id]
+                    } else {
+                      next[wfNode.id] = v as "readonly" | "hidden"
+                    }
+                    update({ permissions: Object.keys(next).length > 0 ? next : undefined })
+                  }}
+                >
+                  <SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="editable">{t("forms.permEditable", { defaultValue: "可编辑" })}</SelectItem>
+                    <SelectItem value="readonly">{t("forms.permReadonly", { defaultValue: "只读" })}</SelectItem>
+                    <SelectItem value="hidden">{t("forms.permHidden", { defaultValue: "隐藏" })}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )
+          })}
+        </section>
+      )}
     </div>
   )
 }

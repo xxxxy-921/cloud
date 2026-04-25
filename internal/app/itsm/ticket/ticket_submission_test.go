@@ -95,7 +95,7 @@ func TestAgentDraftSubmission_IdempotentConfirmedDraftStartsSmartProgressTask(t 
 	if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
 		t.Fatalf("decode task payload: %v", err)
 	}
-	if payload.TicketID != first.TicketID || payload.TriggerReason != "initial_decision" || payload.CompletedActivityID != nil {
+	if payload.TicketID != first.TicketID || payload.TriggerReason != "activity_completed" || payload.CompletedActivityID != nil {
 		t.Fatalf("unexpected smart progress payload: %+v", payload)
 	}
 }

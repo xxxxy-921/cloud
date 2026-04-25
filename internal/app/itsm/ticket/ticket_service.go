@@ -199,17 +199,10 @@ func (s *TicketService) createTicketLifecycleInTx(ctx context.Context, tx *gorm.
 		}
 		return s.classicEngine.Start(ctx, tx, startParams)
 	case "smart":
-		if err := s.smartEngine.Start(ctx, tx, engine.StartParams{
+		return s.smartEngine.Start(ctx, tx, engine.StartParams{
 			TicketID:    ticket.ID,
 			RequesterID: requesterID,
-		}); err != nil {
-			return err
-		}
-		payload, _ := json.Marshal(engine.SmartProgressPayload{
-			TicketID:      ticket.ID,
-			TriggerReason: "initial_decision",
 		})
-		return s.smartEngine.SubmitProgressTaskTx(tx, payload)
 	}
 	return nil
 }

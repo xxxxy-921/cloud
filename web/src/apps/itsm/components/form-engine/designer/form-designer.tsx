@@ -2,6 +2,7 @@ import { useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { FormSchema, FormField, FieldType } from "../types"
+import type { WorkflowNodeRef } from "./field-property-editor"
 import { FieldTypePalette } from "./field-palette"
 import { DesignerCanvas } from "./designer-canvas"
 import { FieldPropertyEditor } from "./field-property-editor"
@@ -9,6 +10,7 @@ import { FieldPropertyEditor } from "./field-property-editor"
 interface FormDesignerProps {
   schema: FormSchema
   onChange: (schema: FormSchema) => void
+  workflowNodes?: WorkflowNodeRef[]
 }
 
 function generateFieldKey(type: FieldType, existing: FormField[]): string {
@@ -22,7 +24,7 @@ function generateFieldKey(type: FieldType, existing: FormField[]): string {
   return key
 }
 
-export function FormDesigner({ schema, onChange }: FormDesignerProps) {
+export function FormDesigner({ schema, onChange, workflowNodes }: FormDesignerProps) {
   const { t } = useTranslation("itsm")
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null)
 
@@ -207,6 +209,7 @@ export function FormDesigner({ schema, onChange }: FormDesignerProps) {
                 field={selectedField}
                 allFields={fields}
                 onChange={handleFieldChange}
+                workflowNodes={workflowNodes}
               />
             ) : (
               <p className="text-xs text-muted-foreground text-center py-8">

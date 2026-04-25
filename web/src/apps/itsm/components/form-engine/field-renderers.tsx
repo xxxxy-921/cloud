@@ -37,6 +37,8 @@ import type { ControllerRenderProps } from "react-hook-form"
 import { cn } from "@/lib/utils"
 import { defaultValueForField, tableColumns } from "./build-zod-schema"
 import type { FormField, TableColumn } from "./types"
+import { UserPicker } from "./user-picker"
+import { DeptPicker } from "./dept-picker"
 
 type FieldProps = {
   field: FormField
@@ -294,30 +296,26 @@ function renderDateRange({ value, onChange, disabled, readOnly }: FieldProps) {
   )
 }
 
-function renderUserPicker({ field, value, onChange, onBlur, disabled, readOnly }: FieldProps) {
-  // Basic text input — full Combobox + User API integration deferred
+function renderUserPicker({ field, value, onChange, disabled, readOnly }: FieldProps) {
   return (
-    <Input
-      placeholder={field.placeholder ?? "输入用户名搜索"}
+    <UserPicker
       value={(value as string) ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={onBlur}
+      onChange={onChange}
       disabled={disabled}
       readOnly={readOnly}
+      placeholder={field.placeholder ?? "选择用户"}
     />
   )
 }
 
-function renderDeptPicker({ field, value, onChange, onBlur, disabled, readOnly }: FieldProps) {
-  // Basic text input — full TreeSelect + Org API integration deferred
+function renderDeptPicker({ field, value, onChange, disabled, readOnly }: FieldProps) {
   return (
-    <Input
-      placeholder={field.placeholder ?? "输入部门名搜索"}
+    <DeptPicker
       value={(value as string) ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={onBlur}
+      onChange={onChange}
       disabled={disabled}
       readOnly={readOnly}
+      placeholder={field.placeholder ?? "选择部门"}
     />
   )
 }

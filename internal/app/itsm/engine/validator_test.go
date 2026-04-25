@@ -237,3 +237,245 @@ func TestValidateFormSchemaReferences(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Topology validation tests (task 3.7)
+// ---------------------------------------------------------------------------
+
+func TestValidateWorkflowNoCycle(t *testing.T) {
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"form1","type":"form","data":{"label":"表单","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"form1","data":{}},
+			{"id":"e2","source":"form1","target":"end","data":{}}
+		]
+	}`)
+
+	errs := ValidateWorkflow(workflowJSON)
+	for _, e := range errs {
+		if strings.Contains(e.Message, "环路") {
+			t.Fatalf("expected no cycle error in linear workflow, got: %s", e.Message)
+		}
+	}
+}
+
+func TestValidateWorkflowDirectCycle(t *testing.T) {
+	// A→B→A direct cycle. Both nodes are form nodes so they are valid types.
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"A","type":"form","data":{"label":"节点A","participants":[{"type":"requester"}]}},
+			{"id":"B","type":"form","data":{"label":"节点B","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"A","data":{}},
+			{"id":"e2","source":"A","target":"B","data":{}},
+			{"id":"e3","source":"B","target":"A","data":{}},
+			{"id":"e4","source":"B","target":"end","data":{}}
+		]
+	}`)
+
+	errs := ValidateWorkflow(workflowJSON)
+	var found bool
+	for _, e := range errs {
+		if strings.Contains(e.Message, "环路") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected cycle detection error containing '环路', got errors: %+v", errs)
+	}
+}
+
+func TestValidateWorkflowIndirectCycle(t *testing.T) {
+	// A→B→C→A indirect cycle.
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"A","type":"form","data":{"label":"节点A","participants":[{"type":"requester"}]}},
+			{"id":"B","type":"form","data":{"label":"节点B","participants":[{"type":"requester"}]}},
+			{"id":"C","type":"form","data":{"label":"节点C","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"A","data":{}},
+			{"id":"e2","source":"A","target":"B","data":{}},
+			{"id":"e3","source":"B","target":"C","data":{}},
+			{"id":"e4","source":"C","target":"A","data":{}},
+			{"id":"e5","source":"C","target":"end","data":{}}
+		]
+	}`)
+
+	errs := ValidateWorkflow(workflowJSON)
+	var found bool
+	for _, e := range errs {
+		if strings.Contains(e.Message, "环路") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected cycle detection error containing '环路', got errors: %+v", errs)
+	}
+}
+
+func TestValidateWorkflowDeadEnd(t *testing.T) {
+	// form1 connects to form2, but form2 has no edge to end — form2 is a dead-end.
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"form1","type":"form","data":{"label":"表单1","participants":[{"type":"requester"}]}},
+			{"id":"form2","type":"form","data":{"label":"表单2","participants":[{"type":"requester"}]}},
+			{"id":"form3","type":"form","data":{"label":"表单3","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"form1","data":{}},
+			{"id":"e2","source":"form1","target":"form2","data":{}},
+			{"id":"e3","source":"form1","target":"form3","data":{}},
+			{"id":"e4","source":"form3","target":"end","data":{}}
+		]
+	}`)
+
+	errs := ValidateWorkflow(workflowJSON)
+	var found bool
+	for _, e := range errs {
+		if strings.Contains(e.Message, "无法到达终点") && e.NodeID == "form2" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected dead-end error for form2 containing '无法到达终点', got errors: %+v", errs)
+	}
+}
+
+func TestValidateWorkflowInvalidParticipantType(t *testing.T) {
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"form1","type":"form","data":{"label":"表单","participants":[{"type":"invalid_type"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"form1","data":{}},
+			{"id":"e2","source":"form1","target":"end","data":{}}
+		]
+	}`)
+
+	errs := ValidateWorkflow(workflowJSON)
+	var found bool
+	for _, e := range errs {
+		if strings.Contains(e.Message, "非法的参与者类型") && !e.IsWarning() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected blocking error containing '非法的参与者类型', got errors: %+v", errs)
+	}
+}
+
+func TestValidateWorkflowValidParticipantTypes(t *testing.T) {
+	validTypes := []string{
+		"user", "position", "department",
+		"position_department", "requester", "requester_manager",
+	}
+	for _, pt := range validTypes {
+		t.Run(pt, func(t *testing.T) {
+			var participantJSON string
+			switch pt {
+			case "user":
+				participantJSON = `{"type":"user","value":"admin"}`
+			case "position":
+				participantJSON = `{"type":"position","value":"manager"}`
+			case "department":
+				participantJSON = `{"type":"department","value":"it"}`
+			case "position_department":
+				participantJSON = `{"type":"position_department","position_code":"admin","department_code":"it"}`
+			case "requester":
+				participantJSON = `{"type":"requester"}`
+			case "requester_manager":
+				participantJSON = `{"type":"requester_manager"}`
+			}
+
+			workflowJSON := json.RawMessage(`{
+				"nodes": [
+					{"id":"start","type":"start","data":{"label":"开始"}},
+					{"id":"form1","type":"form","data":{"label":"表单","participants":[` + participantJSON + `]}},
+					{"id":"end","type":"end","data":{"label":"结束"}}
+				],
+				"edges": [
+					{"id":"e1","source":"start","target":"form1","data":{}},
+					{"id":"e2","source":"form1","target":"end","data":{}}
+				]
+			}`)
+
+			errs := ValidateWorkflow(workflowJSON)
+			for _, e := range errs {
+				if strings.Contains(e.Message, "非法的参与者类型") {
+					t.Fatalf("participant type %q should be valid, got error: %s", pt, e.Message)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateWorkflowBlockingVsWarning(t *testing.T) {
+	// Workflow with both a topology issue (dead-end) and a formSchema reference issue.
+	// form2 is a dead-end (topology → blocking), and the gateway condition references
+	// a nonexistent form field (formSchema → warning).
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"form1","type":"form","data":{"label":"申请表","participants":[{"type":"requester"}],"formSchema":{"fields":[{"key":"urgency","type":"select","label":"紧急程度"}]}}},
+			{"id":"gw","type":"exclusive","data":{"label":"分支"}},
+			{"id":"p1","type":"process","data":{"label":"处理A","participants":[{"type":"requester"}]}},
+			{"id":"p2","type":"process","data":{"label":"处理B","participants":[{"type":"requester"}]}},
+			{"id":"form2","type":"form","data":{"label":"死胡同","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"form1","data":{}},
+			{"id":"e2","source":"form1","target":"gw","data":{"outcome":"submitted"}},
+			{"id":"e3","source":"gw","target":"p1","data":{"condition":{"field":"form.nonexistent_field","operator":"equals","value":"high"}}},
+			{"id":"e4","source":"gw","target":"p2","data":{"default":true}},
+			{"id":"e5","source":"p1","target":"end","data":{"outcome":"approved"}},
+			{"id":"e5r","source":"p1","target":"end","data":{"outcome":"rejected"}},
+			{"id":"e6","source":"p2","target":"end","data":{"outcome":"approved"}},
+			{"id":"e6r","source":"p2","target":"end","data":{"outcome":"rejected"}},
+			{"id":"e7","source":"gw","target":"form2","data":{"condition":{"field":"form.urgency","operator":"equals","value":"low"}}}
+		]
+	}`)
+
+	errs := ValidateWorkflow(workflowJSON)
+
+	var foundTopologyBlocking, foundFormSchemaWarning bool
+	for _, e := range errs {
+		if strings.Contains(e.Message, "无法到达终点") {
+			if e.Level != "blocking" {
+				t.Fatalf("expected dead-end error to be blocking, got level=%q: %s", e.Level, e.Message)
+			}
+			foundTopologyBlocking = true
+		}
+		if strings.Contains(e.Message, "formSchema") && strings.Contains(e.Message, "nonexistent_field") {
+			if e.Level != "warning" {
+				t.Fatalf("expected formSchema reference error to be warning, got level=%q: %s", e.Level, e.Message)
+			}
+			foundFormSchemaWarning = true
+		}
+	}
+
+	if !foundTopologyBlocking {
+		t.Fatalf("expected a blocking topology error (dead-end), got errors: %+v", errs)
+	}
+	if !foundFormSchemaWarning {
+		t.Fatalf("expected a warning-level formSchema reference error, got errors: %+v", errs)
+	}
+}

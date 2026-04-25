@@ -49,13 +49,14 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { FieldType, FormField, FormSchema } from "../types"
-import { FieldPropertyEditor } from "./field-property-editor"
+import { FieldPropertyEditor, type WorkflowNodeRef } from "./field-property-editor"
 
 interface FormComposerProps {
   schema: FormSchema
   onChange: (schema: FormSchema) => void
   title?: string
   emptyHint?: string
+  workflowNodes?: WorkflowNodeRef[]
 }
 
 const FIELD_GROUPS: { key: string; items: Array<{ type: FieldType; icon: ElementType }> }[] = [
@@ -117,7 +118,7 @@ function normalizeSchema(schema: FormSchema): FormSchema {
   }
 }
 
-export function FormComposer({ schema, onChange, title, emptyHint }: FormComposerProps) {
+export function FormComposer({ schema, onChange, title, emptyHint, workflowNodes }: FormComposerProps) {
   const { t } = useTranslation("itsm")
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(() => schema.fields[0]?.key ?? null)
   const current = normalizeSchema(schema)
@@ -257,6 +258,7 @@ export function FormComposer({ schema, onChange, title, emptyHint }: FormCompose
             field={selectedField}
             allFields={current.fields}
             onChange={updateSelectedField}
+            workflowNodes={workflowNodes}
           />
         ) : (
           <div className="py-8 text-center text-xs text-muted-foreground">未选择字段</div>

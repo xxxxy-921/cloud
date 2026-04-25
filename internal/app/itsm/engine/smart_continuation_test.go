@@ -504,3 +504,257 @@ func (r *rootDBPositionResolver) FindManagerByUserID(userID uint) (uint, error) 
 	}
 	return *user.ManagerID, nil
 }
+
+// regularRecordingSubmitter records SubmitTask calls (non-transactional).
+// Used by recovery tests where HandleSmartRecovery calls SubmitProgressTask → SubmitTask.
+type regularRecordingSubmitter struct {
+	calls    int
+	lastName string
+}
+
+func (s *regularRecordingSubmitter) SubmitTask(name string, _ json.RawMessage) error {
+	s.calls++
+	s.lastName = name
+	return nil
+}
+
+// --- Task 2.3: ensureContinuation in Start/Cancel ---
+
+func TestSmartStartTriggersEnsureContinuation(t *testing.T) {
+	db := newSmartContinuationDB(t)
+
+	agentID := uint(11)
+	service := serviceModel{
+		Name:       "智能 VPN 服务",
+		EngineType: "smart",
+		AgentID:    &agentID,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	ticket := ticketModel{
+		ServiceID:   service.ID,
+		Status:      "pending",
+		EngineType:  "smart",
+		RequesterID: 7,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	submitter := &txRecordingSubmitter{}
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return eng.Start(context.Background(), tx, StartParams{
+			TicketID:    ticket.ID,
+			RequesterID: ticket.RequesterID,
+		})
+	})
+	if err != nil {
+		t.Fatalf("start smart workflow: %v", err)
+	}
+
+	if submitter.txCalls != 1 {
+		t.Fatalf("expected one tx submit call for ensureContinuation, got %d", submitter.txCalls)
+	}
+	if submitter.lastName != "itsm-smart-progress" {
+		t.Fatalf("expected task name itsm-smart-progress, got %q", submitter.lastName)
+	}
+}
+
+func TestSmartCancelCallsEnsureContinuationButNoTask(t *testing.T) {
+	db := newSmartContinuationDB(t)
+
+	ticket, _ := createSmartContinuationTicket(t, db, "", ActivityPending)
+	submitter := &txRecordingSubmitter{}
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return eng.Cancel(context.Background(), tx, CancelParams{
+			TicketID:   ticket.ID,
+			OperatorID: 1,
+		})
+	})
+	if err != nil {
+		t.Fatalf("cancel smart workflow: %v", err)
+	}
+
+	if submitter.txCalls != 0 {
+		t.Fatalf("expected no tx submit calls for cancelled (terminal) ticket, got %d", submitter.txCalls)
+	}
+}
+
+func TestSmartStartAIDisabledNoTask(t *testing.T) {
+	db := newSmartContinuationDB(t)
+
+	agentID := uint(11)
+	service := serviceModel{
+		Name:       "智能 VPN 服务",
+		EngineType: "smart",
+		AgentID:    &agentID,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	ticket := ticketModel{
+		ServiceID:      service.ID,
+		Status:         "pending",
+		EngineType:     "smart",
+		RequesterID:    7,
+		AIFailureCount: MaxAIFailureCount,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	submitter := &txRecordingSubmitter{}
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return eng.Start(context.Background(), tx, StartParams{
+			TicketID:    ticket.ID,
+			RequesterID: ticket.RequesterID,
+		})
+	})
+	if err != nil {
+		t.Fatalf("start smart workflow: %v", err)
+	}
+
+	if submitter.txCalls != 0 {
+		t.Fatalf("expected no tx submit calls when AI is circuit-broken, got %d", submitter.txCalls)
+	}
+}
+
+// --- Task 6.4: Recovery dedup tests ---
+
+func newSmartRecoveryDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := newSmartContinuationDB(t)
+	// HandleSmartRecovery queries "deleted_at IS NULL" which is not part of the
+	// lightweight ticketModel. Add the column so the raw SQL does not fail.
+	if err := db.Exec("ALTER TABLE itsm_tickets ADD COLUMN deleted_at datetime").Error; err != nil {
+		t.Fatalf("add deleted_at column: %v", err)
+	}
+	return db
+}
+
+func clearRecoverySubmissions() {
+	recoverySubmissionsMu.Lock()
+	for k := range recoverySubmissions {
+		delete(recoverySubmissions, k)
+	}
+	recoverySubmissionsMu.Unlock()
+}
+
+func TestSmartRecoveryFirstRunSubmits(t *testing.T) {
+	clearRecoverySubmissions()
+
+	db := newSmartRecoveryDB(t)
+
+	// Create an in_progress smart ticket with no active activities
+	ticket := ticketModel{
+		Status:     "in_progress",
+		EngineType: "smart",
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	submitter := &regularRecordingSubmitter{}
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
+
+	handler := HandleSmartRecovery(db, eng)
+	if err := handler(context.Background(), nil); err != nil {
+		t.Fatalf("smart recovery handler: %v", err)
+	}
+
+	if submitter.calls != 1 {
+		t.Fatalf("expected one submit call for orphaned ticket, got %d", submitter.calls)
+	}
+	if submitter.lastName != "itsm-smart-progress" {
+		t.Fatalf("expected task name itsm-smart-progress, got %q", submitter.lastName)
+	}
+
+	// Verify dedup map was populated
+	recoverySubmissionsMu.Lock()
+	_, recorded := recoverySubmissions[ticket.ID]
+	recoverySubmissionsMu.Unlock()
+	if !recorded {
+		t.Fatal("expected recovery submission to be recorded in dedup map")
+	}
+}
+
+func TestSmartRecoveryDedupSkipsRecent(t *testing.T) {
+	clearRecoverySubmissions()
+
+	db := newSmartRecoveryDB(t)
+
+	ticket := ticketModel{
+		Status:     "in_progress",
+		EngineType: "smart",
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	submitter := &regularRecordingSubmitter{}
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
+	handler := HandleSmartRecovery(db, eng)
+
+	// First run — should submit
+	if err := handler(context.Background(), nil); err != nil {
+		t.Fatalf("first recovery run: %v", err)
+	}
+	if submitter.calls != 1 {
+		t.Fatalf("expected one submit after first run, got %d", submitter.calls)
+	}
+
+	// Second run within 10 minutes — should skip (dedup)
+	if err := handler(context.Background(), nil); err != nil {
+		t.Fatalf("second recovery run: %v", err)
+	}
+	if submitter.calls != 1 {
+		t.Fatalf("expected still one submit after second run (dedup), got %d", submitter.calls)
+	}
+}
+
+func TestSmartRecoveryDedupExpiresAfter10Min(t *testing.T) {
+	clearRecoverySubmissions()
+
+	db := newSmartRecoveryDB(t)
+
+	ticket := ticketModel{
+		Status:     "in_progress",
+		EngineType: "smart",
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	// Pre-populate the dedup map with an entry older than 10 minutes
+	recoverySubmissionsMu.Lock()
+	recoverySubmissions[ticket.ID] = time.Now().Add(-11 * time.Minute)
+	recoverySubmissionsMu.Unlock()
+
+	submitter := &regularRecordingSubmitter{}
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
+	handler := HandleSmartRecovery(db, eng)
+
+	if err := handler(context.Background(), nil); err != nil {
+		t.Fatalf("recovery after expiry: %v", err)
+	}
+
+	if submitter.calls != 1 {
+		t.Fatalf("expected one submit after dedup entry expired, got %d", submitter.calls)
+	}
+
+	// Verify the dedup map was updated with a fresh timestamp
+	recoverySubmissionsMu.Lock()
+	ts, ok := recoverySubmissions[ticket.ID]
+	recoverySubmissionsMu.Unlock()
+	if !ok {
+		t.Fatal("expected dedup entry to exist after resubmission")
+	}
+	if time.Since(ts) > 5*time.Second {
+		t.Fatalf("expected fresh dedup timestamp, got %v ago", time.Since(ts))
+	}
+}

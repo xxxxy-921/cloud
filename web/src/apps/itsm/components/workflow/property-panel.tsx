@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next"
+import { useMemo } from "react"
 import type React from "react"
 import { type Node, type Edge, useReactFlow } from "@xyflow/react"
 import { Input } from "@/components/ui/input"
@@ -16,7 +17,7 @@ import { ConditionBuilder } from "./panels/condition-builder"
 import { VariableMappingEditor } from "./panels/variable-mapping-editor"
 import { ScriptAssignmentEditor } from "./panels/script-assignment-editor"
 import { ActionPicker } from "./panels/action-picker"
-import { FormComposer, type FormSchema } from "../form-engine"
+import { FormComposer, type FormSchema, type WorkflowNodeRef } from "../form-engine"
 
 function PanelSection({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
   return (
@@ -47,9 +48,16 @@ interface NodePanelProps {
 
 export function NodePropertyPanel({ node, serviceId, intakeFormSchema, onIntakeFormSchemaChange, onClose }: NodePanelProps) {
   const { t } = useTranslation("itsm")
-  const { setNodes, deleteElements } = useReactFlow()
+  const { setNodes, deleteElements, getNodes } = useReactFlow()
   const data = node.data
   const nodeType = data.nodeType as NodeType
+
+  const workflowNodes = useMemo<WorkflowNodeRef[]>(() => {
+    const HUMAN_TYPES = new Set(["form", "process"])
+    return getNodes()
+      .filter((n) => HUMAN_TYPES.has((n.data as unknown as WFNodeData).nodeType))
+      .map((n) => ({ id: n.id, label: (n.data as unknown as WFNodeData).label }))
+  }, [getNodes])
 
   function updateData(patch: Partial<WFNodeData>) {
     setNodes((nds) => nds.map((n) => n.id === node.id ? { ...n, data: { ...n.data, ...patch } } : n))
@@ -222,6 +230,7 @@ export function NodePropertyPanel({ node, serviceId, intakeFormSchema, onIntakeF
                 schema={toFormSchema(data.formSchema)}
                 onChange={(schema) => updateData({ formSchema: schema.fields.length > 0 ? schema : undefined })}
                 title={nodeType === "process" ? "处理结果字段" : "节点提交字段"}
+                workflowNodes={workflowNodes}
               />
             )}
             {hasMapping && (

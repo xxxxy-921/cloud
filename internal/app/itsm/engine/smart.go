@@ -1252,9 +1252,42 @@ func (e *SmartEngine) ensureContinuation(tx *gorm.DB, ticket *ticketModel, compl
 			}
 
 			if len(ids) > 0 {
-				slog.Info("ensureContinuation: parallel group not converged",
-					"ticketID", ticket.ID, "groupID", groupID, "remaining", len(ids))
-				return false, nil
+				// Check for convergence timeout.
+				// Use ORDER BY + LIMIT 1 instead of MIN() aggregate to avoid
+				// SQLite driver scan issues with bare time.Time.
+				var earliest activityModel
+				if err := tx.Where("activity_group_id = ?", groupID).
+					Order("created_at ASC").
+					First(&earliest).Error; err != nil || earliest.CreatedAt.IsZero() {
+					// Can't determine age, keep waiting
+					slog.Info("ensureContinuation: parallel group not converged",
+						"ticketID", ticket.ID, "groupID", groupID, "remaining", len(ids))
+					return false, nil
+				}
+				earliestCreated := earliest.CreatedAt
+
+				timeout := e.resolveConvergenceTimeout(tx, ticket)
+				if time.Since(earliestCreated) > timeout {
+					// Timeout: cancel pending siblings
+					slog.Warn("ensureContinuation: parallel group convergence timeout",
+						"ticketID", ticket.ID, "groupID", groupID,
+						"remaining", len(ids), "timeout", timeout)
+					if err := tx.Model(&activityModel{}).
+						Where("id IN ? AND status NOT IN (?, ?)", ids, ActivityCompleted, ActivityCancelled).
+						Updates(map[string]any{
+							"status":      ActivityCancelled,
+							"finished_at": time.Now(),
+						}).Error; err != nil {
+						return false, fmt.Errorf("cancel timed-out activities: %w", err)
+					}
+					e.recordTimeline(tx, ticket.ID, nil, 0, "parallel_convergence_timeout",
+						fmt.Sprintf("并行审批组 %s 超时，%d 个未完成活动已取消", groupID, len(ids)), "")
+					// Fall through to submit next decision cycle
+				} else {
+					slog.Info("ensureContinuation: parallel group not converged",
+						"ticketID", ticket.ID, "groupID", groupID, "remaining", len(ids))
+					return false, nil
+				}
 			}
 			slog.Info("ensureContinuation: parallel group converged",
 				"ticketID", ticket.ID, "groupID", groupID)
@@ -1283,6 +1316,28 @@ func uintPtrIf(v uint) *uint {
 		return nil
 	}
 	return &v
+}
+
+// resolveConvergenceTimeout determines the convergence timeout for a parallel group.
+// Priority: SLA resolution_deadline > EngineConfigProvider > hardcoded 168h.
+func (e *SmartEngine) resolveConvergenceTimeout(tx *gorm.DB, ticket *ticketModel) time.Duration {
+	// 1. Try SLA resolution deadline
+	if ticket.SLAResolutionDeadline != nil && !ticket.SLAResolutionDeadline.IsZero() {
+		remaining := time.Until(*ticket.SLAResolutionDeadline)
+		if remaining > 0 {
+			return remaining
+		}
+	}
+
+	// 2. Try config provider
+	if e.configProvider != nil {
+		if t := e.configProvider.ParallelConvergenceTimeout(); t > 0 {
+			return t
+		}
+	}
+
+	// 3. Hardcoded fallback
+	return 168 * time.Hour
 }
 
 // ExecuteDecisionPlan executes an already validated decision plan.
