@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	. "metis/internal/app/itsm/bootstrap"
 	. "metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
 	"time"

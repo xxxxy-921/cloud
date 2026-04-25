@@ -148,7 +148,43 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		}
 	}
 
-	// 6. Exclusive gateway constraints
+	// 6. Process node outcome edges — every process node must have both
+	//    an approved and a rejected outgoing edge so the smart engine
+	//    knows where to route each human decision outcome.
+	for i := range def.Nodes {
+		n := &def.Nodes[i]
+		if n.Type != NodeProcess {
+			continue
+		}
+		edges := outEdges[n.ID]
+		if len(edges) == 0 {
+			errs = append(errs, ValidationError{
+				NodeID:  n.ID,
+				Level:   "error",
+				Message: fmt.Sprintf("process 节点 %s 至少需要一条出边", n.ID),
+			})
+			continue
+		}
+		hasApproved, hasRejected := false, false
+		for _, e := range edges {
+			switch e.Data.Outcome {
+			case "approved":
+				hasApproved = true
+			case "rejected":
+				hasRejected = true
+			}
+		}
+		// Only enforce if the node uses outcome-based routing (at least one edge has outcome set)
+		if hasApproved && !hasRejected {
+			errs = append(errs, ValidationError{
+				NodeID:  n.ID,
+				Level:   "error",
+				Message: fmt.Sprintf("process 节点 %s 有 approved 出边但缺少 outcome=\"rejected\" 的出边；协作规范未定义驳回路径时 rejected 应指向 end 节点", n.ID),
+			})
+		}
+	}
+
+	// 7. Exclusive gateway constraints
 	for i := range def.Nodes {
 		n := &def.Nodes[i]
 		if n.Type != NodeExclusive {
@@ -175,7 +211,7 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		}
 	}
 
-	// 6b. Validate compound conditions on edges
+	// 7b. Validate compound conditions on edges
 	for i := range def.Edges {
 		e := &def.Edges[i]
 		if e.Data.Condition != nil {
@@ -185,7 +221,7 @@ func ValidateWorkflow(workflowJSON json.RawMessage) []ValidationError {
 		}
 	}
 
-	// 7. Parallel / Inclusive gateway constraints (④ itsm-gateway-parallel)
+	// 8. Parallel / Inclusive gateway constraints (④ itsm-gateway-parallel)
 	for i := range def.Nodes {
 		n := &def.Nodes[i]
 		if n.Type != NodeParallel && n.Type != NodeInclusive {
