@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -594,4 +595,8 @@ func (s *EngineConfigService) SLAWarningThresholdSeconds() int {
 
 func (s *EngineConfigService) SimilarHistoryLimit() int {
 	return 5
+}
+
+func (s *EngineConfigService) ParallelConvergenceTimeout() time.Duration {
+	return 72 * time.Hour
 }

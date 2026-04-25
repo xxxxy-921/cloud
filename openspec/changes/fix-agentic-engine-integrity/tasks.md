@@ -7,18 +7,18 @@
 
 ## 2. ensureContinuation 补齐（P0）
 
-- [ ] 2.1 在 `SmartEngine.Start()` 中，设置 `status=in_progress` 并记录 timeline 后，调用 `ensureContinuation(tx, ticket, 0)` 触发首次决策循环
-- [ ] 2.2 在 `SmartEngine.Cancel()` 中，设置 `status=cancelled` 并记录 timeline 后，调用 `ensureContinuation(tx, ticket, 0)` 触发清理
+- [x] 2.1 在 `SmartEngine.Start()` 中，设置 `status=in_progress` 并记录 timeline 后，调用 `ensureContinuation(tx, ticket, 0)` 触发首次决策循环
+- [x] 2.2 在 `SmartEngine.Cancel()` 中，设置 `status=cancelled` 并记录 timeline 后，调用 `ensureContinuation(tx, ticket, 0)` 触发清理
 - [ ] 2.3 编写测试：Start → 验证 itsm-smart-progress 任务被提交；Cancel → 验证 ensureContinuation 被调用；AI disabled 时 Start 不提交任务
 
 ## 3. 工作流拓扑验证（P0）
 
-- [ ] 3.1 `ValidationError` 结构新增 `Level` 字段（`"blocking"` | `"warning"`），现有结构/节点校验设为 blocking，formSchema 引用校验设为 warning
-- [ ] 3.2 实现 `detectCycles(nodes, edges)` — DFS 染色法环路检测，返回 blocking ValidationError 含环路路径描述
-- [ ] 3.3 实现 `detectDeadEnds(nodes, edges)` — 从 end 节点反向 BFS，未被访问的非 start 节点标记为死端，返回 blocking ValidationError
-- [ ] 3.4 实现 `validateParticipantTypes(nodes)` — 白名单校验（user, position, department, position_department, requester, requester_manager），返回 blocking ValidationError
-- [ ] 3.5 在 `ValidateWorkflow()` 中依次调用三个新检查函数，合并到返回的 errors 列表
-- [ ] 3.6 修改 `workflow_generate_service.go`：保存前检查 errors，任何 Level="blocking" → 不保存，返回 HTTP 400
+- [x] 3.1 `ValidationError` 结构新增 `Level` 字段（`"blocking"` | `"warning"`），现有结构/节点校验设为 blocking，formSchema 引用校验设为 warning
+- [x] 3.2 实现 `detectCycles(nodes, edges)` — DFS 染色法环路检测，返回 blocking ValidationError 含环路路径描述
+- [x] 3.3 实现 `detectDeadEnds(nodes, edges)` — 从 end 节点反向 BFS，未被访问的非 start 节点标记为死端，返回 blocking ValidationError
+- [x] 3.4 实现 `validateParticipantTypes(nodes)` — 白名单校验（user, position, department, position_department, requester, requester_manager），返回 blocking ValidationError
+- [x] 3.5 在 `ValidateWorkflow()` 中依次调用三个新检查函数，合并到返回的 errors 列表
+- [x] 3.6 修改 `workflow_generate_service.go`：保存前检查 errors，任何 Level="blocking" → 不保存，返回 HTTP 400
 - [ ] 3.7 编写单元测试：无环通过、直接环检测、间接环检测、死端检测、参与者类型校验、blocking/warning 分级
 
 ## 4. 并行会签收敛超时（P1）
@@ -36,9 +36,9 @@
 
 ## 6. 恢复机制周期化（P1）
 
-- [ ] 6.1 将 `itsm-smart-recovery` 任务的 schedule 从 `@reboot` 改为 `@every 10m`
-- [ ] 6.2 在 `HandleSmartRecovery` 中增加内存 map `lastRecoverySubmissions`（ticketID→timestamp），10 分钟内已提交的 ticketID 跳过
-- [ ] 6.3 每次运行前清理 map 中超过 10 分钟的旧条目
+- [x] 6.1 将 `itsm-smart-recovery` 任务的 schedule 从 `@reboot` 改为 `@every 10m`
+- [x] 6.2 在 `HandleSmartRecovery` 中增加内存 map `lastRecoverySubmissions`（ticketID→timestamp），10 分钟内已提交的 ticketID 跳过
+- [x] 6.3 每次运行前清理 map 中超过 10 分钟的旧条目
 - [ ] 6.4 编写测试：首次运行提交恢复；10 分钟内重复运行跳过；10 分钟后重新提交
 
 ## 7. user_picker / dept_picker 组件（P1）
@@ -51,11 +51,11 @@
 
 ## 8. SmartEngine 次级修复（P2）
 
-- [ ] 8.1 `decision.sla_status` 工具：SLA 紧急度阈值从 `EngineConfigProvider` 读取（critical_threshold_seconds 默认 1800，warning_threshold_seconds 默认 3600）
-- [ ] 8.2 `decision.similar_history` 工具：limit 从 `EngineConfigProvider.SimilarHistoryLimit()` 读取（默认 5）
-- [ ] 8.3 `parseDecisionPlan()` 中校验 `execution_mode` 只接受 `""` / `"single"` / `"parallel"`，非法值 warn + 默认空
-- [ ] 8.4 `handleComplete()` 创建终态活动时写入 end 节点 NodeID（从 workflow_json 查找 activity_kind=end）
-- [ ] 8.5 `buildInitialSeed` 中 `approved_next_step.instruction` 增加 `"应遵循此路径继续推进"` 约束，与 rejected 路径对称
+- [x] 8.1 `decision.sla_status` 工具：SLA 紧急度阈值从 `EngineConfigProvider` 读取（critical_threshold_seconds 默认 1800，warning_threshold_seconds 默认 3600）
+- [x] 8.2 `decision.similar_history` 工具：limit 从 `EngineConfigProvider.SimilarHistoryLimit()` 读取（默认 5）
+- [x] 8.3 `parseDecisionPlan()` 中校验 `execution_mode` 只接受 `""` / `"single"` / `"parallel"`，非法值 warn + 默认空
+- [x] 8.4 `handleComplete()` 创建终态活动时写入 end 节点 NodeID（从 workflow_json 查找 activity_kind=end）
+- [x] 8.5 `buildInitialSeed` 中 `approved_next_step.instruction` 增加 `"应遵循此路径继续推进"` 约束，与 rejected 路径对称
 
 ## 9. FormDesigner 权限编辑器（P2）
 

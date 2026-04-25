@@ -603,6 +603,8 @@ func (p *bddConfigProvider) SimilarHistoryLimit() int {
 	return 5
 }
 
+func (p *bddConfigProvider) ParallelConvergenceTimeout() time.Duration { return 72 * time.Hour }
+
 var _ engine.EngineConfigProvider = (*bddConfigProvider)(nil)
 
 // ---------------------------------------------------------------------------

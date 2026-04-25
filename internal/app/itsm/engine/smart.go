@@ -52,6 +52,8 @@ type EngineConfigProvider interface {
 	SLAWarningThresholdSeconds() int
 	// SimilarHistoryLimit returns the max number of similar history records (default 5).
 	SimilarHistoryLimit() int
+	// ParallelConvergenceTimeout returns the max duration for parallel group convergence (default 72h).
+	ParallelConvergenceTimeout() time.Duration
 }
 
 // ParticipantCandidate is a user available for assignment.
