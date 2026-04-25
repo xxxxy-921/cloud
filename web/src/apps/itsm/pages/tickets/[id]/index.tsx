@@ -549,12 +549,14 @@ export function Component() {
 
   const progressMut = useMutation({
     mutationFn: (data: { activityId: number; outcome: ApprovalOutcome; opinion: string }) => progressTicket(ticketId, data),
-    onMutate: (data) => markSmartDecisioning(decisioningMessageForOutcome(data.outcome)),
-    onSuccess: () => {
-      invalidateTicket()
+    onMutate: (data) => {
+      markSmartDecisioning(decisioningMessageForOutcome(data.outcome))
       setApprovalOpen(false)
       setApprovalActivityId(null)
       approvalForm.reset({ opinion: "" })
+    },
+    onSuccess: () => {
+      invalidateTicket()
       toast.success(t("itsm:tickets.progressSuccess"))
     },
     onError: (err) => {

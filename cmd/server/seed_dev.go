@@ -359,7 +359,13 @@ func loadOrCreateSeedDevConfig(configPath string) (*config.MetisConfig, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	cfg = config.DefaultSQLiteConfig()
+	if os.Getenv("METIS_DEV_DB") == "sqlite" {
+		cfg = config.DefaultSQLiteConfig()
+		slog.Info("seed-dev: using SQLite mode")
+	} else {
+		cfg = config.DefaultDevConfig()
+		slog.Info("seed-dev: using PostgreSQL mode (docker-compose)")
+	}
 	if err := cfg.GenerateSecrets(); err != nil {
 		return nil, fmt.Errorf("generate dev config secrets: %w", err)
 	}

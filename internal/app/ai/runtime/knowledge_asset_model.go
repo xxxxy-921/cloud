@@ -327,7 +327,7 @@ type KnowledgeSource struct {
 	model.BaseModel
 	ParentID      *uint      `json:"parentId" gorm:"index"`
 	Title         string     `json:"title" gorm:"size:256;not null"`
-	Content       string     `json:"-" gorm:"type:longtext"`
+	Content       string     `json:"-" gorm:"type:text"`
 	Format        string     `json:"format" gorm:"size:16;not null"`
 	SourceURL     string     `json:"sourceUrl" gorm:"size:1024"`
 	CrawlDepth    int        `json:"crawlDepth" gorm:"not null;default:0"`
@@ -402,7 +402,7 @@ type RAGChunk struct {
 	model.BaseModel
 	AssetID       uint   `json:"assetId" gorm:"not null;index"`
 	SourceID      uint   `json:"sourceId" gorm:"not null;index"`
-	Content       string `json:"content" gorm:"type:longtext;not null"`
+	Content       string `json:"content" gorm:"type:text;not null"`
 	Summary       string `json:"summary" gorm:"type:text"`
 	MetadataJSON  string `json:"-" gorm:"column:metadata;type:text"`
 	ChunkIndex    int    `json:"chunkIndex" gorm:"not null;default:0"`

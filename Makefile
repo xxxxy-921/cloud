@@ -35,9 +35,20 @@ web-install:
 	cd ./web && $(BUN) install
 
 # --- Development ---
+#
+# Database modes:
+#   make dev            — PostgreSQL (requires docker-compose, see support-files/dev/)
+#   make dev-sqlite     — SQLite (zero dependencies, single file)
+#   make reset-pg       — DROP + CREATE postgres DB, then re-seed
+#
+# Both modes read .env.dev for AI provider config on first seed.
 
 dev: web-full-registry
 	@if [ -f .env.dev ]; then $(MAKE) seed-dev; fi
+	METIS_DEV_SERVER_LDFLAGS="$(LDFLAGS)" go run ./cmd/dev
+
+dev-sqlite: web-full-registry
+	@if [ -f .env.dev ]; then $(MAKE) seed-dev-sqlite; fi
 	METIS_DEV_SERVER_LDFLAGS="$(LDFLAGS)" go run ./cmd/dev
 
 web-dev: web-full-registry
@@ -139,6 +150,16 @@ seed:
 seed-dev:
 	go run -tags dev -ldflags '$(LDFLAGS)' ./cmd/server seed-dev
 
+seed-dev-sqlite:
+	METIS_DEV_DB=sqlite go run -tags dev -ldflags '$(LDFLAGS)' ./cmd/server seed-dev
+
+reset-pg:
+	@echo "Dropping and recreating PostgreSQL database..."
+	PGPASSWORD=password psql -h localhost -U postgres -d template1 -c "DROP DATABASE IF EXISTS postgres WITH (FORCE);"
+	PGPASSWORD=password psql -h localhost -U postgres -d template1 -c "CREATE DATABASE postgres;"
+	rm -f config.yml
+	$(MAKE) seed-dev
+
 clean:
 	rm -f config.yml metis.db metis.db-wal metis.db-shm
 
@@ -213,7 +234,7 @@ test-bdd-vpn:
 	ITSM_BDD_PATHS=features/vpn_classic_flow.feature,features/vpn_dialog_coverage.feature,features/vpn_dialog_validation.feature,features/vpn_draft_recovery.feature,features/vpn_participant_validation.feature,features/vpn_smart_engine_deterministic.feature,features/vpn_smart_flow.feature,features/vpn_ticket_withdraw.feature \
 	go test ./internal/app/itsm/ -run TestBDD -v -timeout 20m
 
-.PHONY: web-full-registry web-build web-install web-dev dev stop-all build run release release-license build-license build-sidecar release-sidecar refer-clone seed seed-dev clean push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-bdd test-bdd-vpn
+.PHONY: web-full-registry web-build web-install web-dev dev dev-sqlite stop-all build run release release-license build-license build-sidecar release-sidecar refer-clone seed seed-dev seed-dev-sqlite reset-pg clean push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-bdd test-bdd-vpn
 
 # Backward-compat aliases
 license: build-license
