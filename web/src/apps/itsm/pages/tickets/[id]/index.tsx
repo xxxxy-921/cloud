@@ -264,10 +264,18 @@ function isGenericStepText(value?: string | null) {
 function mapStepTypeToLabel(stepType?: string | null) {
   if (!stepType) return null
   const normalized = normalizeStepText(stepType)
-  if (normalized === "process" || normalized === "处理") return "等待人工处理"
+  if (normalized === "process") return "等待人工处理"
+  if (normalized === "处理") return "等待人工审核"
   if (normalized === "form" || normalized === "表单") return "等待补充信息"
   if (normalized === "approve" || normalized === "审批") return "等待审批决策"
   if (normalized === "action" || normalized === "动作") return "执行自动化动作"
+  return null
+}
+
+function mapStatusToSuggestion(status?: string | null, smartState?: string | null) {
+  const normalizedStatus = normalizeStepText(status ?? "")
+  const normalizedSmartState = normalizeStepText(smartState ?? "")
+  if (normalizedSmartState === "waitinghuman" || normalizedStatus === "waitinghuman") return "等待人工审核"
   return null
 }
 
@@ -334,17 +342,32 @@ function resolveFieldDisplayValue(
   return compactValue(rawValue)
 }
 
-function summarizeDecision(plan: DecisionPlan | null, fallback?: string | null, activityName?: string | null) {
+function summarizeDecision(
+  plan: DecisionPlan | null,
+  fallback?: string | null,
+  activityName?: string | null,
+  context?: { activityType?: string | null; ticketStatus?: string | null; smartState?: string | null },
+) {
   const first = plan?.activities?.[0]
   const candidates = [first?.instructions, plan?.next_step_name, activityName, fallback]
+  let mappedFromGenericCandidate: string | null = null
   for (const candidate of candidates) {
     if (!candidate) continue
     const trimmed = candidate.trim()
-    if (!trimmed || isGenericStepText(trimmed)) continue
+    if (!trimmed) continue
+    if (isGenericStepText(trimmed)) {
+      mappedFromGenericCandidate = mappedFromGenericCandidate ?? mapStepTypeToLabel(trimmed)
+      continue
+    }
     return trimmed
   }
-  const mapped = mapStepTypeToLabel(first?.type || plan?.next_step_type)
+  const mapped = mappedFromGenericCandidate
+    ?? mapStepTypeToLabel(first?.type || plan?.next_step_type)
+    ?? mapStepTypeToLabel(context?.activityType)
+    ?? mapStepTypeToLabel(fallback)
   if (mapped) return mapped
+  const statusMapped = mapStatusToSuggestion(context?.ticketStatus, context?.smartState)
+  if (statusMapped) return statusMapped
   return "等待系统给出下一步"
 }
 
@@ -427,7 +450,12 @@ function AIEvidencePanel({
   const confidence = confidenceOf(activity, plan)
   const confidencePct = confidence == null ? null : Math.round(confidence * 100)
   const firstActivity = plan?.activities?.[0]
-  const nextStepSuggestion = summarizeDecision(plan, ticket.nextStepSummary, activity?.name)
+  const nextStepSuggestion = summarizeDecision(
+    plan,
+    ticket.nextStepSummary,
+    activity?.name,
+    { activityType: activity?.activityType, ticketStatus: ticket.status, smartState: ticket.smartState },
+  )
 
   return (
     <section className="workspace-surface rounded-[1.1rem] p-5">
@@ -789,12 +817,6 @@ function FlatAside({
           </Button>
         )}
 
-        {(!isActive || isTerminal) && (
-          <p className="col-span-2 rounded-lg border border-border/50 bg-background/35 p-3 text-sm text-muted-foreground">
-            当前工单已结束，证据区保留完整流程与审计记录。
-          </p>
-        )}
-
         {isActive && !isDecisioning && actionableActivity && !isCurrentUserResponsible && (
           <p className="col-span-2 rounded-lg border border-border/50 bg-background/35 p-3 text-sm text-muted-foreground">
             当前步骤正在等待责任人处理，你可以查看依据和审计记录。
@@ -916,10 +938,22 @@ export function Component() {
     defaultValues: { opinion: "" },
   })
 
-  const invalidateTicket = () => {
+  const invalidateTicketDetail = () => {
     queryClient.invalidateQueries({ queryKey: ["itsm-ticket", ticketId] })
     queryClient.invalidateQueries({ queryKey: ["itsm-ticket-timeline", ticketId] })
     queryClient.invalidateQueries({ queryKey: ["itsm-ticket-activities", ticketId] })
+  }
+
+  const invalidateTicketLists = () => {
+    queryClient.invalidateQueries({ queryKey: ["itsm-ticket-monitor"] })
+    queryClient.invalidateQueries({ queryKey: ["itsm-tickets-mine"] })
+    queryClient.invalidateQueries({ queryKey: ["itsm-ticket-approval-pending"] })
+    queryClient.invalidateQueries({ queryKey: ["itsm-ticket-approval-history"] })
+  }
+
+  const invalidateTicket = () => {
+    invalidateTicketDetail()
+    invalidateTicketLists()
   }
 
   const markSmartDecisioning = (message: string) => {
@@ -987,7 +1021,7 @@ export function Component() {
       toast.success(t("itsm:tickets.progressSuccess"))
     },
     onError: (err) => {
-      invalidateTicket()
+      invalidateTicketDetail()
       toast.error(err.message)
     },
   })
@@ -1039,7 +1073,12 @@ export function Component() {
     ticket?.canAct || actionableActivity?.canAct || (ticket?.assigneeId && ticket.assigneeId === currentUserId),
   )
   const nextStep = ticket
-    ? (isDecisioning ? t("itsm:tickets.statusDecisioning") : summarizeDecision(plan, ticket.nextStepSummary, actionableActivity?.name))
+    ? (isDecisioning ? t("itsm:tickets.statusDecisioning") : summarizeDecision(
+      plan,
+      ticket.nextStepSummary,
+      actionableActivity?.name,
+      { activityType: actionableActivity?.activityType, ticketStatus: ticket.status, smartState: ticket.smartState },
+    ))
     : ""
   const owner = ticket ? ownerName(ticket, actionableActivity) : "—"
 
