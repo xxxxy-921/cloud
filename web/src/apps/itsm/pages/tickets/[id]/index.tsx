@@ -203,12 +203,48 @@ function formatDateCompact(value?: string | null) {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function summarizeDecision(plan: DecisionPlan | null, fallback?: string | null) {
+const GENERIC_STEP_TERMS = new Set([
+  "处理",
+  "process",
+  "step",
+  "node",
+  "activity",
+  "步骤",
+  "节点",
+  "活动",
+])
+
+function normalizeStepText(value: string) {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, "")
+}
+
+function isGenericStepText(value?: string | null) {
+  if (!value) return false
+  return GENERIC_STEP_TERMS.has(normalizeStepText(value))
+}
+
+function mapStepTypeToLabel(stepType?: string | null) {
+  if (!stepType) return null
+  const normalized = normalizeStepText(stepType)
+  if (normalized === "process" || normalized === "处理") return "等待人工处理"
+  if (normalized === "form" || normalized === "表单") return "等待补充信息"
+  if (normalized === "approve" || normalized === "审批") return "等待审批决策"
+  if (normalized === "action" || normalized === "动作") return "执行自动化动作"
+  return null
+}
+
+function summarizeDecision(plan: DecisionPlan | null, fallback?: string | null, activityName?: string | null) {
   const first = plan?.activities?.[0]
-  if (first?.instructions) return first.instructions
-  if (plan?.next_step_name) return plan.next_step_name
-  if (first?.type) return `${first.type}${plan?.execution_mode ? ` · ${plan.execution_mode}` : ""}`
-  return plan?.next_step_type || fallback || "等待系统给出下一步"
+  const candidates = [first?.instructions, plan?.next_step_name, activityName, fallback]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const trimmed = candidate.trim()
+    if (!trimmed || isGenericStepText(trimmed)) continue
+    return trimmed
+  }
+  const mapped = mapStepTypeToLabel(first?.type || plan?.next_step_type)
+  if (mapped) return mapped
+  return "等待系统给出下一步"
 }
 
 function ownerName(ticket: TicketItem, activity?: ActivityItem | null) {
@@ -287,6 +323,7 @@ function AIEvidencePanel({
   const confidence = confidenceOf(activity, plan)
   const confidencePct = confidence == null ? null : Math.round(confidence * 100)
   const firstActivity = plan?.activities?.[0]
+  const nextStepSuggestion = summarizeDecision(plan, ticket.nextStepSummary, activity?.name)
 
   return (
     <section className="workspace-surface rounded-[1.1rem] p-5">
@@ -300,7 +337,7 @@ function AIEvidencePanel({
           label="判断依据"
           value={activity?.aiReasoning ? "AI 已记录推理摘要" : formRecord ? "申请字段与运行轨迹" : "流程运行轨迹"}
         />
-        <DetailItem label="下一步建议" value={summarizeDecision(plan, ticket.nextStepSummary)} title={summarizeDecision(plan, ticket.nextStepSummary)} />
+        <DetailItem label="下一步建议" value={nextStepSuggestion} title={nextStepSuggestion} />
         <div className="space-y-1.5">
           <div className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
             <span>置信度</span>
@@ -353,11 +390,25 @@ function AIEvidencePanel({
         {(formRecord || activityFormRecord) && (
           <div className="space-y-2 border-t border-border/45 pt-4">
             <p className="text-sm font-medium">申请字段</p>
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="grid gap-x-6 gap-y-0.5 md:grid-cols-2">
               {Object.entries(activityFormRecord ?? formRecord ?? {}).slice(0, 10).map(([key, value]) => (
-                <div key={key} className="min-w-0 border-b border-border/35 pb-2 text-xs">
-                  <span className="text-muted-foreground">{key}</span>
-                  <p className="mt-1 truncate font-medium" title={compactValue(value)}>{compactValue(value)}</p>
+                <div
+                  key={key}
+                  className={`min-w-0 border-b border-border/35 py-3 ${/(remark|description|comment|note|reason|详情|描述|备注|说明|原因)/i.test(key) ? "md:col-span-2" : ""}`}
+                >
+                  <p className="truncate whitespace-nowrap text-[11px] font-medium text-muted-foreground/90">{key}</p>
+                  {/(remark|description|comment|note|reason|详情|描述|备注|说明|原因)/i.test(key) ? (
+                    <p
+                      className="mt-1 overflow-hidden text-[15px] font-medium leading-6 text-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                      title={compactValue(value)}
+                    >
+                      {compactValue(value)}
+                    </p>
+                  ) : (
+                    <p className="mt-1 truncate whitespace-nowrap text-[15px] font-medium leading-6 text-foreground" title={compactValue(value)}>
+                      {compactValue(value)}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
@@ -879,7 +930,9 @@ export function Component() {
   const isCurrentUserResponsible = Boolean(
     ticket?.canAct || actionableActivity?.canAct || (ticket?.assigneeId && ticket.assigneeId === currentUserId),
   )
-  const nextStep = ticket ? (isDecisioning ? t("itsm:tickets.statusDecisioning") : summarizeDecision(plan, ticket.nextStepSummary || actionableActivity?.name)) : ""
+  const nextStep = ticket
+    ? (isDecisioning ? t("itsm:tickets.statusDecisioning") : summarizeDecision(plan, ticket.nextStepSummary, actionableActivity?.name))
+    : ""
   const owner = ticket ? ownerName(ticket, actionableActivity) : "—"
 
   if (isLoading) {
