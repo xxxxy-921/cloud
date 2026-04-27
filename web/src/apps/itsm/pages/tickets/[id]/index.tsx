@@ -52,7 +52,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Textarea } from "@/components/ui/textarea"
 import { Progress } from "@/components/ui/progress"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -66,7 +65,6 @@ import {
   fetchTicketActivities,
   fetchTicketTimeline,
   fetchTicketTokens,
-  fetchTicketVariables,
   fetchUsers,
   progressTicket,
   withdrawTicket,
@@ -76,8 +74,6 @@ import {
 } from "../../../api"
 import { SLABadge } from "../../../components/sla-badge"
 import { TicketStatusBadge } from "../../../components/ticket-status-badge"
-import { SmartFlowVisualization } from "../../../components/smart-flow-visualization"
-import { VariablesPanel } from "../../../components/variables-panel"
 import { WorkflowViewer } from "../../../components/workflow"
 import { TICKET_MENU_PERMISSION } from "../navigation"
 
@@ -546,9 +542,9 @@ function AIEvidencePanel({
 function TimelinePanel({ timeline }: { timeline: TimelineItem[] }) {
   const { t } = useTranslation(["itsm", "common"])
   return (
-    <div>
-      <h4 className="text-sm font-semibold">{t("itsm:tickets.timeline")}</h4>
-      <div className="mt-3">
+    <section className="workspace-surface rounded-[1.1rem] p-5">
+      <h3 className="text-base font-semibold">{t("itsm:tickets.timeline")}</h3>
+      <div className="mt-4">
         {timeline.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("itsm:tickets.empty")}</p>
         ) : (
@@ -586,7 +582,7 @@ function TimelinePanel({ timeline }: { timeline: TimelineItem[] }) {
           </div>
         )}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -812,80 +808,6 @@ function FlatAside({
   )
 }
 
-function RightRailInsights({
-  ticket,
-  activities,
-  timeline,
-  t,
-}: {
-  ticket: TicketItem
-  activities: ActivityItem[]
-  timeline: TimelineItem[]
-  t: (key: string) => string
-}) {
-  const totalActivities = activities.length
-  const completedActivities = activities.filter((item) => item.status === "completed").length
-  const progressPct = totalActivities > 0 ? Math.round((completedActivities / totalActivities) * 100) : 0
-  const latestEvents = [...timeline]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 4)
-  const keyTimes = [
-    { label: t("itsm:tickets.createdAt"), value: formatDateCompact(ticket.createdAt), raw: formatDate(ticket.createdAt) },
-    { label: t("itsm:tickets.slaResponseDeadline"), value: formatDateCompact(ticket.slaResponseDeadline), raw: formatDate(ticket.slaResponseDeadline) },
-    { label: t("itsm:tickets.slaResolutionDeadline"), value: formatDateCompact(ticket.slaResolutionDeadline), raw: formatDate(ticket.slaResolutionDeadline) },
-  ]
-
-  return (
-    <section className="workspace-surface rounded-[1.2rem] p-4">
-      <div className="border-b border-border/45 pb-3">
-        <h3 className="text-sm font-semibold">当前进展</h3>
-      </div>
-
-      <div className="space-y-2 border-b border-border/45 py-3">
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>流程进度</span>
-          <span>{completedActivities}/{totalActivities || 0}</span>
-        </div>
-        <Progress value={progressPct} className="h-2" />
-      </div>
-
-      <div className="border-b border-border/45 py-3">
-        <p className="text-xs font-medium text-muted-foreground">最新动态</p>
-        {latestEvents.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">暂无审计事件</p>
-        ) : (
-          <div className="mt-2 space-y-2">
-            {latestEvents.map((event) => (
-              <div key={event.id} className="rounded-md border border-border/35 bg-background/25 p-2.5">
-                <p className="line-clamp-2 text-xs leading-5 text-foreground" title={event.content}>
-                  {event.content}
-                </p>
-                <p className="mt-1 text-[11px] text-muted-foreground" title={formatDate(event.createdAt)}>
-                  {event.operatorName} · {formatDateCompact(event.createdAt)}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="pt-3">
-        <p className="text-xs font-medium text-muted-foreground">关键时间</p>
-        <div className="mt-2 space-y-2">
-          {keyTimes.map((item) => (
-            <div key={item.label} className="flex items-start justify-between gap-3 text-xs">
-              <span className="text-muted-foreground">{item.label}</span>
-              <span className="truncate whitespace-nowrap text-foreground" title={item.raw}>
-                {item.value}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
-
 function renderFlowTab(
   ticket: TicketItem,
   activities: ActivityItem[],
@@ -893,10 +815,7 @@ function renderFlowTab(
   t: (key: string) => string,
 ) {
   if (ticket.engineType === "smart") {
-    if (activities.length > 0) {
-      return <SmartFlowVisualization activities={activities} currentActivityId={ticket.currentActivityId} />
-    }
-    return <CompactEmpty text="暂无活动记录。" />
+    return null
   }
   if (ticket.workflowJson) {
     return (
@@ -955,11 +874,6 @@ export function Component() {
   const { data: timeline = [] } = useQuery({
     queryKey: ["itsm-ticket-timeline", ticketId],
     queryFn: () => fetchTicketTimeline(ticketId),
-    enabled: ticketId > 0,
-  })
-  const { data: variables = [] } = useQuery({
-    queryKey: ["itsm-ticket-variables", ticketId],
-    queryFn: () => fetchTicketVariables(ticketId),
     enabled: ticketId > 0,
   })
 
@@ -1131,7 +1045,6 @@ export function Component() {
     ? (isDecisioning ? t("itsm:tickets.statusDecisioning") : summarizeDecision(plan, ticket.nextStepSummary, actionableActivity?.name))
     : ""
   const owner = ticket ? ownerName(ticket, actionableActivity) : "—"
-  const advancedInfoSummary = `${timeline.length} 条时间线 · ${variables.length} 个变量`
 
   if (isLoading) {
     return (
@@ -1162,7 +1075,6 @@ export function Component() {
               <TicketStatusBadge ticket={ticket} />
               <Badge variant="outline">{ticket.engineType === "smart" ? "智能工单" : "经典流程"}</Badge>
             </div>
-            <p className="workspace-page-description">{ticket.title}</p>
           </div>
         </div>
       </div>
@@ -1171,33 +1083,11 @@ export function Component() {
         <main className="min-w-0 space-y-4">
           <SummaryBand ticket={ticket} owner={owner} nextStep={nextStep} t={t} />
           <AIEvidencePanel ticket={ticket} activity={explanationActivity} plan={plan} />
+          <TimelinePanel timeline={timeline} />
           {renderFlowTab(ticket, activities, tokens, t)}
-
-          <section className="workspace-surface rounded-[1.1rem] px-5 py-3">
-            <Accordion type="single" collapsible>
-              <AccordionItem value="advanced" className="border-none">
-                <AccordionTrigger className="py-2 hover:no-underline">
-                  <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                    <span className="text-sm font-semibold text-foreground">详细记录（时间线与变量）</span>
-                    <span className="truncate whitespace-nowrap text-xs text-muted-foreground">
-                      {advancedInfoSummary}
-                    </span>
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent className="pb-1">
-                  <div className="space-y-5 border-t border-border/45 pt-4">
-                    <TimelinePanel timeline={timeline} />
-                    <div className="border-t border-border/45 pt-4">
-                      <VariablesPanel ticketId={ticketId} variant="flat" />
-                    </div>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
-          </section>
         </main>
 
-        <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+        <div className="xl:sticky xl:top-4 xl:self-start">
           <FlatAside
             ticket={ticket}
             owner={owner}
@@ -1225,7 +1115,6 @@ export function Component() {
             setWithdrawOpen={setWithdrawOpen}
             actionableActivity={actionableActivity}
           />
-          <RightRailInsights ticket={ticket} activities={activities} timeline={timeline} t={t} />
         </div>
       </div>
 
