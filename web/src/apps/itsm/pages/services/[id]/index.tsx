@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, lazy, Suspense, type ReactNode } from "react"
+import { useState, useEffect, lazy, Suspense, type ReactNode } from "react"
 import { useParams, useNavigate } from "react-router"
 import { useTranslation } from "react-i18next"
 import { useForm, useWatch } from "react-hook-form"
@@ -821,9 +821,7 @@ export function Component() {
   const { t } = useTranslation(["itsm", "common"])
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const serviceId = Number(id)
-  const canUpdate = usePermission("itsm:service:update")
   const [workflowFocus, setWorkflowFocus] = useState<{
     kind: "workflow_node" | "workflow_edge"
     refId: string
@@ -847,28 +845,6 @@ export function Component() {
   })
   const isGeneratingWorkflow = useIsMutating({ mutationKey: [...GENERATE_WORKFLOW_MUTATION_KEY, serviceId] }) > 0
 
-  const persistWorkflowLayoutMut = useMutation({
-    mutationFn: (workflowJson: unknown) => updateServiceDef(serviceId, { workflowJson } as Partial<ServiceDefItem>),
-    onMutate: async (workflowJson) => {
-      const queryKey = ["itsm-service", serviceId] as const
-      await queryClient.cancelQueries({ queryKey })
-      const prev = queryClient.getQueryData<ServiceDefItem>(queryKey)
-      if (prev) {
-        queryClient.setQueryData<ServiceDefItem>(queryKey, { ...prev, workflowJson })
-      }
-      return { prev }
-    },
-    onError: (err, _vars, ctx) => {
-      if (ctx?.prev) {
-        queryClient.setQueryData(["itsm-service", serviceId], ctx.prev)
-      }
-      toast.error(err.message)
-    },
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["itsm-service", serviceId], updated)
-    },
-  })
-
   if (isLoading || catalogsLoading || slaLoading) {
     return <div className="flex h-96 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
   }
@@ -886,14 +862,6 @@ export function Component() {
       />
     )
   }
-
-  const handleWorkflowLayoutChange = useCallback((nextWorkflowJson: unknown) => {
-    if (!canUpdate) return
-    const current = JSON.stringify(service.workflowJson ?? null)
-    const next = JSON.stringify(nextWorkflowJson ?? null)
-    if (current === next) return
-    persistWorkflowLayoutMut.mutate(nextWorkflowJson)
-  }, [canUpdate, service.workflowJson, persistWorkflowLayoutMut])
 
   const workflowSection = (
     <SectionFrame
@@ -927,7 +895,6 @@ export function Component() {
         <Suspense fallback={<div className="flex h-80 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}>
           <WorkflowPreview
             workflowJson={service.workflowJson}
-            onWorkflowLayoutChange={handleWorkflowLayoutChange}
             embedded
             focusTarget={workflowFocus}
           />
