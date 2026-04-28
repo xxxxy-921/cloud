@@ -48,5 +48,6 @@ sidecar
 *.db-shm
 *.db-wal
 .gocache/
+.gocache/**
 .gocache-test/
 .codex/
