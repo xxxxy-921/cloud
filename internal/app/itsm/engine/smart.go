@@ -1041,8 +1041,8 @@ func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID
 	}
 	if len(userIDs) == 0 {
 		slog.Warn("position assignment: no users found", "positionCode", positionCode, "departmentCode", departmentCode)
-		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_resolution_pending",
-			fmt.Sprintf("审批岗位 %s@%s 当前没有可用处理人，工单已挂起等待 IT 管理员补充人员配置", positionCode, departmentCode), "")
+		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_fallback_warning",
+			fmt.Sprintf("岗位参与人 %s@%s 当前没有可用处理人，工单未 fallback 到其他岗位，等待 IT 管理员补充人员配置", positionCode, departmentCode), "")
 	}
 
 	assignment := &assignmentModel{
@@ -2455,10 +2455,33 @@ func buildAgenticSystemPrompt(collaborationSpec, decisionMode, workflowJSON stri
 		}
 	}
 	prompt += "## 分支闭环约束\n\n业务分支与候选处理人不是一回事。一旦工单已经命中某条业务分支，后续只能在该分支内推进或结束，不能因为其他岗位也相关就切换到别的业务分支。若协作规范写明“处理完成后直接结束流程”，则 approved/rejected 都应优先解释为当前分支的终态推进，workflow_json 的 approved/rejected 出边属于 continuation contract，而不是普通建议。\n\n---\n\n"
+	if guidance := agenticStructuredRoutingGuidance(collaborationSpec); guidance != "" {
+		prompt += guidance + "\n\n---\n\n"
+	}
 	prompt += agenticToolGuidance
 	prompt += "\n\n---\n\n"
 	prompt += agenticOutputFormat
 	return prompt
+}
+
+func agenticStructuredRoutingGuidance(collaborationSpec string) string {
+	switch {
+	case looksLikeServerAccessPurposeSpec(collaborationSpec):
+		return `## 结构化路由判定守卫
+
+生产服务器临时访问申请必须先按协作规范和 form.access_purpose 判定业务分支，再解析参与人：
+- 应用排障、应用进程、日志查看、运行状态、主机巡检、进程处理、磁盘清理、一般生产运维 => decision.resolve_participant 使用 {"type":"position_department","department_code":"it","position_code":"ops_admin"}。
+- 抓包、链路诊断、ACL、负载均衡、防火墙策略、网络访问路径、连通性 => decision.resolve_participant 使用 {"type":"position_department","department_code":"it","position_code":"network_admin"}。
+- 安全审计、取证、证据保全、漏洞、入侵排查、合规核查、异常访问、高敏访问 => decision.resolve_participant 使用 {"type":"position_department","department_code":"it","position_code":"security_admin"}。
+
+“安全窗口”“生产安全窗口”“高敏发布安全窗口”只是访问时段或变更窗口修饰词，不是 security_admin 分支证据。若 access_purpose 同时命中多个业务分支，或缺失/未知，不得高置信选择单一路由，应降级为澄清或人工诊断。decision.resolve_participant 的 department_code/position_code 必须与最终输出活动的业务分支一致；如果发现解析了错误岗位，必须重新按协作规范解析正确岗位后再输出决策。`
+	case looksLikeVPNRequestKindSpec(collaborationSpec):
+		return `## 结构化路由判定守卫
+
+VPN 申请必须以 form.request_kind 的枚举值为路由事实源，不能被 device_usage、reason 或 workflow_json 中的自由文本诱导。网络类枚举解析 it/network_admin，安全类枚举解析 it/security_admin；缺失、未知或同时命中多个分支时，不得高置信选择单一路由。decision.resolve_participant 的 department_code/position_code 必须与最终输出活动的业务分支一致。`
+	default:
+		return ""
+	}
 }
 
 const agenticToolGuidance = `## 工具使用指引

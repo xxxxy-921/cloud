@@ -55,6 +55,12 @@ func newClassicMatrixFixture(t *testing.T) *classicMatrixFixture {
 	if err := db.Exec("ALTER TABLE itsm_tickets ADD COLUMN assignee_id INTEGER").Error; err != nil {
 		t.Fatalf("add ticket assignee_id: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime)`).Error; err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, username, is_active, deleted_at) VALUES (7, 'classic-operator', true, NULL)`).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 	if err := db.Exec("CREATE UNIQUE INDEX idx_matrix_process_variables_unique ON itsm_process_variables(ticket_id, scope_id, key)").Error; err != nil {
 		t.Fatalf("create process variable unique index: %v", err)
 	}

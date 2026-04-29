@@ -27,6 +27,12 @@ func TestClassicProgressCompletesApproveAssignment(t *testing.T) {
 	if err := db.Exec("ALTER TABLE itsm_tickets ADD COLUMN assignee_id INTEGER").Error; err != nil {
 		t.Fatalf("add assignee_id: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime)`).Error; err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, username, is_active, deleted_at) VALUES (1, 'approver', true, NULL)`).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 
 	workflow := json.RawMessage(`{
 		"nodes": [

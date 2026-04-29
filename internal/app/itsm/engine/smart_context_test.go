@@ -59,6 +59,26 @@ func TestBuildInitialSeedIncludesDecisionTrigger(t *testing.T) {
 	}
 }
 
+func TestAgenticSystemPromptGuardsServerAccessLexicalRouting(t *testing.T) {
+	spec := `生产服务器临时访问申请。访问目的交给不同岗位：应用排障和日志查看由 it/ops_admin 处理；抓包、链路诊断、ACL 和防火墙策略由 it/network_admin 处理；安全审计、取证、入侵排查和合规核查由 it/security_admin 处理。不要让申请人在表单里自己选择处理类别，流程决策智能体应根据访问目的运行时判断。`
+
+	prompt := buildAgenticSystemPrompt(spec, "ai_only", "")
+
+	for _, want := range []string{
+		"结构化路由判定守卫",
+		"安全窗口",
+		"不是 security_admin 分支证据",
+		`"position_code":"ops_admin"`,
+		`"position_code":"network_admin"`,
+		`"position_code":"security_admin"`,
+		"decision.resolve_participant 的 department_code/position_code 必须与最终输出活动的业务分支一致",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestBuildInitialSeedIncludesRejectedActivityPolicy(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -483,7 +503,7 @@ func TestValidateDecisionPlanRejectsDuplicateCompletedHumanActivity(t *testing.T
 	if err := db.AutoMigrate(&ticketModel{}, &activityModel{}, &assignmentModel{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
-	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean, deleted_at datetime)`).Error; err != nil {
 		t.Fatalf("create users: %v", err)
 	}
 	if err := db.Exec(`INSERT INTO users (id, is_active) VALUES (1, true)`).Error; err != nil {
@@ -641,7 +661,7 @@ func setupStructuredRoutingValidationDB(t *testing.T, formData string) (*gorm.DB
 		t.Fatalf("migrate db: %v", err)
 	}
 	for _, stmt := range []string{
-		`CREATE TABLE users (id integer primary key, is_active boolean)`,
+		`CREATE TABLE users (id integer primary key, is_active boolean, deleted_at datetime)`,
 		`CREATE TABLE positions (id integer primary key, code text)`,
 		`CREATE TABLE departments (id integer primary key, code text)`,
 		`CREATE TABLE user_positions (id integer primary key, user_id integer, position_id integer, department_id integer, deleted_at datetime)`,
@@ -670,7 +690,7 @@ func TestValidateDecisionPlanRejectsRepeatedActivityAfterRejectedCompletion(t *t
 	if err := db.AutoMigrate(&ticketModel{}, &activityModel{}, &assignmentModel{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
-	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean, deleted_at datetime)`).Error; err != nil {
 		t.Fatalf("create users: %v", err)
 	}
 	if err := db.Exec(`INSERT INTO users (id, is_active) VALUES (1, true)`).Error; err != nil {
@@ -921,7 +941,7 @@ func TestValidateDecisionPlanNodeID(t *testing.T) {
 	if err := db.AutoMigrate(&ticketModel{}, &activityModel{}, &assignmentModel{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
-	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean, deleted_at datetime)`).Error; err != nil {
 		t.Fatalf("create users: %v", err)
 	}
 	if err := db.Exec(`INSERT INTO users (id, is_active) VALUES (1, true)`).Error; err != nil {

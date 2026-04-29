@@ -45,7 +45,7 @@ func TestParticipantResolverOrgTypesSingleSQLiteConnectionUseWorkflowTransaction
 	if err := db.AutoMigrate(&ticketModel{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
-	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, manager_id integer)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime, manager_id integer)`).Error; err != nil {
 		t.Fatalf("create users: %v", err)
 	}
 	if err := db.Exec(`CREATE TABLE positions (id integer primary key, code text)`).Error; err != nil {
@@ -131,7 +131,7 @@ func TestParticipantResolverIgnoresSoftDeletedUserPositions(t *testing.T) {
 	if err := db.AutoMigrate(&ticketModel{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
-	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, manager_id integer)`).Error; err != nil {
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime, manager_id integer)`).Error; err != nil {
 		t.Fatalf("create users: %v", err)
 	}
 	if err := db.Exec(`CREATE TABLE positions (id integer primary key, code text)`).Error; err != nil {

@@ -487,7 +487,7 @@ func TestSmartDecisionPositionAssignmentWithoutUsersWaitsForHuman(t *testing.T) 
 	}
 
 	var timeline timelineModel
-	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "participant_resolution_pending").First(&timeline).Error; err != nil {
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "participant_fallback_warning").First(&timeline).Error; err != nil {
 		t.Fatalf("load pending timeline: %v", err)
 	}
 	if timeline.Message == "" {

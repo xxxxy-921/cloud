@@ -74,6 +74,15 @@ func setupSLAAssuranceTestDB(t *testing.T) *gorm.DB {
 	if err := db.Exec("ALTER TABLE itsm_tickets ADD COLUMN assignee_id INTEGER").Error; err != nil {
 		t.Fatalf("add assignee column: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime, manager_id integer)`).Error; err != nil {
+		t.Fatalf("create users table: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_service_definitions (id integer primary key, name text)`).Error; err != nil {
+		t.Fatalf("create service definitions table: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, username, is_active) VALUES (10, 'notify-a', true), (11, 'notify-b', true), (20, 'ops-a', true), (21, 'ops-b', true)`).Error; err != nil {
+		t.Fatalf("seed users: %v", err)
+	}
 	return db
 }
 
