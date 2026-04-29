@@ -578,7 +578,57 @@ func TestValidateDecisionPlanRejectsMissingVPNRouteField(t *testing.T) {
 	}
 }
 
+func TestValidateDecisionPlanNormalizesServerAccessSecurityBoundary(t *testing.T) {
+	db, ticket := setupStructuredRoutingValidationDB(t, `{"access_purpose":"结合异常访问核查、日志固定和证据保全判断是否需要进一步安全处置。"}`)
+
+	eng := &SmartEngine{}
+	plan := &DecisionPlan{
+		NextStepType:  NodeProcess,
+		ExecutionMode: "single",
+		Activities: []DecisionActivity{{
+			Type:            NodeProcess,
+			ParticipantType: "position_department",
+			DepartmentCode:  "it",
+			PositionCode:    "ops_admin",
+		}},
+		Confidence: 0.95,
+	}
+	err := eng.validateDecisionPlan(db, ticket.ID, plan, &serviceModel{ID: 1, CollaborationSpec: testServerAccessRoutingSpec}, nil)
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if got := plan.Activities[0].PositionCode; got != "security_admin" {
+		t.Fatalf("expected participant normalized to security_admin, got %q", got)
+	}
+}
+
+func TestValidateDecisionPlanNormalizesServerAccessNetworkRoute(t *testing.T) {
+	db, ticket := setupStructuredRoutingValidationDB(t, `{"access_purpose":"配合抓包和链路诊断，核对负载均衡后的网络访问路径。"}`)
+
+	eng := &SmartEngine{}
+	plan := &DecisionPlan{
+		NextStepType:  NodeProcess,
+		ExecutionMode: "single",
+		Activities: []DecisionActivity{{
+			Type:            NodeProcess,
+			ParticipantType: "position_department",
+			DepartmentCode:  "it",
+			PositionCode:    "security_admin",
+		}},
+		Confidence: 0.95,
+	}
+	err := eng.validateDecisionPlan(db, ticket.ID, plan, &serviceModel{ID: 1, CollaborationSpec: testServerAccessRoutingSpec}, nil)
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if got := plan.Activities[0].PositionCode; got != "network_admin" {
+		t.Fatalf("expected participant normalized to network_admin, got %q", got)
+	}
+}
+
 const testVPNRoutingSpec = `流程通过 form.request_kind 进入排他网关：线上支持(online_support)、故障排查(troubleshooting)、生产应急(production_emergency)、网络接入问题(network_access_issue)进入网络管理员处理，岗位编码 network_admin；外部协作(external_collaboration)、长期远程办公(long_term_remote_work)、跨境访问(cross_border_access)、安全合规事项(security_compliance)进入信息安全管理员处理，岗位编码 security_admin。`
+
+const testServerAccessRoutingSpec = `这是一个生产服务器临时访问申请服务。常见的应用排障、主机巡检、日志查看、进程处理、磁盘清理和一般生产运维访问，交给信息部的运维管理员岗位处理，岗位编码使用 ops_admin。网络抓包、链路诊断、ACL 调整、负载均衡检查、防火墙策略核对和其他网络侧访问，交给信息部的网络管理员岗位处理，岗位编码使用 network_admin。安全审计、取证分析、漏洞修复验证、入侵排查、合规核查和其他高敏访问，交给信息部的安全管理员岗位处理，岗位编码使用 security_admin。流程决策智能体应根据访问目的和访问原因在运行时判断应该流转到哪个处理岗位。`
 
 func setupStructuredRoutingValidationDB(t *testing.T, formData string) (*gorm.DB, ticketModel) {
 	t.Helper()
@@ -595,10 +645,10 @@ func setupStructuredRoutingValidationDB(t *testing.T, formData string) (*gorm.DB
 		`CREATE TABLE positions (id integer primary key, code text)`,
 		`CREATE TABLE departments (id integer primary key, code text)`,
 		`CREATE TABLE user_positions (id integer primary key, user_id integer, position_id integer, department_id integer, deleted_at datetime)`,
-		`INSERT INTO users (id, is_active) VALUES (1, true), (2, true)`,
-		`INSERT INTO positions (id, code) VALUES (11, 'network_admin'), (12, 'security_admin')`,
+		`INSERT INTO users (id, is_active) VALUES (1, true), (2, true), (3, true)`,
+		`INSERT INTO positions (id, code) VALUES (10, 'ops_admin'), (11, 'network_admin'), (12, 'security_admin')`,
 		`INSERT INTO departments (id, code) VALUES (21, 'it')`,
-		`INSERT INTO user_positions (id, user_id, position_id, department_id) VALUES (1, 1, 11, 21), (2, 2, 12, 21)`,
+		`INSERT INTO user_positions (id, user_id, position_id, department_id) VALUES (1, 1, 11, 21), (2, 2, 12, 21), (3, 3, 10, 21)`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatalf("exec %q: %v", stmt, err)

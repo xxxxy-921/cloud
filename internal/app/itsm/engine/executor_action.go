@@ -180,6 +180,10 @@ func replaceTemplateVars(template string, ticket *ticketModel) string {
 
 type serviceActionModel struct {
 	ID         uint   `gorm:"primaryKey"`
+	Name       string `gorm:"column:name"`
+	Code       string `gorm:"column:code"`
+	ServiceID  uint   `gorm:"column:service_id"`
+	IsActive   bool   `gorm:"column:is_active"`
 	ConfigJSON string `gorm:"column:config_json;type:text"`
 }
 

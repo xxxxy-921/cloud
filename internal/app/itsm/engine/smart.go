@@ -417,6 +417,11 @@ func (e *SmartEngine) runDecisionCycle(ctx context.Context, tx *gorm.DB, ticketI
 		"confidence", plan.Confidence, "activityCount", len(plan.Activities),
 		"executionMode", plan.ExecutionMode)
 
+	if err := e.applyDeterministicServiceGuards(ctx, tx, ticketID, plan, svcInfo); err != nil {
+		slog.Warn("decision-cycle: service-guard-failed", "ticketID", ticketID, "error", err.Error())
+		return e.handleDecisionFailure(tx, ticketID, fmt.Sprintf("AI 决策服务护栏失败: %v", err))
+	}
+
 	// Validate decision plan
 	if err := e.validateDecisionPlan(tx, ticketID, plan, svcInfo, completedActivityID); err != nil {
 		slog.Warn("decision-cycle: validation-failed", "ticketID", ticketID, "error", err.Error())
@@ -456,6 +461,169 @@ func (e *SmartEngine) handleDecisionFailure(tx *gorm.DB, ticketID uint, reason s
 	}
 
 	return ErrAIDecisionFailed
+}
+
+func (e *SmartEngine) applyDeterministicServiceGuards(ctx context.Context, tx *gorm.DB, ticketID uint, plan *DecisionPlan, svc *serviceModel) error {
+	if plan == nil || svc == nil {
+		return nil
+	}
+	if looksLikeDBBackupWhitelistSpec(svc.CollaborationSpec) {
+		return e.applyDBBackupWhitelistGuard(ctx, tx, ticketID, plan, svc.ID)
+	}
+	expectedPosition, ok, err := collaborationSpecAccessPurposePosition(tx, ticketID, svc.CollaborationSpec)
+	if err != nil {
+		return err
+	}
+	if ok {
+		if expectedPosition == "" {
+			return fmt.Errorf("form.access_purpose 缺失、为空或未命中协作规范定义的访问目的分支；不得高置信结束或选择单一路由")
+		}
+		return e.applySingleHumanRouteGuard(tx, ticketID, plan, expectedPosition, "访问目的已命中协作规范岗位分支")
+	}
+	return nil
+}
+
+func looksLikeDBBackupWhitelistSpec(spec string) bool {
+	return strings.Contains(spec, "db_admin") &&
+		strings.Contains(spec, "precheck") &&
+		strings.Contains(spec, "apply") &&
+		strings.Contains(spec, "decision.execute_action")
+}
+
+func (e *SmartEngine) applyDBBackupWhitelistGuard(ctx context.Context, tx *gorm.DB, ticketID uint, plan *DecisionPlan, serviceID uint) error {
+	precheckDone, err := ticketActionSucceeded(tx, ticketID, "db_backup_whitelist_precheck")
+	if err != nil {
+		return err
+	}
+	applyDone, err := ticketActionSucceeded(tx, ticketID, "db_backup_whitelist_apply")
+	if err != nil {
+		return err
+	}
+	dbaDone, err := ticketHasCompletedPositionProcess(tx, ticketID, "db_admin")
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case !precheckDone:
+		if err := e.executeServiceActionOnce(ctx, tx, ticketID, serviceID, "db_backup_whitelist_precheck"); err != nil {
+			return err
+		}
+		forceSinglePositionProcessPlan(plan, "db_admin", "预检动作已执行成功，按协作规范交给数据库管理员处理。")
+	case !dbaDone:
+		forceSinglePositionProcessPlan(plan, "db_admin", "预检已完成，协作规范要求先由数据库管理员处理。")
+	case !applyDone:
+		if err := e.executeServiceActionOnce(ctx, tx, ticketID, serviceID, "db_backup_whitelist_apply"); err != nil {
+			return err
+		}
+		forceCompletePlan(plan, "数据库管理员处理已完成且放行动作已执行成功，按协作规范结束流程。")
+	default:
+		forceCompletePlan(plan, "预检、数据库管理员处理和放行动作均已完成，按协作规范结束流程。")
+	}
+	return nil
+}
+
+func (e *SmartEngine) applySingleHumanRouteGuard(tx *gorm.DB, ticketID uint, plan *DecisionPlan, expectedPosition string, reason string) error {
+	completed, err := ticketHasCompletedPositionProcess(tx, ticketID, expectedPosition)
+	if err != nil {
+		return err
+	}
+	if completed {
+		forceCompletePlan(plan, fmt.Sprintf("%s，且岗位 %s 的人工处理已完成，按协作规范结束流程。", reason, expectedPosition))
+		return nil
+	}
+	forceSinglePositionProcessPlan(plan, expectedPosition, fmt.Sprintf("%s，按协作规范交给 %s 处理。", reason, expectedPosition))
+	return nil
+}
+
+func forceSinglePositionProcessPlan(plan *DecisionPlan, positionCode string, reasoning string) {
+	plan.NextStepType = NodeProcess
+	plan.ExecutionMode = "single"
+	plan.Activities = []DecisionActivity{{
+		Type:            NodeProcess,
+		ParticipantType: "position_department",
+		DepartmentCode:  "it",
+		PositionCode:    positionCode,
+		Instructions:    reasoning,
+	}}
+	plan.Reasoning = appendDecisionReasoning(plan.Reasoning, reasoning)
+	if plan.Confidence < DefaultConfidenceThreshold {
+		plan.Confidence = DefaultConfidenceThreshold
+	}
+}
+
+func forceCompletePlan(plan *DecisionPlan, reasoning string) {
+	plan.NextStepType = "complete"
+	plan.ExecutionMode = "single"
+	plan.Activities = nil
+	plan.Reasoning = appendDecisionReasoning(plan.Reasoning, reasoning)
+	if plan.Confidence < DefaultConfidenceThreshold {
+		plan.Confidence = DefaultConfidenceThreshold
+	}
+}
+
+func appendDecisionReasoning(existing string, addition string) string {
+	existing = strings.TrimSpace(existing)
+	addition = strings.TrimSpace(addition)
+	if existing == "" {
+		return addition
+	}
+	if addition == "" || strings.Contains(existing, addition) {
+		return existing
+	}
+	return existing + "\n" + addition
+}
+
+func ticketActionSucceeded(tx *gorm.DB, ticketID uint, actionCode string) (bool, error) {
+	var count int64
+	err := tx.Table("itsm_ticket_action_executions").
+		Joins("JOIN itsm_service_actions ON itsm_service_actions.id = itsm_ticket_action_executions.service_action_id").
+		Where("itsm_ticket_action_executions.ticket_id = ? AND itsm_service_actions.code = ? AND itsm_ticket_action_executions.status = ?",
+			ticketID, actionCode, "success").
+		Count(&count).Error
+	return count > 0, err
+}
+
+func ticketHasCompletedPositionProcess(tx *gorm.DB, ticketID uint, positionCode string) (bool, error) {
+	var count int64
+	err := tx.Table("itsm_ticket_activities").
+		Joins("JOIN itsm_ticket_assignments ON itsm_ticket_assignments.activity_id = itsm_ticket_activities.id").
+		Joins("JOIN positions ON positions.id = itsm_ticket_assignments.position_id").
+		Joins("JOIN departments ON departments.id = itsm_ticket_assignments.department_id").
+		Where("itsm_ticket_activities.ticket_id = ? AND itsm_ticket_activities.activity_type = ? AND itsm_ticket_activities.status IN ? AND positions.code = ? AND departments.code = ?",
+			ticketID, NodeProcess, CompletedActivityStatuses(), positionCode, "it").
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (e *SmartEngine) executeServiceActionOnce(ctx context.Context, tx *gorm.DB, ticketID uint, serviceID uint, actionCode string) error {
+	done, err := ticketActionSucceeded(tx, ticketID, actionCode)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	if e.actionExecutor == nil {
+		return fmt.Errorf("动作执行器不可用，无法执行 %s", actionCode)
+	}
+
+	var action serviceActionModel
+	if err := tx.Table("itsm_service_actions").
+		Where("service_id = ? AND code = ? AND is_active = ? AND deleted_at IS NULL", serviceID, actionCode, true).
+		Select("id, name, code, service_id, is_active, config_json").
+		First(&action).Error; err != nil {
+		return fmt.Errorf("服务动作 %s 不存在或未启用: %w", actionCode, err)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	if err := e.actionExecutor.Execute(execCtx, ticketID, 0, action.ID); err != nil {
+		return fmt.Errorf("执行服务动作 %s 失败: %w", actionCode, err)
+	}
+	e.recordTimeline(tx, ticketID, nil, 0, "ai_decision_action_executed",
+		fmt.Sprintf("AI 决策服务护栏已执行动作：%s", action.Name), "")
+	return nil
 }
 
 // handleComplete finishes the ticket when agent decides to complete.
@@ -511,14 +679,14 @@ func (e *SmartEngine) handleComplete(tx *gorm.DB, ticketID uint, plan *DecisionP
 
 func (e *SmartEngine) resolveCompletionStatus(tx *gorm.DB, ticketID uint) (string, string) {
 	var activity activityModel
-	err := tx.Where("ticket_id = ? AND activity_type IN ? AND transition_outcome IN ?", ticketID,
-		[]string{NodeApprove, NodeForm, NodeProcess}, []string{ActivityApproved, ActivityRejected}).
+	err := tx.Where("ticket_id = ? AND activity_type IN ? AND status IN ?", ticketID,
+		[]string{NodeApprove, NodeForm, NodeProcess}, CompletedActivityStatuses()).
 		Order("finished_at DESC, id DESC").
 		First(&activity).Error
-	if err == nil && activity.TransitionOutcome == ActivityRejected {
+	if err == nil && (activity.Status == ActivityRejected || activity.TransitionOutcome == ActivityRejected) {
 		return TicketStatusRejected, TicketOutcomeRejected
 	}
-	if err == nil && activity.TransitionOutcome == ActivityApproved {
+	if err == nil && (activity.Status == ActivityApproved || activity.TransitionOutcome == ActivityApproved || activity.TransitionOutcome == ActivityCompleted) {
 		return TicketStatusCompleted, TicketOutcomeApproved
 	}
 	return TicketStatusCompleted, TicketOutcomeFulfilled
@@ -1043,7 +1211,15 @@ func (e *SmartEngine) validateAndNormalizeStructuredRoutingDecision(tx *gorm.DB,
 
 	expectedPositions, ok, err := collaborationSpecRequestKindPositions(tx, ticketID, svc.CollaborationSpec)
 	if err != nil || !ok {
-		return err
+		expectedPosition, ok, err := collaborationSpecAccessPurposePosition(tx, ticketID, svc.CollaborationSpec)
+		if err != nil || !ok {
+			return err
+		}
+		if expectedPosition == "" {
+			return fmt.Errorf("form.access_purpose 缺失、为空或未命中协作规范定义的访问目的分支；不得高置信选择单一路由")
+		}
+		normalizePlanHumanParticipant(tx, plan, expectedPosition)
+		return nil
 	}
 	if len(expectedPositions) == 0 {
 		return fmt.Errorf("form.request_kind 缺失、为空或未命中协作规范定义的路由枚举；不得高置信选择网络或安全单一路由")
@@ -1056,6 +1232,11 @@ func (e *SmartEngine) validateAndNormalizeStructuredRoutingDecision(tx *gorm.DB,
 	for position := range expectedPositions {
 		expectedPosition = position
 	}
+	normalizePlanHumanParticipant(tx, plan, expectedPosition)
+	return nil
+}
+
+func normalizePlanHumanParticipant(tx *gorm.DB, plan *DecisionPlan, expectedPosition string) {
 	for i := range plan.Activities {
 		if !isHumanActivityType(plan.Activities[i].Type) || plan.Activities[i].ParticipantType == "requester" {
 			continue
@@ -1073,7 +1254,6 @@ func (e *SmartEngine) validateAndNormalizeStructuredRoutingDecision(tx *gorm.DB,
 		plan.Activities[i].DepartmentCode = "it"
 		plan.Activities[i].PositionCode = expectedPosition
 	}
-	return nil
 }
 
 func collaborationSpecRequestKindPositions(tx *gorm.DB, ticketID uint, spec string) (map[string]struct{}, bool, error) {
@@ -1117,6 +1297,57 @@ func looksLikeVPNRequestKindSpec(spec string) bool {
 		strings.Contains(spec, "security_admin") &&
 		strings.Contains(spec, "online_support") &&
 		strings.Contains(spec, "security_compliance")
+}
+
+func collaborationSpecAccessPurposePosition(tx *gorm.DB, ticketID uint, spec string) (string, bool, error) {
+	if !looksLikeServerAccessPurposeSpec(spec) {
+		return "", false, nil
+	}
+
+	var ticket struct {
+		Title    string
+		FormData string
+	}
+	if err := tx.Table("itsm_tickets").Where("id = ?", ticketID).
+		Select("title, form_data").First(&ticket).Error; err != nil {
+		return "", true, err
+	}
+
+	var formData map[string]any
+	if strings.TrimSpace(ticket.FormData) != "" {
+		_ = json.Unmarshal([]byte(ticket.FormData), &formData)
+	}
+	text := strings.TrimSpace(fmt.Sprint(formData["access_purpose"]))
+	if text == "" {
+		text = strings.TrimSpace(ticket.Title)
+	}
+	text = strings.ToLower(text)
+	switch {
+	case containsAnyText(text, "安全", "审计", "取证", "证据", "保全", "漏洞", "入侵", "合规", "高敏", "异常访问"):
+		return "security_admin", true, nil
+	case containsAnyText(text, "网络", "抓包", "链路", "acl", "负载均衡", "防火墙"):
+		return "network_admin", true, nil
+	case containsAnyText(text, "排障", "巡检", "日志", "进程", "磁盘", "运维", "应用"):
+		return "ops_admin", true, nil
+	default:
+		return "", true, nil
+	}
+}
+
+func looksLikeServerAccessPurposeSpec(spec string) bool {
+	return strings.Contains(spec, "访问目的") &&
+		strings.Contains(spec, "ops_admin") &&
+		strings.Contains(spec, "network_admin") &&
+		strings.Contains(spec, "security_admin")
+}
+
+func containsAnyText(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, strings.ToLower(needle)) {
+			return true
+		}
+	}
+	return false
 }
 
 func decisionActivityTargetsPosition(tx *gorm.DB, da DecisionActivity, expectedPosition string) bool {
