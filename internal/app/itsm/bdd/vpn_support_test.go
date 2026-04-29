@@ -12,6 +12,7 @@ import (
 	. "metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,11 @@ var vpnSampleFormData = map[string]any{
 	"vpn_account":  "vpn-requester@dev.local",
 	"device_usage": "需要远程访问内网开发环境进行线上支持",
 }
+
+var vpnWorkflowCache = struct {
+	sync.Mutex
+	byLLM map[string]json.RawMessage
+}{byLLM: map[string]json.RawMessage{}}
 
 // llmConfig holds LLM configuration loaded from environment variables.
 type llmConfig struct {
@@ -61,6 +67,15 @@ func hasLLMConfig() bool {
 // generateVPNWorkflow calls the LLM to generate a VPN workflow JSON from the collaboration spec.
 // It retries up to maxRetries times, feeding validation errors back to the LLM.
 func generateVPNWorkflow(cfg llmConfig) (json.RawMessage, error) {
+	cacheKey := cfg.baseURL + "\n" + cfg.model
+	vpnWorkflowCache.Lock()
+	if cached := vpnWorkflowCache.byLLM[cacheKey]; len(cached) > 0 {
+		out := append(json.RawMessage(nil), cached...)
+		vpnWorkflowCache.Unlock()
+		return out, nil
+	}
+	vpnWorkflowCache.Unlock()
+
 	client, err := llm.NewClient(llm.ProtocolOpenAI, cfg.baseURL, cfg.apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("create LLM client: %w", err)
@@ -113,6 +128,9 @@ func generateVPNWorkflow(cfg llmConfig) (json.RawMessage, error) {
 		}
 
 		if len(blockingErrors) == 0 {
+			vpnWorkflowCache.Lock()
+			vpnWorkflowCache.byLLM[cacheKey] = append(json.RawMessage(nil), workflowJSON...)
+			vpnWorkflowCache.Unlock()
 			return workflowJSON, nil
 		}
 

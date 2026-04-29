@@ -679,14 +679,14 @@ func (e *SmartEngine) handleComplete(tx *gorm.DB, ticketID uint, plan *DecisionP
 
 func (e *SmartEngine) resolveCompletionStatus(tx *gorm.DB, ticketID uint) (string, string) {
 	var activity activityModel
-	err := tx.Where("ticket_id = ? AND activity_type IN ? AND status IN ?", ticketID,
-		[]string{NodeApprove, NodeForm, NodeProcess}, CompletedActivityStatuses()).
+	err := tx.Where("ticket_id = ? AND activity_type IN ? AND transition_outcome IN ?", ticketID,
+		[]string{NodeApprove, NodeForm, NodeProcess}, []string{ActivityApproved, ActivityRejected}).
 		Order("finished_at DESC, id DESC").
 		First(&activity).Error
-	if err == nil && (activity.Status == ActivityRejected || activity.TransitionOutcome == ActivityRejected) {
+	if err == nil && activity.TransitionOutcome == ActivityRejected {
 		return TicketStatusRejected, TicketOutcomeRejected
 	}
-	if err == nil && (activity.Status == ActivityApproved || activity.TransitionOutcome == ActivityApproved || activity.TransitionOutcome == ActivityCompleted) {
+	if err == nil && activity.TransitionOutcome == ActivityApproved {
 		return TicketStatusCompleted, TicketOutcomeApproved
 	}
 	return TicketStatusCompleted, TicketOutcomeFulfilled
