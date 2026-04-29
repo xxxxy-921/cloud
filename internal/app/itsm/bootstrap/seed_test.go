@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	. "metis/internal/app/itsm/domain"
 	itsmtools "metis/internal/app/itsm/tools"
+	"strings"
 	"testing"
 
 	"metis/internal/model"
@@ -99,6 +100,65 @@ func TestSeedServiceDefinitions_ServerAccessHasIntakeFormSchema(t *testing.T) {
 	if detail.RoutingFieldHint != nil {
 		t.Fatalf("expected textarea routing field to be ignored, got %+v", detail.RoutingFieldHint)
 	}
+
+	var workflow struct {
+		Edges []struct {
+			ID   string `json:"id"`
+			Data struct {
+				Default   bool `json:"default"`
+				Condition struct {
+					Field    string   `json:"field"`
+					Operator string   `json:"operator"`
+					Value    []string `json:"value"`
+				} `json:"condition"`
+			} `json:"data"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(service.WorkflowJSON), &workflow); err != nil {
+		t.Fatalf("unmarshal workflow json: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, edge := range workflow.Edges {
+		switch edge.ID {
+		case "edge_route_ops":
+			seen[edge.ID] = true
+			if edge.Data.Condition.Field != "form.access_reason" || edge.Data.Condition.Operator != "contains_any" {
+				t.Fatalf("unexpected ops condition: %+v", edge.Data.Condition)
+			}
+			for _, wantKeyword := range []string{"进程排查", "进程排障", "清理磁盘", "磁盘清理", "日志查看", "日志排查", "日志排障"} {
+				if !containsString(edge.Data.Condition.Value, wantKeyword) {
+					t.Fatalf("expected ops route keywords to contain %q, got %v", wantKeyword, edge.Data.Condition.Value)
+				}
+			}
+		case "edge_route_network":
+			seen[edge.ID] = true
+			if edge.Data.Condition.Field != "form.access_reason" || edge.Data.Condition.Operator != "contains_any" {
+				t.Fatalf("unexpected network condition: %+v", edge.Data.Condition)
+			}
+		case "edge_route_security":
+			seen[edge.ID] = true
+			if edge.Data.Condition.Field != "form.access_reason" || edge.Data.Condition.Operator != "contains_any" {
+				t.Fatalf("unexpected security condition: %+v", edge.Data.Condition)
+			}
+		case "edge_route_default":
+			seen[edge.ID] = edge.Data.Default
+		}
+	}
+	for _, edgeID := range []string{"edge_route_ops", "edge_route_network", "edge_route_security", "edge_route_default"} {
+		if !seen[edgeID] {
+			t.Fatalf("expected workflow edge %s to exist", edgeID)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSeedCatalogs_IsIdempotentByCode(t *testing.T) {

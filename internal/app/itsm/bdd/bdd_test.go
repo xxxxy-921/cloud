@@ -86,6 +86,8 @@ func initializeScenario(sc *godog.ScenarioContext) {
 	registerClassicSteps(sc, bc)
 	registerSmartSteps(sc, bc)
 	registerServerAccessSteps(sc, bc)
+	registerServerAccessExtendedSteps(sc, bc)
+	registerServerAccessDialogSteps(sc, bc)
 	registerDbBackupSteps(sc, bc)
 	registerBossSteps(sc, bc)
 	registerWithdrawSteps(sc, bc)
