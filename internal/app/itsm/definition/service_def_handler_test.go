@@ -3,6 +3,7 @@ package definition
 import (
 	. "metis/internal/app/itsm/domain"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,70 @@ func TestServiceDefHandlerCreate_Returns400ForMissingCatalog(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServiceDefHandlerUpdate_ClearsSLAWithExplicitNull(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	svc := newServiceDefServiceForTest(t, db)
+	h := &ServiceDefHandler{svc: svc}
+
+	root, err := catSvc.Create("Root", "root", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	slaID := uint(42)
+	service, err := svc.Create(&ServiceDefinition{Name: "VPN", Code: "vpn", CatalogID: root.ID, EngineType: "classic", SLAID: &slaID})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	rec := performJSONRequest(t, func(r *gin.Engine) {
+		r.PUT("/services/:id", h.Update)
+	}, http.MethodPut, "/services/"+strconv.FormatUint(uint64(service.ID), 10), []byte(`{"slaId":null}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := svc.Get(service.ID)
+	if err != nil {
+		t.Fatalf("get updated service: %v", err)
+	}
+	if updated.SLAID != nil {
+		t.Fatalf("expected slaId to be cleared, got %v", *updated.SLAID)
+	}
+}
+
+func TestServiceDefHandlerUpdate_LeavesSLAWhenFieldOmitted(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	svc := newServiceDefServiceForTest(t, db)
+	h := &ServiceDefHandler{svc: svc}
+
+	root, err := catSvc.Create("Root", "root", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	slaID := uint(42)
+	service, err := svc.Create(&ServiceDefinition{Name: "VPN", Code: "vpn", CatalogID: root.ID, EngineType: "classic", SLAID: &slaID})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	rec := performJSONRequest(t, func(r *gin.Engine) {
+		r.PUT("/services/:id", h.Update)
+	}, http.MethodPut, "/services/"+strconv.FormatUint(uint64(service.ID), 10), []byte(`{"description":"updated"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := svc.Get(service.ID)
+	if err != nil {
+		t.Fatalf("get updated service: %v", err)
+	}
+	if updated.SLAID == nil || *updated.SLAID != slaID {
+		t.Fatalf("expected slaId to remain %d, got %v", slaID, updated.SLAID)
 	}
 }
 

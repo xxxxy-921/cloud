@@ -103,6 +103,49 @@ func TestServiceDefServiceList_FiltersByEngineType(t *testing.T) {
 	}
 }
 
+func TestServiceDefServiceList_FiltersByRootCatalog(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+	catSvc := newCatalogServiceForTest(t, db)
+
+	root, err := catSvc.Create("Root", "root", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	child, err := catSvc.Create("Child", "child", "", "", &root.ID, 10)
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	otherRoot, err := catSvc.Create("Other", "other", "", "", nil, 20)
+	if err != nil {
+		t.Fatalf("create other root: %v", err)
+	}
+	if _, err := svc.Create(&ServiceDefinition{Name: "Root Direct", Code: "root-direct", CatalogID: root.ID, EngineType: "classic"}); err != nil {
+		t.Fatalf("create root direct service: %v", err)
+	}
+	if _, err := svc.Create(&ServiceDefinition{Name: "Child Service", Code: "child-service", CatalogID: child.ID, EngineType: "classic"}); err != nil {
+		t.Fatalf("create child service: %v", err)
+	}
+	if _, err := svc.Create(&ServiceDefinition{Name: "Other Service", Code: "other-service", CatalogID: otherRoot.ID, EngineType: "classic"}); err != nil {
+		t.Fatalf("create other service: %v", err)
+	}
+
+	items, total, err := svc.List(ServiceDefListParams{RootCatalogID: &root.ID, Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list by root catalog: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected root direct and child services only, total=%d items=%+v", total, items)
+	}
+	codes := map[string]bool{}
+	for _, item := range items {
+		codes[item.Code] = true
+	}
+	if !codes["root-direct"] || !codes["child-service"] || codes["other-service"] {
+		t.Fatalf("unexpected root catalog result: %+v", codes)
+	}
+}
+
 func TestServiceDefServiceCreate_AllowsWorkflowJSONOnSmartService(t *testing.T) {
 	db := newTestDB(t)
 	svc := newServiceDefServiceForTest(t, db)

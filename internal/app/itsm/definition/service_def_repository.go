@@ -45,12 +45,13 @@ func (r *ServiceDefRepo) Delete(id uint) error {
 }
 
 type ServiceDefListParams struct {
-	CatalogID  *uint
-	EngineType *string
-	Keyword    string
-	IsActive   *bool
-	Page       int
-	PageSize   int
+	CatalogID     *uint
+	RootCatalogID *uint
+	EngineType    *string
+	Keyword       string
+	IsActive      *bool
+	Page          int
+	PageSize      int
 }
 
 func (r *ServiceDefRepo) List(params ServiceDefListParams) ([]ServiceDefinition, int64, error) {
@@ -58,6 +59,13 @@ func (r *ServiceDefRepo) List(params ServiceDefListParams) ([]ServiceDefinition,
 
 	if params.CatalogID != nil {
 		query = query.Where("catalog_id = ?", *params.CatalogID)
+	}
+	if params.RootCatalogID != nil {
+		query = query.Where(
+			"catalog_id = ? OR catalog_id IN (SELECT id FROM itsm_service_catalogs WHERE parent_id = ?)",
+			*params.RootCatalogID,
+			*params.RootCatalogID,
+		)
 	}
 	if params.EngineType != nil {
 		query = query.Where("engine_type = ?", *params.EngineType)
