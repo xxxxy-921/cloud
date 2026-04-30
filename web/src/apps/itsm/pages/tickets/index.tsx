@@ -59,7 +59,6 @@ import { WorkspaceSearchField, WorkspaceStatus } from "@/components/workspace/pr
 import {
   assignTicket,
   cancelTicket,
-  fetchDecisionQuality,
   fetchPriorities,
   fetchServiceDefs,
   fetchTicket,
@@ -69,7 +68,7 @@ import {
   fetchUsers,
   progressTicket,
   type ActivityItem,
-  type DecisionQualityItem,
+  type TicketMonitorSummary,
   type TicketMonitorItem,
   type TimelineItem,
 } from "../../api"
@@ -78,6 +77,12 @@ import { SLABadge } from "../../components/sla-badge"
 import { TicketStatusBadge } from "../../components/ticket-status-badge"
 import { TICKET_STATUS_OPTIONS } from "../../components/ticket-status"
 import { TICKET_MENU_PERMISSION } from "./navigation"
+import {
+  AUDIT_METRICS,
+  auditEvidenceEntries,
+  auditMetricFilter,
+  type AuditMetricCode,
+} from "./monitor-audit"
 
 const PAGE_SIZE = 20
 const ACTIVE_STATUSES = new Set(["submitted", "waiting_human", "approved_decisioning", "rejected_decisioning", "decisioning", "executing_action"])
@@ -102,19 +107,6 @@ function formatWaiting(minutes: number) {
   return m > 0 ? `${h}h ${m}m` : `${h}h`
 }
 
-function formatPercent(value: number) {
-  return `${Math.round(value * 100)}%`
-}
-
-function formatSeconds(seconds: number) {
-  if (!seconds || seconds <= 0) return "-"
-  if (seconds < 60) return `${Math.round(seconds)}s`
-  const mins = Math.round(seconds / 60)
-  if (mins < 60) return `${mins}m`
-  const hours = Math.round(mins / 60)
-  return `${hours}h`
-}
-
 function riskTone(riskLevel: string): "danger" | "warning" | "neutral" {
   if (riskLevel === "blocked") return "danger"
   if (riskLevel === "risk") return "warning"
@@ -129,6 +121,36 @@ function riskLabel(riskLevel: string, t: (key: string) => string) {
 
 function engineLabel(engineType: string, t: (key: string) => string) {
   return engineType === "smart" ? t("monitor.engineSmart") : t("monitor.engineClassic")
+}
+
+function metricValue(summary: TicketMonitorSummary | undefined, code: AuditMetricCode) {
+  if (!summary) return 0
+  switch (code) {
+  case "active_total":
+    return summary.activeTotal
+  case "blocked_total":
+    return summary.stuckTotal
+  case "risk_total":
+    return summary.riskTotal
+  case "sla_risk_total":
+    return summary.slaRiskTotal
+  case "ai_incident_total":
+    return summary.aiIncidentTotal
+  case "completed_today_total":
+    return summary.completedTodayTotal
+  case "smart_active_total":
+    return summary.smartActiveTotal
+  case "classic_active_total":
+    return summary.classicActiveTotal
+  }
+}
+
+function metricTone(code: AuditMetricCode, value: number): "neutral" | "danger" | "warning" | "success" | "info" {
+  if (code === "active_total") return "info"
+  if (code === "completed_today_total") return "success"
+  if (code === "blocked_total" || code === "ai_incident_total") return value > 0 ? "danger" : "neutral"
+  if (code === "risk_total" || code === "sla_risk_total") return value > 0 ? "warning" : "neutral"
+  return "neutral"
 }
 
 function activeHumanActivity(activities: ActivityItem[], currentActivityId?: number | null) {

@@ -155,15 +155,24 @@ type TicketMonitorSummary struct {
 	ClassicActiveTotal  int `json:"classicActiveTotal"`
 }
 
+type TicketMonitorReason struct {
+	MetricCode string         `json:"metricCode"`
+	RuleCode   string         `json:"ruleCode"`
+	Severity   string         `json:"severity"`
+	Message    string         `json:"message"`
+	Evidence   map[string]any `json:"evidence"`
+}
+
 type TicketMonitorItem struct {
 	TicketResponse
-	RiskLevel                string     `json:"riskLevel"`
-	Stuck                    bool       `json:"stuck"`
-	StuckReasons             []string   `json:"stuckReasons"`
-	WaitingMinutes           int        `json:"waitingMinutes"`
-	CurrentActivityName      string     `json:"currentActivityName"`
-	CurrentActivityType      string     `json:"currentActivityType"`
-	CurrentActivityStartedAt *time.Time `json:"currentActivityStartedAt"`
+	RiskLevel                string                `json:"riskLevel"`
+	Stuck                    bool                  `json:"stuck"`
+	StuckReasons             []string              `json:"stuckReasons"`
+	MonitorReasons           []TicketMonitorReason `json:"monitorReasons"`
+	WaitingMinutes           int                   `json:"waitingMinutes"`
+	CurrentActivityName      string                `json:"currentActivityName"`
+	CurrentActivityType      string                `json:"currentActivityType"`
+	CurrentActivityStartedAt *time.Time            `json:"currentActivityStartedAt"`
 }
 
 type TicketMonitorResponse struct {
