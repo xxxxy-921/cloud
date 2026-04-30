@@ -35,6 +35,23 @@ func currentUserID(c *gin.Context) uint {
 	return uid
 }
 
+func currentUserRole(c *gin.Context) string {
+	role, _ := c.Get("userRole")
+	roleCode, _ := role.(string)
+	return roleCode
+}
+
+func respondTicketAccessError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrTicketNotFound):
+		handler.Fail(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrTicketForbidden):
+		handler.Fail(c, http.StatusForbidden, err.Error())
+	default:
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+	}
+}
+
 func (h *TicketHandler) respondTicket(c *gin.Context, ticket *Ticket) {
 	resp, err := h.svc.BuildResponse(ticket, currentUserID(c))
 	if err != nil {
@@ -207,13 +224,9 @@ func (h *TicketHandler) Get(c *gin.Context) {
 		return
 	}
 
-	ticket, err := h.svc.Get(id)
+	ticket, err := h.svc.GetVisible(id, currentUserID(c), currentUserRole(c))
 	if err != nil {
-		if errors.Is(err, ErrTicketNotFound) {
-			handler.Fail(c, http.StatusNotFound, err.Error())
-			return
-		}
-		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		respondTicketAccessError(c, err)
 		return
 	}
 	h.respondTicket(c, ticket)
@@ -408,6 +421,11 @@ func (h *TicketHandler) Timeline(c *gin.Context) {
 		return
 	}
 
+	if err := h.svc.EnsureCanViewTicket(id, currentUserID(c), currentUserRole(c)); err != nil {
+		respondTicketAccessError(c, err)
+		return
+	}
+
 	items, err := h.timelineSvc.ListByTicket(id)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
@@ -522,6 +540,11 @@ func (h *TicketHandler) Activities(c *gin.Context) {
 	}
 	userID, _ := c.Get("userId")
 	operatorID := userID.(uint)
+
+	if err := h.svc.EnsureCanViewTicket(id, operatorID, currentUserRole(c)); err != nil {
+		respondTicketAccessError(c, err)
+		return
+	}
 
 	activities, err := h.svc.GetActivities(id, operatorID)
 	if err != nil {

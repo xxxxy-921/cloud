@@ -179,16 +179,11 @@ func (r *TicketRepo) List(params TicketListParams) ([]Ticket, int64, error) {
 		return nil, 0, err
 	}
 
-	if params.Page < 1 {
-		params.Page = 1
-	}
-	if params.PageSize < 1 {
-		params.PageSize = 20
-	}
+	page, pageSize := normalizePage(params.Page, params.PageSize)
 
 	var items []Ticket
-	offset := (params.Page - 1) * params.PageSize
-	if err := query.Offset(offset).Limit(params.PageSize).Order("id DESC").Find(&items).Error; err != nil {
+	offset := (page - 1) * pageSize
+	if err := query.Offset(offset).Limit(pageSize).Order("id DESC").Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil
@@ -272,14 +267,9 @@ func (r *TicketRepo) listApprovalQuery(query *gorm.DB, params TicketApprovalList
 		return nil, 0, err
 	}
 
-	if params.Page < 1 {
-		params.Page = 1
-	}
-	if params.PageSize < 1 {
-		params.PageSize = 20
-	}
+	page, pageSize := normalizePage(params.Page, params.PageSize)
 
-	offset := (params.Page - 1) * params.PageSize
+	offset := (page - 1) * pageSize
 	pageQuery := query.Session(&gorm.Session{}).Select("itsm_tickets.id")
 	if pending {
 		pageQuery = pageQuery.Group("itsm_tickets.id, itsm_priorities.value, itsm_tickets.created_at").
@@ -290,7 +280,7 @@ func (r *TicketRepo) listApprovalQuery(query *gorm.DB, params TicketApprovalList
 	}
 
 	var ids []uint
-	if err := pageQuery.Offset(offset).Limit(params.PageSize).Pluck("itsm_tickets.id", &ids).Error; err != nil {
+	if err := pageQuery.Offset(offset).Limit(pageSize).Pluck("itsm_tickets.id", &ids).Error; err != nil {
 		return nil, 0, err
 	}
 	if len(ids) == 0 {

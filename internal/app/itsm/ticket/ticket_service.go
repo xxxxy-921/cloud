@@ -19,6 +19,7 @@ import (
 	"metis/internal/app"
 	"metis/internal/app/itsm/engine"
 	"metis/internal/app/itsm/tools"
+	"metis/internal/model"
 )
 
 var (
@@ -35,6 +36,7 @@ var (
 	ErrNoActiveAssignment        = errors.New("no active pending assignment for this activity")
 	ErrNotRequester              = errors.New("only the ticket requester can withdraw")
 	ErrTicketClaimed             = errors.New("ticket has been claimed and cannot be withdrawn")
+	ErrTicketForbidden           = errors.New("ticket access forbidden")
 	ErrInvalidProgressOutcome    = errors.New("人工节点只能提交 approved 或 rejected")
 	ErrInvalidRecoveryAction     = errors.New("invalid recovery action")
 	ErrRecoveryActionTooFrequent = errors.New("recovery action is too frequent")
@@ -510,6 +512,66 @@ func (s *TicketService) Get(id uint) (*Ticket, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+func (s *TicketService) GetVisible(id uint, operatorID uint, roleCode string) (*Ticket, error) {
+	if err := s.EnsureCanViewTicket(id, operatorID, roleCode); err != nil {
+		return nil, err
+	}
+	return s.Get(id)
+}
+
+func (s *TicketService) EnsureCanViewTicket(ticketID uint, operatorID uint, roleCode string) error {
+	ticket, err := s.ticketRepo.FindByID(ticketID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrTicketNotFound
+		}
+		return err
+	}
+	if roleCode == model.RoleAdmin {
+		return nil
+	}
+	if operatorID == 0 {
+		return ErrTicketForbidden
+	}
+	if ticket.RequesterID == operatorID {
+		return nil
+	}
+
+	positionIDs, departmentIDs := s.resolveUserOrg(operatorID)
+	ok, err := s.hasActiveAssignmentAccess(ticketID, operatorID, positionIDs, departmentIDs)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	ok, err = s.hasHistoryAssignmentAccess(ticketID, operatorID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	return ErrTicketForbidden
+}
+
+func (s *TicketService) hasActiveAssignmentAccess(ticketID uint, operatorID uint, positionIDs []uint, departmentIDs []uint) (bool, error) {
+	var count int64
+	err := s.ticketRepo.DB().Model(&TicketAssignment{}).
+		Where("ticket_id = ? AND status IN ?", ticketID, []string{AssignmentPending, AssignmentInProgress}).
+		Where(s.ticketRepo.assignmentOperatorCondition("itsm_ticket_assignments", operatorID, positionIDs, departmentIDs)).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (s *TicketService) hasHistoryAssignmentAccess(ticketID uint, operatorID uint) (bool, error) {
+	var count int64
+	err := s.ticketRepo.DB().Model(&TicketAssignment{}).
+		Where("ticket_id = ? AND assignee_id = ? AND status IN ?", ticketID, operatorID, []string{AssignmentApproved, AssignmentRejected}).
+		Count(&count).Error
+	return count > 0, err
 }
 
 // BuildResponse returns a UI-ready ticket DTO with display names and smart-state
@@ -1902,41 +1964,48 @@ func (s *TicketService) Transfer(ticketID, activityID, targetUserID, operatorID 
 
 	db := s.ticketRepo.DB()
 
-	// Find the operator's pending assignment for this activity
-	var original TicketAssignment
-	if err := db.Where("activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status = ?",
-		activityID, operatorID, operatorID, AssignmentPending).First(&original).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNoActiveAssignment
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		// Find the operator's pending assignment for this ticket activity.
+		var original TicketAssignment
+		if err := tx.Where("ticket_id = ? AND activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status = ?",
+			ticketID, activityID, operatorID, operatorID, AssignmentPending).First(&original).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNoActiveAssignment
+			}
+			return err
 		}
+
+		if err := tx.Model(&original).Update("status", AssignmentTransferred).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Create(&TicketAssignment{
+			TicketID:        ticketID,
+			ActivityID:      activityID,
+			ParticipantType: "user",
+			UserID:          &targetUserID,
+			AssigneeID:      &targetUserID,
+			Status:          AssignmentPending,
+			IsCurrent:       original.IsCurrent,
+			TransferFrom:    &original.ID,
+		}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&Ticket{}).Where("id = ?", ticketID).Update("assignee_id", targetUserID).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&TicketTimeline{
+			TicketID:   ticketID,
+			ActivityID: &activityID,
+			OperatorID: operatorID,
+			EventType:  "transfer",
+			Message:    fmt.Sprintf("工单已转办给用户 %d", targetUserID),
+		}).Error
+	}); err != nil {
 		return nil, err
 	}
-
-	// Mark original as transferred
-	db.Model(&original).Update("status", AssignmentTransferred)
-
-	// Create new assignment for target user
-	db.Create(&TicketAssignment{
-		TicketID:        ticketID,
-		ActivityID:      activityID,
-		ParticipantType: "user",
-		UserID:          &targetUserID,
-		AssigneeID:      &targetUserID,
-		Status:          AssignmentPending,
-		IsCurrent:       original.IsCurrent,
-		TransferFrom:    &original.ID,
-	})
-
-	// Update ticket assignee
-	db.Model(&Ticket{}).Where("id = ?", ticketID).Update("assignee_id", targetUserID)
-
-	s.timelineRepo.Create(&TicketTimeline{
-		TicketID:   ticketID,
-		ActivityID: &activityID,
-		OperatorID: operatorID,
-		EventType:  "transfer",
-		Message:    fmt.Sprintf("工单已转办给用户 %d", targetUserID),
-	})
 
 	return s.ticketRepo.FindByID(ticketID)
 }
@@ -1957,38 +2026,44 @@ func (s *TicketService) Delegate(ticketID, activityID, targetUserID, operatorID 
 
 	db := s.ticketRepo.DB()
 
-	// Find the operator's pending assignment for this activity
-	var original TicketAssignment
-	if err := db.Where("activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status = ?",
-		activityID, operatorID, operatorID, AssignmentPending).First(&original).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNoActiveAssignment
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		// Find the operator's pending assignment for this ticket activity.
+		var original TicketAssignment
+		if err := tx.Where("ticket_id = ? AND activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status = ?",
+			ticketID, activityID, operatorID, operatorID, AssignmentPending).First(&original).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNoActiveAssignment
+			}
+			return err
 		}
+
+		if err := tx.Model(&original).Update("status", AssignmentDelegated).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Create(&TicketAssignment{
+			TicketID:        ticketID,
+			ActivityID:      activityID,
+			ParticipantType: "user",
+			UserID:          &targetUserID,
+			AssigneeID:      &targetUserID,
+			Status:          AssignmentPending,
+			IsCurrent:       true,
+			DelegatedFrom:   &original.ID,
+		}).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&TicketTimeline{
+			TicketID:   ticketID,
+			ActivityID: &activityID,
+			OperatorID: operatorID,
+			EventType:  "delegate",
+			Message:    fmt.Sprintf("工单已委派给用户 %d", targetUserID),
+		}).Error
+	}); err != nil {
 		return nil, err
 	}
-
-	// Mark original as delegated (not completed — it will be restored after delegate finishes)
-	db.Model(&original).Update("status", AssignmentDelegated)
-
-	// Create delegated assignment
-	db.Create(&TicketAssignment{
-		TicketID:        ticketID,
-		ActivityID:      activityID,
-		ParticipantType: "user",
-		UserID:          &targetUserID,
-		AssigneeID:      &targetUserID,
-		Status:          AssignmentPending,
-		IsCurrent:       true,
-		DelegatedFrom:   &original.ID,
-	})
-
-	s.timelineRepo.Create(&TicketTimeline{
-		TicketID:   ticketID,
-		ActivityID: &activityID,
-		OperatorID: operatorID,
-		EventType:  "delegate",
-		Message:    fmt.Sprintf("工单已委派给用户 %d", targetUserID),
-	})
 
 	return s.ticketRepo.FindByID(ticketID)
 }
@@ -2009,45 +2084,52 @@ func (s *TicketService) Claim(ticketID, activityID, operatorID uint) (*Ticket, e
 
 	db := s.ticketRepo.DB()
 
-	// Find the operator's pending assignment for this activity
-	var assignment TicketAssignment
-	posIDs, deptIDs := s.resolveUserOrg(operatorID)
-	if err := db.Where("activity_id = ? AND status = ?", activityID, AssignmentPending).
-		Where(s.ticketRepo.assignmentOperatorCondition("itsm_ticket_assignments", operatorID, posIDs, deptIDs)).
-		First(&assignment).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNoActiveAssignment
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		// Find the operator's pending assignment for this ticket activity.
+		var assignment TicketAssignment
+		posIDs, deptIDs := s.resolveUserOrg(operatorID)
+		if err := tx.Where("ticket_id = ? AND activity_id = ? AND status = ?", ticketID, activityID, AssignmentPending).
+			Where(s.ticketRepo.assignmentOperatorCondition("itsm_ticket_assignments", operatorID, posIDs, deptIDs)).
+			First(&assignment).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNoActiveAssignment
+			}
+			return err
 		}
+
+		now := time.Now()
+
+		if err := tx.Model(&assignment).Updates(map[string]any{
+			"assignee_id": operatorID,
+			"status":      AssignmentInProgress,
+			"claimed_at":  now,
+		}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&TicketAssignment{}).
+			Where("ticket_id = ? AND activity_id = ? AND status = ? AND id != ?", ticketID, activityID, AssignmentPending, assignment.ID).
+			Update("status", AssignmentClaimedByOther).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&Ticket{}).Where("id = ?", ticketID).Updates(map[string]any{
+			"assignee_id": operatorID,
+			"status":      TicketStatusWaitingHuman,
+		}).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&TicketTimeline{
+			TicketID:   ticketID,
+			ActivityID: &activityID,
+			OperatorID: operatorID,
+			EventType:  "claim",
+			Message:    "用户已抢单",
+		}).Error
+	}); err != nil {
 		return nil, err
 	}
-
-	now := time.Now()
-
-	// Mark the claimer's assignment as claimed
-	db.Model(&assignment).Updates(map[string]any{
-		"assignee_id": operatorID,
-		"status":      AssignmentInProgress,
-		"claimed_at":  now,
-	})
-
-	// Mark other pending assignments for the same activity as claimed_by_other
-	db.Model(&TicketAssignment{}).
-		Where("activity_id = ? AND status = ? AND id != ?", activityID, AssignmentPending, assignment.ID).
-		Update("status", AssignmentClaimedByOther)
-
-	// Update ticket assignee
-	db.Model(&Ticket{}).Where("id = ?", ticketID).Updates(map[string]any{
-		"assignee_id": operatorID,
-		"status":      TicketStatusWaitingHuman,
-	})
-
-	s.timelineRepo.Create(&TicketTimeline{
-		TicketID:   ticketID,
-		ActivityID: &activityID,
-		OperatorID: operatorID,
-		EventType:  "claim",
-		Message:    "用户已抢单",
-	})
 
 	return s.ticketRepo.FindByID(ticketID)
 }

@@ -118,9 +118,20 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 			{obj: "itsm", act: "read"},
 			{obj: "itsm:service-desk:use", act: "read"},
 			{obj: "itsm:ticket:mine", act: "read"},
+			{obj: "itsm:ticket:approval:pending", act: "read"},
+			{obj: "itsm:ticket:approval:history", act: "read"},
 			{obj: "/api/v1/itsm/service-desk/sessions/:sid/state", act: "GET"},
 			{obj: "/api/v1/itsm/service-desk/sessions/:sid/draft/submit", act: "POST"},
 			{obj: "/api/v1/itsm/tickets/mine", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/approvals/pending", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/approvals/history", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/:id", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/:id/timeline", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/:id/activities", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/:id/tokens", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/:id/variables", act: "GET"},
+			{obj: "/api/v1/itsm/tickets/:id/progress", act: "POST"},
+			{obj: "/api/v1/itsm/tickets/:id/claim", act: "POST"},
 		} {
 			allowed, err := enforcer.Enforce(coremodel.RoleUser, tc.obj, tc.act)
 			if err != nil {

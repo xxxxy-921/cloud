@@ -19,6 +19,7 @@ func registerDbBackupSteps(sc *godog.ScenarioContext, bc *bddContext) {
 	sc.Given(`^放行接收端临时失败$`, bc.givenApplyReceiverTemporarilyFails)
 	sc.Given(`^"([^"]*)" 已创建数据库备份白名单放行工单，场景为 "([^"]*)"$`, bc.givenDbBackupTicketCreated)
 	sc.Given(`^"([^"]*)" 已创建数据库备份白名单放行工单 "([^"]*)"，场景为 "([^"]*)"$`, bc.givenDbBackupTicketCreatedWithAlias)
+	sc.Given(`^数据库备份白名单流程图包含预检和放行动作节点$`, bc.thenDbBackupWorkflowContainsActionNodes)
 
 	sc.Then(`^预检动作已为当前工单触发$`, bc.thenPrecheckActionTriggered)
 	sc.Then(`^预检动作未为当前工单触发$`, bc.thenPrecheckActionNotTriggered)
