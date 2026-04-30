@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	. "metis/internal/app/itsm/config"
+	"metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
 	"metis/internal/app/itsm/prompts"
 	"strconv"
@@ -50,7 +51,41 @@ func SeedITSM(db *gorm.DB, enforcer *casbin.Enforcer) error {
 	if err := seedServiceDefinitions(db); err != nil {
 		return err
 	}
+	if err := migrateServiceRuntimeVersions(db); err != nil {
+		return err
+	}
 	return RepairCompletedHumanAssignments(db)
+}
+
+func migrateServiceRuntimeVersions(db *gorm.DB) error {
+	if err := db.AutoMigrate(&ServiceDefinitionVersion{}, &Ticket{}); err != nil {
+		return err
+	}
+	var services []ServiceDefinition
+	if err := db.Find(&services).Error; err != nil {
+		return err
+	}
+	for _, svc := range services {
+		if _, err := definition.GetOrCreateServiceRuntimeVersion(db, svc.ID); err != nil {
+			return err
+		}
+	}
+
+	var tickets []Ticket
+	if err := db.Where("service_version_id IS NULL").Find(&tickets).Error; err != nil {
+		return err
+	}
+	for _, ticket := range tickets {
+		version, err := definition.GetOrCreateServiceRuntimeVersion(db, ticket.ServiceID)
+		if err != nil {
+			return err
+		}
+		if err := db.Model(&Ticket{}).Where("id = ? AND service_version_id IS NULL", ticket.ID).
+			Update("service_version_id", version.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func MigrateTicketStatusModel(db *gorm.DB) error {

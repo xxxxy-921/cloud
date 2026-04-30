@@ -1,6 +1,8 @@
 package definition
 
 import (
+	"encoding/json"
+	"fmt"
 	. "metis/internal/app/itsm/domain"
 	"net/http"
 	"strconv"
@@ -125,5 +127,57 @@ func TestServiceDefHandlerList_ParsesEngineTypeFilter(t *testing.T) {
 	first, ok := items[0].(map[string]any)
 	if !ok || first["engineType"] != "smart" {
 		t.Fatalf("unexpected first item: %#v", items[0])
+	}
+}
+
+func TestServiceDefHandlerList_ClampsPageSizeAndReturnsSummaryItems(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	svc := newServiceDefServiceForTest(t, db)
+	h := &ServiceDefHandler{svc: svc}
+
+	root, err := catSvc.Create("Root", "root-list", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	for i := 0; i < 105; i++ {
+		_, err := svc.Create(&ServiceDefinition{
+			Name:              fmt.Sprintf("Service %03d", i),
+			Code:              fmt.Sprintf("svc-%03d", i),
+			CatalogID:         root.ID,
+			EngineType:        "smart",
+			IntakeFormSchema:  JSONField(`{"fields":[{"key":"huge"}]}`),
+			CollaborationSpec: "large runtime collaboration spec",
+			AgentConfig:       JSONField(`{"temperature":0.1}`),
+			KnowledgeBaseIDs:  JSONField(`[1,2,3]`),
+		})
+		if err != nil {
+			t.Fatalf("create service %d: %v", i, err)
+		}
+	}
+
+	rec := performJSONRequest(t, func(r *gin.Engine) {
+		r.GET("/services", h.List)
+	}, http.MethodGet, "/services?pageSize=100000", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Items []map[string]any `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := len(body.Data.Items); got != 100 {
+		t.Fatalf("expected pageSize to be clamped to 100, got %d items", got)
+	}
+	heavyKeys := []string{"workflowJson", "intakeFormSchema", "agentConfig", "knowledgeBaseIds", "collaborationSpec"}
+	for _, key := range heavyKeys {
+		if _, exists := body.Data.Items[0][key]; exists {
+			t.Fatalf("list summary item must not include heavy field %q: %#v", key, body.Data.Items[0])
+		}
 	}
 }

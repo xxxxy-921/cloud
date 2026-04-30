@@ -7,6 +7,7 @@ import (
 	. "metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
 	. "metis/internal/app/itsm/sla"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,63 @@ func TestAgentDraftSubmission_IdempotentConfirmedDraftStartsSmartProgressTask(t 
 	}
 	if created.Status != TicketStatusDecisioning {
 		t.Fatalf("expected created smart ticket status %q, got %q", TicketStatusDecisioning, created.Status)
+	}
+}
+
+func TestCreateSmartTicket_BindsImmutableServiceRuntimeVersion(t *testing.T) {
+	db := newTestDB(t)
+	ticketSvc := newSubmissionTicketService(t, db)
+	service := testutil.SeedSmartSubmissionService(t, db)
+	action := ServiceAction{
+		Name:       "Original action",
+		Code:       "notify",
+		ActionType: "http",
+		ConfigJSON: JSONField(`{"url":"https://example.com/original","method":"POST","timeout":30,"retries":3}`),
+		ServiceID:  service.ID,
+		IsActive:   true,
+	}
+	if err := db.Create(&action).Error; err != nil {
+		t.Fatalf("create action: %v", err)
+	}
+
+	created, err := ticketSvc.Create(CreateTicketInput{
+		Title:      "VPN 开通申请",
+		ServiceID:  service.ID,
+		PriorityID: 1,
+		FormData:   JSONField(`{"vpn_account":"admin@example.com"}`),
+	}, 7)
+	if err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	if created.ServiceVersionID == nil || *created.ServiceVersionID == 0 {
+		t.Fatalf("expected smart ticket to bind service_version_id, got %+v", created.ServiceVersionID)
+	}
+
+	if err := db.Model(&ServiceDefinition{}).Where("id = ?", service.ID).Updates(map[string]any{
+		"collaboration_spec": "mutated runtime spec",
+		"agent_config":       JSONField(`{"temperature":0.9}`),
+	}).Error; err != nil {
+		t.Fatalf("mutate service: %v", err)
+	}
+	if err := db.Model(&ServiceAction{}).Where("id = ?", action.ID).Updates(map[string]any{
+		"name":        "Mutated action",
+		"config_json": JSONField(`{"url":"https://example.com/mutated","method":"DELETE","timeout":30,"retries":3}`),
+	}).Error; err != nil {
+		t.Fatalf("mutate action: %v", err)
+	}
+
+	var version ServiceDefinitionVersion
+	if err := db.First(&version, *created.ServiceVersionID).Error; err != nil {
+		t.Fatalf("load service version: %v", err)
+	}
+	if version.CollaborationSpec != service.CollaborationSpec {
+		t.Fatalf("expected snapshot collaboration spec %q, got %q", service.CollaborationSpec, version.CollaborationSpec)
+	}
+	if !strings.Contains(string(version.ActionsJSON), "https://example.com/original") {
+		t.Fatalf("expected version actions snapshot to retain original action config, got %s", version.ActionsJSON)
+	}
+	if strings.Contains(string(version.ActionsJSON), "https://example.com/mutated") {
+		t.Fatalf("version actions snapshot drifted after live action mutation: %s", version.ActionsJSON)
 	}
 }
 

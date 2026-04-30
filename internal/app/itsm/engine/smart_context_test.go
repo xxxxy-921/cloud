@@ -228,7 +228,7 @@ func (f fakeDecisionDataProvider) GetCurrentActivities(uint) ([]CurrentActivityI
 func (f fakeDecisionDataProvider) GetExecutedActions(uint) ([]ExecutedActionInfo, error) {
 	return f.executed, nil
 }
-func (f fakeDecisionDataProvider) CountActiveServiceActions(uint) (int64, error) {
+func (f fakeDecisionDataProvider) CountActiveServiceActions(uint, uint) (int64, error) {
 	return f.totalActions, nil
 }
 func (f fakeDecisionDataProvider) GetCurrentAssignment(uint) (*CurrentAssignmentInfo, error) {
@@ -258,10 +258,10 @@ func (f fakeDecisionDataProvider) CountTicketActivities(uint) (int64, error) {
 func (f fakeDecisionDataProvider) GetSLAData(uint) (*SLATicketData, error) {
 	return nil, nil
 }
-func (f fakeDecisionDataProvider) ListActiveServiceActions(uint) ([]ServiceActionRow, error) {
+func (f fakeDecisionDataProvider) ListActiveServiceActions(uint, uint) ([]ServiceActionRow, error) {
 	return nil, nil
 }
-func (f fakeDecisionDataProvider) GetServiceAction(uint, uint) (*ServiceActionRow, error) {
+func (f fakeDecisionDataProvider) GetServiceAction(uint, uint, uint) (*ServiceActionRow, error) {
 	return nil, nil
 }
 func (f fakeDecisionDataProvider) ResolveForTool(*ParticipantResolver, uint, json.RawMessage) ([]uint, error) {

@@ -154,9 +154,9 @@ func (h *ServiceDefHandler) List(c *gin.Context) {
 		return
 	}
 
-	result := make([]ServiceDefinitionResponse, len(items))
+	result := make([]ServiceDefinitionListItemResponse, len(items))
 	for i, s := range items {
-		result[i] = s.ToResponse()
+		result[i] = s.ToListItemResponse()
 	}
 	handler.OK(c, gin.H{"items": result, "total": total})
 }

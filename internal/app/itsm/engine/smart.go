@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -468,7 +469,7 @@ func (e *SmartEngine) applyDeterministicServiceGuards(ctx context.Context, tx *g
 		return nil
 	}
 	if looksLikeDBBackupWhitelistSpec(svc.CollaborationSpec) {
-		return e.applyDBBackupWhitelistGuard(ctx, tx, ticketID, plan, svc.ID)
+		return e.applyDBBackupWhitelistGuard(ctx, tx, ticketID, plan, svc)
 	}
 	if looksLikeBossSerialChangeSpec(svc.CollaborationSpec) {
 		return e.applyBossSerialChangeGuard(tx, ticketID, plan)
@@ -536,7 +537,7 @@ func (e *SmartEngine) applyBossSerialChangeGuard(tx *gorm.DB, ticketID uint, pla
 	return nil
 }
 
-func (e *SmartEngine) applyDBBackupWhitelistGuard(ctx context.Context, tx *gorm.DB, ticketID uint, plan *DecisionPlan, serviceID uint) error {
+func (e *SmartEngine) applyDBBackupWhitelistGuard(ctx context.Context, tx *gorm.DB, ticketID uint, plan *DecisionPlan, svc *serviceModel) error {
 	if err := validateDBBackupWhitelistFormData(tx, ticketID); err != nil {
 		return err
 	}
@@ -556,14 +557,14 @@ func (e *SmartEngine) applyDBBackupWhitelistGuard(ctx context.Context, tx *gorm.
 
 	switch {
 	case !precheckDone:
-		if err := e.executeServiceActionOnce(ctx, tx, ticketID, serviceID, "db_backup_whitelist_precheck"); err != nil {
+		if err := e.executeServiceActionOnce(ctx, tx, ticketID, svc, "db_backup_whitelist_precheck"); err != nil {
 			return err
 		}
 		forceSinglePositionProcessPlan(plan, "db_admin", "预检动作已执行成功，按协作规范交给数据库管理员处理。")
 	case !dbaDone:
 		forceSinglePositionProcessPlan(plan, "db_admin", "预检已完成，协作规范要求先由数据库管理员处理。")
 	case !applyDone:
-		if err := e.executeServiceActionOnce(ctx, tx, ticketID, serviceID, "db_backup_whitelist_apply"); err != nil {
+		if err := e.executeServiceActionOnce(ctx, tx, ticketID, svc, "db_backup_whitelist_apply"); err != nil {
 			return err
 		}
 		forceCompletePlan(plan, "数据库管理员处理已完成且放行动作已执行成功，按协作规范结束流程。")
@@ -739,7 +740,7 @@ func ticketHasSatisfiedDepartmentPositionProcess(tx *gorm.DB, ticketID uint, dep
 	return false, nil
 }
 
-func (e *SmartEngine) executeServiceActionOnce(ctx context.Context, tx *gorm.DB, ticketID uint, serviceID uint, actionCode string) error {
+func (e *SmartEngine) executeServiceActionOnce(ctx context.Context, tx *gorm.DB, ticketID uint, svc *serviceModel, actionCode string) error {
 	done, err := ticketActionSucceeded(tx, ticketID, actionCode)
 	if err != nil {
 		return err
@@ -752,13 +753,26 @@ func (e *SmartEngine) executeServiceActionOnce(ctx context.Context, tx *gorm.DB,
 	}
 
 	var action serviceActionModel
-	if err := findActiveServiceActionByCodeAliases(tx, serviceID, actionCodeAliases(actionCode), &action); err != nil {
-		return fmt.Errorf("服务动作 %s 不存在或未启用: %w", actionCode, err)
+	if svc != nil && svc.ActionsJSON != "" {
+		found, err := findSnapshotServiceActionByCodeAliases(svc, actionCodeAliases(actionCode), &action)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("服务动作 %s 不存在或未启用", actionCode)
+		}
+	} else {
+		if svc == nil {
+			return fmt.Errorf("服务定义不可用，无法执行 %s", actionCode)
+		}
+		if err := findActiveServiceActionByCodeAliases(tx, svc.ID, actionCodeAliases(actionCode), &action); err != nil {
+			return fmt.Errorf("服务动作 %s 不存在或未启用: %w", actionCode, err)
+		}
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
-	if err := e.actionExecutor.Execute(execCtx, ticketID, 0, action.ID); err != nil {
+	if err := e.actionExecutor.ExecuteWithConfig(execCtx, ticketID, 0, action.ID, action.ActionType, action.ConfigJSON); err != nil {
 		return fmt.Errorf("执行服务动作 %s 失败: %w", actionCode, err)
 	}
 	e.recordTimeline(tx, ticketID, nil, 0, "ai_decision_action_executed",
@@ -779,6 +793,33 @@ func findActiveServiceActionByCodeAliases(tx *gorm.DB, serviceID uint, codes []s
 		lastErr = err
 	}
 	return lastErr
+}
+
+func findSnapshotServiceActionByCodeAliases(svc *serviceModel, codes []string, action *serviceActionModel) (bool, error) {
+	if svc == nil || svc.ActionsJSON == "" {
+		return false, nil
+	}
+	rows, err := ParseServiceActionSnapshotRows(svc.ActionsJSON)
+	if err != nil {
+		return false, err
+	}
+	for _, code := range codes {
+		for _, row := range rows {
+			if row.Code == code && row.IsActive {
+				*action = serviceActionModel{
+					ID:         row.ID,
+					Name:       row.Name,
+					Code:       row.Code,
+					ServiceID:  svc.ID,
+					IsActive:   row.IsActive,
+					ActionType: row.ActionType,
+					ConfigJSON: row.ConfigJSON,
+				}
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // handleComplete finishes the ticket when agent decides to complete.
@@ -1792,10 +1833,37 @@ func collaborationSpecAllowsRejectedFormRecovery(svc *serviceModel) bool {
 
 // loadServiceForTicket loads service definition info for a ticket.
 func (e *SmartEngine) loadServiceForTicket(tx *gorm.DB, ticketID uint) (*serviceModel, error) {
+	var ticket struct {
+		ServiceID        uint
+		ServiceVersionID *uint
+	}
+	selectColumns := "service_id"
+	if tx.Migrator().HasColumn(&ticketModel{}, "service_version_id") {
+		selectColumns = "service_id, service_version_id"
+	}
+	if err := tx.Table("itsm_tickets").Where("id = ?", ticketID).Select(selectColumns).First(&ticket).Error; err != nil {
+		return nil, err
+	}
+	if ticket.ServiceVersionID != nil {
+		var snapshot serviceModel
+		err := tx.Table("itsm_service_definition_versions").
+			Where("id = ? AND service_id = ?", *ticket.ServiceVersionID, ticket.ServiceID).
+			Select("service_id AS id, id AS runtime_version_id, engine_type, collaboration_spec, agent_id, agent_config, knowledge_base_ids, workflow_json, actions_json").
+			First(&snapshot).Error
+		if err == nil {
+			return &snapshot, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		slog.Warn("smart engine falling back to live service definition because service version snapshot is missing", "ticketID", ticketID, "serviceVersionID", *ticket.ServiceVersionID)
+	} else {
+		slog.Warn("smart engine falling back to live service definition because ticket has no service_version_id", "ticketID", ticketID)
+	}
+
 	var svc serviceModel
 	err := tx.Table("itsm_service_definitions").
-		Joins("JOIN itsm_tickets ON itsm_tickets.service_id = itsm_service_definitions.id").
-		Where("itsm_tickets.id = ?", ticketID).
+		Where("id = ?", ticket.ServiceID).
 		Select("itsm_service_definitions.*").
 		First(&svc).Error
 	return &svc, err
@@ -2072,6 +2140,8 @@ type serviceModel struct {
 	AgentConfig       string `gorm:"column:agent_config"`
 	KnowledgeBaseIDs  string `gorm:"column:knowledge_base_ids"`
 	WorkflowJSON      string `gorm:"column:workflow_json"`
+	ActionsJSON       string `gorm:"column:actions_json"`
+	RuntimeVersionID  *uint  `gorm:"column:runtime_version_id"`
 }
 
 func (serviceModel) TableName() string { return "itsm_service_definitions" }

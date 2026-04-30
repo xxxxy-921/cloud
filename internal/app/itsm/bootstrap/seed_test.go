@@ -34,6 +34,59 @@ func TestSeedCatalogs_CreatesExpectedRootsAndChildren(t *testing.T) {
 	}
 }
 
+func TestMigrateServiceRuntimeVersions_BackfillsServicesAndLegacyTickets(t *testing.T) {
+	db := newTestDB(t)
+	catalog := ServiceCatalog{Name: "Root", Code: "runtime-root", IsActive: true}
+	if err := db.Create(&catalog).Error; err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+	service := ServiceDefinition{
+		Name:              "Runtime Service",
+		Code:              "runtime-service",
+		CatalogID:         catalog.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "initial spec",
+		IsActive:          true,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	ticket := Ticket{
+		Code:        "TICK-LEGACY-RUNTIME",
+		Title:       "legacy ticket",
+		ServiceID:   service.ID,
+		EngineType:  "smart",
+		Status:      TicketStatusDecisioning,
+		PriorityID:  1,
+		RequesterID: 1,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create legacy ticket: %v", err)
+	}
+
+	if err := migrateServiceRuntimeVersions(db); err != nil {
+		t.Fatalf("migrate service runtime versions: %v", err)
+	}
+	if err := migrateServiceRuntimeVersions(db); err != nil {
+		t.Fatalf("migrate service runtime versions second run: %v", err)
+	}
+
+	var versions []ServiceDefinitionVersion
+	if err := db.Where("service_id = ?", service.ID).Find(&versions).Error; err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("expected one idempotent runtime version, got %+v", versions)
+	}
+	var updated Ticket
+	if err := db.First(&updated, ticket.ID).Error; err != nil {
+		t.Fatalf("load ticket: %v", err)
+	}
+	if updated.ServiceVersionID == nil || *updated.ServiceVersionID != versions[0].ID {
+		t.Fatalf("expected legacy ticket backfilled with version %d, got %v", versions[0].ID, updated.ServiceVersionID)
+	}
+}
+
 func TestSeedServiceDefinitions_ServerAccessUsesNaturalSpecAndPreservesStructuredContract(t *testing.T) {
 	db := newTestDB(t)
 

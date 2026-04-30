@@ -111,6 +111,7 @@ func (a *ITSMApp) Models() []any {
 		// Configuration models
 		&domain.ServiceCatalog{},
 		&domain.ServiceDefinition{},
+		&domain.ServiceDefinitionVersion{},
 		&domain.ServiceAction{},
 		&domain.Priority{},
 		&domain.SLATemplate{},

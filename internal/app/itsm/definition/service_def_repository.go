@@ -1,7 +1,13 @@
 package definition
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+
 	"github.com/samber/do/v2"
+	"gorm.io/gorm"
 	. "metis/internal/app/itsm/domain"
 
 	"metis/internal/database"
@@ -14,6 +20,11 @@ type ServiceDefRepo struct {
 func NewServiceDefRepo(i do.Injector) (*ServiceDefRepo, error) {
 	db := do.MustInvoke[*database.DB](i)
 	return &ServiceDefRepo{db: db}, nil
+}
+
+func GetOrCreateServiceRuntimeVersion(db *gorm.DB, serviceID uint) (*ServiceDefinitionVersion, error) {
+	repo := &ServiceDefRepo{db: &database.DB{DB: db}}
+	return repo.GetOrCreateRuntimeVersion(serviceID)
 }
 
 func (r *ServiceDefRepo) Create(svc *ServiceDefinition) error {
@@ -36,6 +47,100 @@ func (r *ServiceDefRepo) FindByCode(code string) (*ServiceDefinition, error) {
 	return &s, nil
 }
 
+func (r *ServiceDefRepo) GetOrCreateRuntimeVersion(serviceID uint) (*ServiceDefinitionVersion, error) {
+	var svc ServiceDefinition
+	if err := r.db.First(&svc, serviceID).Error; err != nil {
+		return nil, err
+	}
+	snapshot, hash, err := r.buildRuntimeVersionSnapshot(&svc)
+	if err != nil {
+		return nil, err
+	}
+
+	var existing ServiceDefinitionVersion
+	err = r.db.Where("service_id = ? AND content_hash = ?", serviceID, hash).First(&existing).Error
+	if err == nil {
+		return &existing, nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	var maxVersion int
+	if err := r.db.Model(&ServiceDefinitionVersion{}).
+		Where("service_id = ?", serviceID).
+		Select("COALESCE(MAX(version), 0)").
+		Scan(&maxVersion).Error; err != nil {
+		return nil, err
+	}
+	snapshot.Version = maxVersion + 1
+	if err := r.db.Create(snapshot).Error; err != nil {
+		if err := r.db.Where("service_id = ? AND content_hash = ?", serviceID, hash).First(&existing).Error; err == nil {
+			return &existing, nil
+		}
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func (r *ServiceDefRepo) buildRuntimeVersionSnapshot(svc *ServiceDefinition) (*ServiceDefinitionVersion, string, error) {
+	var actions []ServiceAction
+	if err := r.db.Where("service_id = ?", svc.ID).Order("id ASC").Find(&actions).Error; err != nil {
+		return nil, "", err
+	}
+	actionResponses := make([]ServiceActionResponse, len(actions))
+	for i, action := range actions {
+		actionResponses[i] = action.ToResponse()
+	}
+	actionsJSON, err := json.Marshal(actionResponses)
+	if err != nil {
+		return nil, "", err
+	}
+
+	content := struct {
+		ServiceID         uint
+		EngineType        string
+		SLAID             *uint
+		IntakeFormSchema  JSONField
+		WorkflowJSON      JSONField
+		CollaborationSpec string
+		AgentID           *uint
+		AgentConfig       JSONField
+		KnowledgeBaseIDs  JSONField
+		ActionsJSON       json.RawMessage
+	}{
+		ServiceID:         svc.ID,
+		EngineType:        svc.EngineType,
+		SLAID:             svc.SLAID,
+		IntakeFormSchema:  svc.IntakeFormSchema,
+		WorkflowJSON:      svc.WorkflowJSON,
+		CollaborationSpec: svc.CollaborationSpec,
+		AgentID:           svc.AgentID,
+		AgentConfig:       svc.AgentConfig,
+		KnowledgeBaseIDs:  svc.KnowledgeBaseIDs,
+		ActionsJSON:       actionsJSON,
+	}
+	contentJSON, err := json.Marshal(content)
+	if err != nil {
+		return nil, "", err
+	}
+	sum := sha256.Sum256(contentJSON)
+	hash := hex.EncodeToString(sum[:])
+	return &ServiceDefinitionVersion{
+		ServiceID:         svc.ID,
+		ContentHash:       hash,
+		EngineType:        svc.EngineType,
+		SLAID:             svc.SLAID,
+		IntakeFormSchema:  svc.IntakeFormSchema,
+		WorkflowJSON:      svc.WorkflowJSON,
+		CollaborationSpec: svc.CollaborationSpec,
+		AgentID:           svc.AgentID,
+		AgentConfig:       svc.AgentConfig,
+		KnowledgeBaseIDs:  svc.KnowledgeBaseIDs,
+		ActionsJSON:       JSONField(actionsJSON),
+	}, hash, nil
+}
+
 func (r *ServiceDefRepo) Update(id uint, updates map[string]any) error {
 	return r.db.Model(&ServiceDefinition{}).Where("id = ?", id).Updates(updates).Error
 }
@@ -53,6 +158,8 @@ type ServiceDefListParams struct {
 	Page          int
 	PageSize      int
 }
+
+const MaxServiceDefPageSize = 100
 
 func (r *ServiceDefRepo) List(params ServiceDefListParams) ([]ServiceDefinition, int64, error) {
 	query := r.db.Model(&ServiceDefinition{})
@@ -88,6 +195,9 @@ func (r *ServiceDefRepo) List(params ServiceDefListParams) ([]ServiceDefinition,
 	}
 	if params.PageSize < 1 {
 		params.PageSize = 20
+	}
+	if params.PageSize > MaxServiceDefPageSize {
+		params.PageSize = MaxServiceDefPageSize
 	}
 
 	var items []ServiceDefinition

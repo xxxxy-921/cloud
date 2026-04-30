@@ -26,6 +26,7 @@ func NewTestDB(t *testing.T) *gorm.DB {
 	if err := gdb.AutoMigrate(
 		&ServiceCatalog{},
 		&ServiceDefinition{},
+		&ServiceDefinitionVersion{},
 		&ServiceAction{},
 		&ServiceKnowledgeDocument{},
 		&Priority{},

@@ -115,6 +115,10 @@ func (s *TicketService) prepareTicket(input CreateTicketInput, requesterID uint)
 	if !svc.IsActive {
 		return nil, nil, ErrServiceNotActive
 	}
+	version, err := s.serviceRepo.GetOrCreateRuntimeVersion(input.ServiceID)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Validate priority
 	if _, err := s.priorityRepo.FindByID(input.PriorityID); err != nil {
@@ -145,18 +149,19 @@ func (s *TicketService) prepareTicket(input CreateTicketInput, requesterID uint)
 	}
 
 	ticket := &Ticket{
-		Code:           code,
-		Title:          input.Title,
-		Description:    input.Description,
-		ServiceID:      input.ServiceID,
-		EngineType:     svc.EngineType,
-		Status:         TicketStatusSubmitted,
-		PriorityID:     input.PriorityID,
-		RequesterID:    requesterID,
-		Source:         source,
-		AgentSessionID: input.AgentSessionID,
-		FormData:       input.FormData,
-		SLAStatus:      SLAStatusOnTrack,
+		Code:             code,
+		Title:            input.Title,
+		Description:      input.Description,
+		ServiceID:        input.ServiceID,
+		ServiceVersionID: &version.ID,
+		EngineType:       svc.EngineType,
+		Status:           TicketStatusSubmitted,
+		PriorityID:       input.PriorityID,
+		RequesterID:      requesterID,
+		Source:           source,
+		AgentSessionID:   input.AgentSessionID,
+		FormData:         input.FormData,
+		SLAStatus:        SLAStatusOnTrack,
 	}
 
 	// Snapshot workflow_json for classic engine
