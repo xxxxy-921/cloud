@@ -311,7 +311,7 @@ func (bc *bddContext) whenClaimAndProcess(username string) error {
 	// Claim: update assignment.
 	if err := bc.db.Model(&TicketAssignment{}).
 		Where("activity_id = ?", activity.ID).
-		Updates(map[string]any{"assignee_id": user.ID, "status": "pending"}).Error; err != nil {
+		Updates(map[string]any{"assignee_id": user.ID, "status": "claimed"}).Error; err != nil {
 		return fmt.Errorf("claim assignment: %w", err)
 	}
 

@@ -435,7 +435,7 @@ func (bc *bddContext) completeSpecificActivity(activity TicketActivity, outcome 
 			ParticipantType: "user",
 			UserID:          &fallbackID,
 			AssigneeID:      &fallbackID,
-			Status:          "pending",
+			Status:          "claimed",
 			IsCurrent:       true,
 		}
 		if err := bc.db.Create(&assignment).Error; err != nil {
@@ -454,7 +454,7 @@ func (bc *bddContext) completeSpecificActivity(activity TicketActivity, outcome 
 		return fmt.Errorf("could not resolve operator for activity %d", activity.ID)
 	}
 	if err := bc.db.Model(&TicketAssignment{}).Where("activity_id = ?", activity.ID).
-		Updates(map[string]any{"assignee_id": operatorID, "status": "pending"}).Error; err != nil {
+		Updates(map[string]any{"assignee_id": operatorID, "status": "claimed"}).Error; err != nil {
 		return fmt.Errorf("claim activity %d: %w", activity.ID, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

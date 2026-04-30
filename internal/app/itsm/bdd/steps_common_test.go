@@ -1111,7 +1111,7 @@ func (bc *bddContext) autoProcessSingleActivity(act TicketActivity) {
 			ParticipantType: "user",
 			UserID:          &fallbackID,
 			AssigneeID:      &fallbackID,
-			Status:          "pending",
+			Status:          "claimed",
 			IsCurrent:       true,
 		})
 		assignment.AssigneeID = &fallbackID
@@ -1133,7 +1133,7 @@ func (bc *bddContext) autoProcessSingleActivity(act TicketActivity) {
 	// Claim if not yet claimed.
 	bc.db.Model(&TicketAssignment{}).
 		Where("activity_id = ?", act.ID).
-		Updates(map[string]any{"assignee_id": operatorID, "status": "pending"})
+		Updates(map[string]any{"assignee_id": operatorID, "status": "claimed"})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	err := bc.smartEngine.Progress(ctx, bc.db, engine.ProgressParams{

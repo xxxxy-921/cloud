@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,6 +299,105 @@ func TestSLACheckWritesBreachTimelineBeforeEscalation(t *testing.T) {
 	}
 	if timeline.Message == "" || timeline.Details == "" {
 		t.Fatalf("expected breach timeline message and details, got %+v", timeline)
+	}
+}
+
+func TestSLACheckWritesResolutionBreachTimeline(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	responseDeadline := time.Now().Add(-30 * time.Minute)
+	resolutionDeadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3, `[]`)
+	ticket := &ticketModel{
+		ID:                    1,
+		Code:                  "T-1",
+		Title:                 "VPN 申请",
+		ServiceID:             1,
+		ServiceVersionID:      &versionID,
+		EngineType:            "classic",
+		Status:                TicketStatusWaitingHuman,
+		SLAResponseDeadline:   &responseDeadline,
+		SLAResolutionDeadline: &resolutionDeadline,
+		SLAStatus:             slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	if err := checkTicketSLA(context.Background(), db, ticket, time.Now(), nil, nil, NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
+	var reloaded ticketModel
+	if err := db.First(&reloaded, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if reloaded.SLAStatus != slaBreachedResolve {
+		t.Fatalf("sla_status = %q, want %q", reloaded.SLAStatus, slaBreachedResolve)
+	}
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "sla_resolution_breached").First(&timeline).Error; err != nil {
+		t.Fatalf("expected resolution breach timeline: %v", err)
+	}
+	if timeline.Message == "" || timeline.Details == "" {
+		t.Fatalf("expected resolution breach timeline message and details, got %+v", timeline)
+	}
+}
+
+func TestHandleSLACheckAggregatesTicketErrorsAndContinues(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	deadline := time.Now().Add(-5 * time.Minute)
+	badVersionID := seedSLARuntimeVersion(t, db, 1, 31, `{malformed`)
+	goodVersionID := seedSLARuntimeVersion(t, db, 1, 32,
+		`[{"id":8,"slaId":32,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":6},"isActive":true}]`)
+	tickets := []ticketModel{
+		{
+			ID:                  1,
+			Code:                "T-BAD",
+			Title:               "坏快照工单",
+			ServiceID:           1,
+			ServiceVersionID:    &badVersionID,
+			EngineType:          "classic",
+			Status:              TicketStatusWaitingHuman,
+			SLAResponseDeadline: &deadline,
+			SLAStatus:           slaOnTrack,
+		},
+		{
+			ID:                  2,
+			Code:                "T-GOOD",
+			Title:               "有效快照工单",
+			ServiceID:           1,
+			ServiceVersionID:    &goodVersionID,
+			EngineType:          "classic",
+			Status:              TicketStatusWaitingHuman,
+			SLAResponseDeadline: &deadline,
+			SLAStatus:           slaOnTrack,
+		},
+	}
+	if err := db.Create(&tickets).Error; err != nil {
+		t.Fatalf("create tickets: %v", err)
+	}
+	notifier := &fakeEscalationNotifier{}
+
+	err := HandleSLACheck(db, nil, nil, NewParticipantResolver(nil), notifier)(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected aggregated SLA check error")
+	}
+	if !strings.Contains(err.Error(), "ticket 1(T-BAD)") {
+		t.Fatalf("expected aggregated error to identify bad ticket, got %v", err)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected valid ticket escalation to continue, got calls=%+v", notifier.calls)
+	}
+	if notifier.calls[0].channelID != 6 || len(notifier.calls[0].recipientIDs) != 1 || notifier.calls[0].recipientIDs[0] != 10 {
+		t.Fatalf("unexpected valid ticket notification: %+v", notifier.calls[0])
+	}
+	var goodTimelineCount int64
+	if err := db.Table("itsm_ticket_timelines").
+		Where("ticket_id = ? AND event_type = ?", 2, "sla_escalation").
+		Count(&goodTimelineCount).Error; err != nil {
+		t.Fatalf("count good ticket escalation timeline: %v", err)
+	}
+	if goodTimelineCount != 1 {
+		t.Fatalf("expected good ticket escalation timeline, got %d", goodTimelineCount)
 	}
 }
 

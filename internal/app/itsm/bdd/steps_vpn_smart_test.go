@@ -558,7 +558,7 @@ func (bc *bddContext) progressCurrentActivity(outcome, opinion string) error {
 			ParticipantType: "user",
 			UserID:          &fallbackID,
 			AssigneeID:      &fallbackID,
-			Status:          "pending",
+			Status:          "claimed",
 			IsCurrent:       true,
 		}
 		bc.db.Create(&assignment)
@@ -586,7 +586,7 @@ func (bc *bddContext) progressCurrentActivity(outcome, opinion string) error {
 	// Claim.
 	bc.db.Model(&TicketAssignment{}).
 		Where("activity_id = ?", activity.ID).
-		Updates(map[string]any{"assignee_id": operatorID, "status": "pending"})
+		Updates(map[string]any{"assignee_id": operatorID, "status": "claimed"})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

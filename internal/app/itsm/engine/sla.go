@@ -79,14 +79,17 @@ func HandleSLACheck(db *gorm.DB, configProvider SLAAssuranceConfigProvider, exec
 
 		slog.Info("sla-check: scanning tickets", "count", len(tickets))
 
+		var ticketErrs []error
 		for i := range tickets {
 			t := &tickets[i]
 			if err := checkTicketSLA(ctx, db, t, now, configProvider, executor, resolver, notifier); err != nil {
-				return err
+				wrapped := fmt.Errorf("ticket %d(%s): %w", t.ID, t.Code, err)
+				slog.Error("sla-check: failed to check ticket", "ticketID", t.ID, "code", t.Code, "error", err)
+				ticketErrs = append(ticketErrs, wrapped)
 			}
 		}
 
-		return nil
+		return errors.Join(ticketErrs...)
 	}
 }
 

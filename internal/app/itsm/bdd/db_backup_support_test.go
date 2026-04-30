@@ -240,10 +240,10 @@ func publishDbBackupSmartService(bc *bddContext) error {
 	bc.service = svc
 
 	// 5. Create 2 ServiceActions: precheck + apply (URLs point to LocalActionReceiver)
-	precheckConfig, _ := json.Marshal(ServiceActionHTTPConfig{
+	precheckConfig, _ := json.Marshal(engine.ActionConfig{
 		URL:     bc.actionReceiver.URL("/precheck"),
 		Method:  "POST",
-		Body:    json.RawMessage(`{"ticket_code":"{{ticket.code}}","database_name":"{{ticket.form_data.database_name}}","source_ip":"{{ticket.form_data.source_ip}}","whitelist_window":"{{ticket.form_data.whitelist_window}}","access_reason":"{{ticket.form_data.access_reason}}"}`),
+		Body:    `{"ticket_code":"{{ticket.code}}","database_name":"{{ticket.form_data.database_name}}","source_ip":"{{ticket.form_data.source_ip}}","whitelist_window":"{{ticket.form_data.whitelist_window}}","access_reason":"{{ticket.form_data.access_reason}}"}`,
 		Timeout: 10,
 		Retries: 0, // no retries in test
 	})
@@ -261,10 +261,10 @@ func publishDbBackupSmartService(bc *bddContext) error {
 	}
 	bc.serviceActions["db_backup_whitelist_precheck"] = precheckAction
 
-	applyConfig, _ := json.Marshal(ServiceActionHTTPConfig{
+	applyConfig, _ := json.Marshal(engine.ActionConfig{
 		URL:     bc.actionReceiver.URL("/apply"),
 		Method:  "POST",
-		Body:    json.RawMessage(`{"ticket_code":"{{ticket.code}}","database_name":"{{ticket.form_data.database_name}}","source_ip":"{{ticket.form_data.source_ip}}","whitelist_window":"{{ticket.form_data.whitelist_window}}"}`),
+		Body:    `{"ticket_code":"{{ticket.code}}","database_name":"{{ticket.form_data.database_name}}","source_ip":"{{ticket.form_data.source_ip}}","whitelist_window":"{{ticket.form_data.whitelist_window}}"}`,
 		Timeout: 10,
 		Retries: 0,
 	})
