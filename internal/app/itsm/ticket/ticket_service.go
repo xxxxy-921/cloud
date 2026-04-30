@@ -430,6 +430,9 @@ func (s *TicketService) Progress(ticketID uint, activityID uint, outcome string,
 			OperatorOrgScopeReady: true,
 		})
 	}); err != nil {
+		if errors.Is(err, engine.ErrNoActiveAssignment) {
+			return nil, ErrNoActiveAssignment
+		}
 		return nil, err
 	}
 

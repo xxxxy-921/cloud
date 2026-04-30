@@ -2,6 +2,7 @@ package definition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	. "metis/internal/app/itsm/catalog"
@@ -164,6 +165,80 @@ func TestServiceDefServiceCreate_AllowsWorkflowJSONOnSmartService(t *testing.T) 
 	}
 	if created.ID == 0 {
 		t.Fatal("expected created service to have ID")
+	}
+}
+
+func TestServiceRuntimeVersionSnapshotsSLAAndEscalationRules(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	root, err := catSvc.Create("Root", "root-sla-snapshot", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+	sla := SLATemplate{Name: "Gold SLA", Code: "gold-sla", ResponseMinutes: 5, ResolutionMinutes: 60, IsActive: true}
+	if err := db.Create(&sla).Error; err != nil {
+		t.Fatalf("create sla: %v", err)
+	}
+	service := ServiceDefinition{Name: "VPN", Code: "vpn-sla-snapshot", CatalogID: root.ID, EngineType: "smart", SLAID: &sla.ID, IsActive: true}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	rule := EscalationRule{
+		SLAID:        sla.ID,
+		TriggerType:  "response_timeout",
+		Level:        1,
+		WaitMinutes:  0,
+		ActionType:   "notify",
+		TargetConfig: JSONField(`{"recipients":[{"type":"user","value":"10"}],"channelId":5}`),
+		IsActive:     true,
+	}
+	if err := db.Create(&rule).Error; err != nil {
+		t.Fatalf("create escalation rule: %v", err)
+	}
+
+	version, err := GetOrCreateServiceRuntimeVersion(db, service.ID)
+	if err != nil {
+		t.Fatalf("create runtime version: %v", err)
+	}
+	if len(version.SLATemplateJSON) == 0 {
+		t.Fatal("expected runtime version to snapshot SLA template")
+	}
+	if len(version.EscalationRulesJSON) == 0 {
+		t.Fatal("expected runtime version to snapshot escalation rules")
+	}
+	var slaSnapshot SLATemplateResponse
+	if err := json.Unmarshal(version.SLATemplateJSON, &slaSnapshot); err != nil {
+		t.Fatalf("decode sla snapshot: %v", err)
+	}
+	if slaSnapshot.ID != sla.ID || slaSnapshot.ResponseMinutes != 5 || slaSnapshot.ResolutionMinutes != 60 {
+		t.Fatalf("unexpected sla snapshot: %+v", slaSnapshot)
+	}
+	var ruleSnapshots []EscalationRuleResponse
+	if err := json.Unmarshal(version.EscalationRulesJSON, &ruleSnapshots); err != nil {
+		t.Fatalf("decode rule snapshot: %v", err)
+	}
+	if len(ruleSnapshots) != 1 || ruleSnapshots[0].ID != rule.ID || ruleSnapshots[0].TriggerType != "response_timeout" {
+		t.Fatalf("unexpected rule snapshots: %+v", ruleSnapshots)
+	}
+
+	if err := db.Model(&SLATemplate{}).Where("id = ?", sla.ID).Updates(map[string]any{
+		"response_minutes":   99,
+		"resolution_minutes": 199,
+	}).Error; err != nil {
+		t.Fatalf("mutate sla: %v", err)
+	}
+	if err := db.Model(&EscalationRule{}).Where("id = ?", rule.ID).Updates(map[string]any{
+		"wait_minutes": 42,
+		"action_type":  "reassign",
+	}).Error; err != nil {
+		t.Fatalf("mutate rule: %v", err)
+	}
+	var reloaded ServiceDefinitionVersion
+	if err := db.First(&reloaded, version.ID).Error; err != nil {
+		t.Fatalf("reload runtime version: %v", err)
+	}
+	if strings.Contains(string(reloaded.SLATemplateJSON), "99") || strings.Contains(string(reloaded.EscalationRulesJSON), "reassign") {
+		t.Fatalf("runtime version SLA snapshot drifted after live mutation: sla=%s rules=%s", reloaded.SLATemplateJSON, reloaded.EscalationRulesJSON)
 	}
 }
 

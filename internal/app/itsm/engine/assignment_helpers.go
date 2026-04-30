@@ -94,7 +94,7 @@ func completePendingAssignment(tx *gorm.DB, resolver *ParticipantResolver, activ
 		return nil, false, result.Error
 	}
 	if result.RowsAffected == 0 {
-		return nil, false, nil
+		return nil, false, ErrNoActiveAssignment
 	}
 
 	var completed assignmentModel

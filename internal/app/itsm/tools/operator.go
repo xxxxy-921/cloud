@@ -129,20 +129,21 @@ func (o *Operator) CreateTicket(userID uint, serviceID uint, summary string, for
 // SubmitConfirmedDraft creates an ITSM ticket from a user-confirmed service desk
 // draft. It carries the draft identity so TicketService can enforce idempotency
 // and preserve the human confirmation boundary.
-func (o *Operator) SubmitConfirmedDraft(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
+func (o *Operator) SubmitConfirmedDraft(userID uint, serviceID uint, serviceVersionID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
 	if o.ticketCreator == nil {
 		return nil, fmt.Errorf("ticket creation is not available")
 	}
 
 	result, err := o.ticketCreator.CreateFromAgent(context.Background(), AgentTicketRequest{
-		UserID:       userID,
-		ServiceID:    serviceID,
-		Summary:      summary,
-		FormData:     formData,
-		SessionID:    sessionID,
-		DraftVersion: draftVersion,
-		FieldsHash:   fieldsHash,
-		RequestHash:  requestHash,
+		UserID:           userID,
+		ServiceID:        serviceID,
+		ServiceVersionID: serviceVersionID,
+		Summary:          summary,
+		FormData:         formData,
+		SessionID:        sessionID,
+		DraftVersion:     draftVersion,
+		FieldsHash:       fieldsHash,
+		RequestHash:      requestHash,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("submit confirmed draft: %w", err)

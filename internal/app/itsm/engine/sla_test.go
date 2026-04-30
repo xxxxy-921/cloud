@@ -80,6 +80,18 @@ func setupSLAAssuranceTestDB(t *testing.T) *gorm.DB {
 	if err := db.Exec(`CREATE TABLE itsm_service_definitions (id integer primary key, name text, sla_id integer)`).Error; err != nil {
 		t.Fatalf("create service definitions table: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE itsm_service_definition_versions (
+		id integer primary key,
+		service_id integer,
+		version integer,
+		content_hash text,
+		engine_type text,
+		sla_id integer,
+		sla_template_json text,
+		escalation_rules_json text
+	)`).Error; err != nil {
+		t.Fatalf("create service definition versions table: %v", err)
+	}
 	if err := db.Exec(`CREATE TABLE itsm_escalation_rules (
 		id integer primary key,
 		sla_id integer,
@@ -102,6 +114,21 @@ func setupSLAAssuranceTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func seedSLARuntimeVersion(t *testing.T, db *gorm.DB, serviceID uint, slaID uint, rulesJSON string) uint {
+	t.Helper()
+	versionID := uint(slaID + 100)
+	if err := db.Exec(`INSERT INTO itsm_service_definition_versions
+		(id, service_id, version, content_hash, engine_type, sla_id, sla_template_json, escalation_rules_json)
+		VALUES (?, ?, 1, ?, 'smart', ?, ?, ?)`,
+		versionID, serviceID, "hash", slaID,
+		`{"id":3,"name":"Snapshot SLA","code":"snapshot","responseMinutes":1,"resolutionMinutes":60,"isActive":true}`,
+		rulesJSON,
+	).Error; err != nil {
+		t.Fatalf("seed sla runtime version: %v", err)
+	}
+	return versionID
+}
+
 func TestSLACheckTriggersDelayedRuleOnLaterScan(t *testing.T) {
 	db := setupSLAAssuranceTestDB(t)
 	deadline := time.Now().Add(-5 * time.Minute)
@@ -115,6 +142,9 @@ func TestSLACheckTriggersDelayedRuleOnLaterScan(t *testing.T) {
 		SLAResponseDeadline: &deadline,
 		SLAStatus:           slaOnTrack,
 	}
+	versionID := seedSLARuntimeVersion(t, db, ticket.ServiceID, 3,
+		`[{"id":7,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":10,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	ticket.ServiceVersionID = &versionID
 	if err := db.Create(ticket).Error; err != nil {
 		t.Fatalf("create ticket: %v", err)
 	}
@@ -126,7 +156,9 @@ func TestSLACheckTriggersDelayedRuleOnLaterScan(t *testing.T) {
 	}
 	notifier := &fakeEscalationNotifier{}
 
-	checkTicketSLA(context.Background(), db, ticket, deadline.Add(5*time.Minute), nil, nil, NewParticipantResolver(nil), notifier)
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(5*time.Minute), nil, nil, NewParticipantResolver(nil), notifier); err != nil {
+		t.Fatalf("early sla check: %v", err)
+	}
 	if len(notifier.calls) != 0 {
 		t.Fatalf("delayed escalation fired too early: %+v", notifier.calls)
 	}
@@ -138,7 +170,9 @@ func TestSLACheckTriggersDelayedRuleOnLaterScan(t *testing.T) {
 		t.Fatalf("expected no early escalation timeline, got %d", earlyCount)
 	}
 
-	checkTicketSLA(context.Background(), db, ticket, deadline.Add(11*time.Minute), nil, nil, NewParticipantResolver(nil), notifier)
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(11*time.Minute), nil, nil, NewParticipantResolver(nil), notifier); err != nil {
+		t.Fatalf("late sla check: %v", err)
+	}
 	if len(notifier.calls) != 1 {
 		t.Fatalf("expected delayed escalation on later scan, got calls=%+v", notifier.calls)
 	}
@@ -157,6 +191,8 @@ func TestSLACheckSkipsSoftDeletedEscalationRules(t *testing.T) {
 		SLAResponseDeadline: &deadline,
 		SLAStatus:           slaOnTrack,
 	}
+	versionID := seedSLARuntimeVersion(t, db, ticket.ServiceID, 3, `[]`)
+	ticket.ServiceVersionID = &versionID
 	if err := db.Create(ticket).Error; err != nil {
 		t.Fatalf("create ticket: %v", err)
 	}
@@ -168,7 +204,9 @@ func TestSLACheckSkipsSoftDeletedEscalationRules(t *testing.T) {
 	}
 	notifier := &fakeEscalationNotifier{}
 
-	checkTicketSLA(context.Background(), db, ticket, deadline.Add(15*time.Minute), nil, nil, NewParticipantResolver(nil), notifier)
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(15*time.Minute), nil, nil, NewParticipantResolver(nil), notifier); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
 	if len(notifier.calls) != 0 {
 		t.Fatalf("soft-deleted escalation rule fired: %+v", notifier.calls)
 	}
@@ -178,6 +216,128 @@ func TestSLACheckSkipsSoftDeletedEscalationRules(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected no escalation timeline for soft-deleted rule, got %d", count)
+	}
+}
+
+func TestSLACheckUsesRuntimeVersionEscalationSnapshot(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	deadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3,
+		`[{"id":7,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	if err := db.Exec(`UPDATE itsm_service_definitions SET sla_id = 4 WHERE id = 1`).Error; err != nil {
+		t.Fatalf("mutate live service sla: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_escalation_rules
+		(id, sla_id, trigger_type, level, wait_minutes, action_type, target_config, is_active)
+		VALUES (8, 4, 'response_timeout', 1, 0, 'notify',
+		'{"recipients":[{"type":"user","value":"11"}],"channelId":6}', true)`).Error; err != nil {
+		t.Fatalf("create live escalation rule: %v", err)
+	}
+	ticket := &ticketModel{
+		ID:                  1,
+		Code:                "T-1",
+		Title:               "VPN 申请",
+		ServiceID:           1,
+		ServiceVersionID:    &versionID,
+		EngineType:          "classic",
+		Status:              TicketStatusWaitingHuman,
+		SLAResponseDeadline: &deadline,
+		SLAStatus:           slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	notifier := &fakeEscalationNotifier{}
+
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(5*time.Minute), nil, nil, NewParticipantResolver(nil), notifier); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected one snapshot notification, got %+v", notifier.calls)
+	}
+	call := notifier.calls[0]
+	if call.channelID != 5 || len(call.recipientIDs) != 1 || call.recipientIDs[0] != 10 {
+		t.Fatalf("expected snapshot rule channel=5 recipient=10, got %+v", call)
+	}
+}
+
+func TestSLACheckWritesBreachTimelineBeforeEscalation(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	responseDeadline := time.Now().Add(-5 * time.Minute)
+	resolutionDeadline := time.Now().Add(30 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3, `[]`)
+	ticket := &ticketModel{
+		ID:                    1,
+		Code:                  "T-1",
+		Title:                 "VPN 申请",
+		ServiceID:             1,
+		ServiceVersionID:      &versionID,
+		EngineType:            "classic",
+		Status:                TicketStatusWaitingHuman,
+		SLAResponseDeadline:   &responseDeadline,
+		SLAResolutionDeadline: &resolutionDeadline,
+		SLAStatus:             slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	if err := checkTicketSLA(context.Background(), db, ticket, time.Now(), nil, nil, NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
+	var reloaded ticketModel
+	if err := db.First(&reloaded, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if reloaded.SLAStatus != slaBreachedResponse {
+		t.Fatalf("sla_status = %q, want %q", reloaded.SLAStatus, slaBreachedResponse)
+	}
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "sla_response_breached").First(&timeline).Error; err != nil {
+		t.Fatalf("expected response breach timeline: %v", err)
+	}
+	if timeline.Message == "" || timeline.Details == "" {
+		t.Fatalf("expected breach timeline message and details, got %+v", timeline)
+	}
+}
+
+func TestSLACheckReturnsErrorAndSkipsEscalationWhenBreachAuditFails(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	deadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3,
+		`[{"id":7,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	ticket := &ticketModel{
+		ID:                  1,
+		Code:                "T-1",
+		Title:               "VPN 申请",
+		ServiceID:           1,
+		ServiceVersionID:    &versionID,
+		EngineType:          "classic",
+		Status:              TicketStatusWaitingHuman,
+		SLAResponseDeadline: &deadline,
+		SLAStatus:           slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	if err := db.Exec("DROP TABLE itsm_ticket_timelines").Error; err != nil {
+		t.Fatalf("drop timeline table: %v", err)
+	}
+	notifier := &fakeEscalationNotifier{}
+
+	err := checkTicketSLA(context.Background(), db, ticket, time.Now(), nil, nil, NewParticipantResolver(nil), notifier)
+	if err == nil {
+		t.Fatal("expected sla check to fail when breach timeline cannot be written")
+	}
+	if len(notifier.calls) != 0 {
+		t.Fatalf("escalation should not run after breach audit failure, got %+v", notifier.calls)
+	}
+	var reloaded ticketModel
+	if err := db.First(&reloaded, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if reloaded.SLAStatus != slaOnTrack {
+		t.Fatalf("expected sla_status rollback to %q, got %q", slaOnTrack, reloaded.SLAStatus)
 	}
 }
 

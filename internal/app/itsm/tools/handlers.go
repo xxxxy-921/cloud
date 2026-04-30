@@ -28,6 +28,8 @@ type ServiceDeskState struct {
 	ConfirmedServiceID    uint           `json:"confirmed_service_id,omitempty"`
 	ConfirmationRequired  bool           `json:"confirmation_required"`
 	LoadedServiceID       uint           `json:"loaded_service_id,omitempty"`
+	ServiceVersionID      uint           `json:"service_version_id,omitempty"`
+	ServiceVersionHash    string         `json:"service_version_hash,omitempty"`
 	DraftSummary          string         `json:"draft_summary,omitempty"`
 	DraftFormData         map[string]any `json:"draft_form_data,omitempty"`
 	RequestText           string         `json:"request_text,omitempty"`
@@ -91,14 +93,15 @@ type TicketCreator interface {
 
 // AgentTicketRequest holds the parameters for creating a ticket from an AI agent session.
 type AgentTicketRequest struct {
-	UserID       uint
-	ServiceID    uint
-	Summary      string
-	FormData     map[string]any
-	SessionID    uint
-	DraftVersion int
-	FieldsHash   string
-	RequestHash  string
+	UserID           uint
+	ServiceID        uint
+	ServiceVersionID uint
+	Summary          string
+	FormData         map[string]any
+	SessionID        uint
+	DraftVersion     int
+	FieldsHash       string
+	RequestHash      string
 }
 
 // AgentTicketResult holds the outcome of an agent-created ticket.
@@ -117,7 +120,7 @@ type ServiceDeskOperator interface {
 	MatchServices(ctx context.Context, query string) ([]ServiceMatch, MatchDecision, error)
 	LoadService(serviceID uint) (*ServiceDetail, error)
 	CreateTicket(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint) (*TicketResult, error)
-	SubmitConfirmedDraft(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error)
+	SubmitConfirmedDraft(userID uint, serviceID uint, serviceVersionID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error)
 	ListMyTickets(userID uint, status string) ([]TicketSummary, error)
 	WithdrawTicket(userID uint, ticketCode string, reason string) error
 	ValidateParticipants(serviceID uint, formData map[string]any) (*ParticipantValidation, error)
@@ -154,6 +157,8 @@ type ServiceMatch struct {
 // ServiceDetail is the full definition of a service returned by LoadService.
 type ServiceDetail struct {
 	ServiceID          uint              `json:"service_id"`
+	ServiceVersionID   uint              `json:"service_version_id,omitempty"`
+	ServiceVersionHash string            `json:"service_version_hash,omitempty"`
 	RequestedID        uint              `json:"requested_service_id,omitempty"`
 	ResolvedFrom       string            `json:"resolved_from,omitempty"`
 	Name               string            `json:"name"`
@@ -272,6 +277,7 @@ type DraftSubmitResult struct {
 	TicketCode    string                `json:"ticketCode,omitempty"`
 	Status        string                `json:"status,omitempty"`
 	Message       string                `json:"message,omitempty"`
+	NextExpectedAction string            `json:"nextExpectedAction,omitempty"`
 	FailureReason string                `json:"failureReason,omitempty"`
 	NodeLabel     string                `json:"nodeLabel,omitempty"`
 	Guidance      string                `json:"guidance,omitempty"`
@@ -281,114 +287,29 @@ type DraftSubmitResult struct {
 	Surface       map[string]any        `json:"surface,omitempty"`
 }
 
+type ServiceDeskCommandResult struct {
+	OK                 bool                  `json:"ok"`
+	Message            string                `json:"message,omitempty"`
+	NextExpectedAction string                `json:"nextExpectedAction,omitempty"`
+	State              *ServiceDeskState     `json:"state,omitempty"`
+	Surface            map[string]any        `json:"surface,omitempty"`
+	Warnings           []DraftWarning        `json:"warnings,omitempty"`
+	MissingFields      []FieldCollectionItem `json:"missingRequiredFields,omitempty"`
+	Payload            map[string]any        `json:"-"`
+}
+
+type ServiceDeskDraftSnapshot struct {
+	SessionID        uint           `json:"sessionId"`
+	ServiceID        uint           `json:"serviceId"`
+	ServiceVersionID uint           `json:"serviceVersionId"`
+	DraftVersion     int            `json:"draftVersion"`
+	FieldsHash       string         `json:"fieldsHash"`
+	Summary          string         `json:"summary"`
+	FormData         map[string]any `json:"formData"`
+}
+
 func SubmitDraft(op ServiceDeskOperator, store StateStore, sessionID uint, userID uint, req DraftSubmitRequest) (*DraftSubmitResult, error) {
-	state, err := store.GetState(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("get state: %w", err)
-	}
-	if state == nil || state.Stage != "awaiting_confirmation" {
-		return nil, fmt.Errorf("当前阶段不允许提交草稿，请先完成草稿整理")
-	}
-	if state.LoadedServiceID == 0 {
-		return nil, fmt.Errorf("请先加载服务")
-	}
-	if req.DraftVersion == 0 || req.DraftVersion != state.DraftVersion {
-		return nil, fmt.Errorf("草稿已变更（当前版本 %d，提交版本 %d），请重新确认表单", state.DraftVersion, req.DraftVersion)
-	}
-
-	detail, err := op.LoadService(state.LoadedServiceID)
-	if err != nil {
-		return nil, fmt.Errorf("load service for submit: %w", err)
-	}
-	if detail.EngineType != "smart" {
-		return nil, fmt.Errorf("仅支持 Agentic 服务提交")
-	}
-	if detail.FieldsHash != state.FieldsHash {
-		return nil, fmt.Errorf("服务表单字段已变更，请重新整理草稿")
-	}
-
-	formData := normalizeFormDataKeys(req.FormData, detail.FormFields)
-	if len(formData) == 0 && len(state.DraftFormData) > 0 {
-		formData = normalizeFormDataKeys(state.DraftFormData, detail.FormFields)
-	}
-	formData = mergePrefillFormData(formData, state.PrefillFormData)
-
-	summary := strings.TrimSpace(req.Summary)
-	if summary == "" {
-		summary = state.DraftSummary
-	}
-	validationContext := buildValidationContext(state.RequestText, summary)
-	formData = canonicalizeTimeSemanticFields(detail, validationContext, formData)
-	warnings, missingRequired, blocking := validateDraftData(detail, formData, validationContext)
-	timeWarnings, timeMissing, timeBlocking := validateDraftTimeSource(detail, validationContext, formData)
-	warnings = append(warnings, timeWarnings...)
-	missingRequired = append(missingRequired, timeMissing...)
-	blocking = blocking || timeBlocking
-	if blocking {
-		return &DraftSubmitResult{
-			OK:            false,
-			Message:       "表单还有必填项或无效值，请补充后再提交。",
-			Warnings:      warnings,
-			MissingFields: missingRequired,
-			State:         state,
-		}, nil
-	}
-
-	validation, err := op.ValidateParticipants(state.LoadedServiceID, formData)
-	if err != nil {
-		return nil, fmt.Errorf("validate participants: %w", err)
-	}
-	if validation != nil && !validation.OK {
-		return &DraftSubmitResult{
-			OK:            false,
-			Message:       "参与者预检失败，工单未创建。",
-			FailureReason: validation.FailureReason,
-			NodeLabel:     validation.NodeLabel,
-			Guidance:      validation.Guidance,
-			Warnings:      warnings,
-			State:         state,
-		}, nil
-	}
-
-	state.DraftSummary = summary
-	state.DraftFormData = formData
-	state.ConfirmedDraftVersion = state.DraftVersion
-
-	ticket, err := op.SubmitConfirmedDraft(userID, state.LoadedServiceID, summary, formData, sessionID, state.DraftVersion, state.FieldsHash, requestHash(formData))
-	if err != nil {
-		return nil, fmt.Errorf("create ticket: %w", err)
-	}
-
-	resetState := defaultState()
-	if err := store.SaveState(sessionID, resetState); err != nil {
-		return nil, fmt.Errorf("save reset state: %w", err)
-	}
-
-	surfacePayload := map[string]any{
-		"status":     "submitted",
-		"serviceId":  detail.ServiceID,
-		"title":      detail.Name,
-		"summary":    summary,
-		"values":     formData,
-		"ticketId":   ticket.TicketID,
-		"ticketCode": ticket.TicketCode,
-		"message":    "工单已提交",
-	}
-	surface := map[string]any{
-		"surfaceId":   fmt.Sprintf("itsm-draft-form-submitted-%d", ticket.TicketID),
-		"surfaceType": "itsm.draft_form",
-		"payload":     surfacePayload,
-	}
-	return &DraftSubmitResult{
-		OK:         true,
-		TicketID:   ticket.TicketID,
-		TicketCode: ticket.TicketCode,
-		Status:     ticket.Status,
-		Message:    "工单已提交",
-		Warnings:   warnings,
-		State:      resetState,
-		Surface:    surface,
-	}, nil
+	return NewServiceDeskSession(op, store).SubmitDraft(sessionID, userID, req)
 }
 
 // ---------------------------------------------------------------------------
@@ -1746,7 +1667,7 @@ func ticketCreateHandler(op ServiceDeskOperator, store StateStore) ToolHandler {
 			}
 		}
 
-		result, err := op.SubmitConfirmedDraft(userID, resolvedServiceID, p.Summary, p.FormData, sid, state.DraftVersion, state.FieldsHash, requestHash(p.FormData))
+		result, err := op.SubmitConfirmedDraft(userID, resolvedServiceID, state.ServiceVersionID, p.Summary, p.FormData, sid, state.DraftVersion, state.FieldsHash, requestHash(p.FormData))
 		if err != nil {
 			return nil, fmt.Errorf("create ticket: %w", err)
 		}

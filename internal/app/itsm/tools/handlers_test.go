@@ -72,7 +72,7 @@ func (s *stubOperator) CreateTicket(userID uint, serviceID uint, summary string,
 	s.createdFormData = formData
 	return &TicketResult{TicketID: 123, TicketCode: "TICK-000123", Status: "in_progress"}, nil
 }
-func (s *stubOperator) SubmitConfirmedDraft(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
+func (s *stubOperator) SubmitConfirmedDraft(userID uint, serviceID uint, serviceVersionID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
 	s.submitDraftCalls++
 	s.createdServiceID = serviceID
 	s.createdSummary = summary

@@ -123,6 +123,7 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 			{obj: "/api/v1/itsm/service-desk/sessions/:sid/state", act: "GET"},
 			{obj: "/api/v1/itsm/service-desk/sessions/:sid/draft/submit", act: "POST"},
 			{obj: "/api/v1/itsm/tickets/mine", act: "GET"},
+			{obj: "/api/v1/itsm/tickets", act: "POST"},
 			{obj: "/api/v1/itsm/tickets/approvals/pending", act: "GET"},
 			{obj: "/api/v1/itsm/tickets/approvals/history", act: "GET"},
 			{obj: "/api/v1/itsm/tickets/:id", act: "GET"},

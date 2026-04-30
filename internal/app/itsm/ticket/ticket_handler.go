@@ -481,6 +481,8 @@ func (h *TicketHandler) Progress(c *gin.Context) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrInvalidProgressOutcome):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrNoActiveAssignment):
+			handler.Fail(c, http.StatusForbidden, err.Error())
 		case errors.Is(err, engine.ErrActivityNotFound), errors.Is(err, engine.ErrActivityNotActive):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
