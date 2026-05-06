@@ -173,5 +173,6 @@ sidebar_label: 系统设置
 - [角色管理](./role-management.md)：用于注册默认角色与权限基线配置
 - [认证源](./auth-provider-management.md)：用于维护第三方登录接入参数与可用状态
 - [会话管理](./session-management.md)：用于策略变更后的在线会话观察与处置
+- [任务管理](./task-management.md)：用于巡检任务执行状态并手动触发关键任务
 - [通知渠道](./channel-management.md)：用于配置系统消息的发送出口并验证发送链路
 - [审计日志](./audit-log-management.md)：用于追溯登录活动与关键操作记录

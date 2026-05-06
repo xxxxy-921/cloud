@@ -5,7 +5,7 @@ unlisted: true
 
 # 产品文档索引（自动维护）
 
-最后更新：2026-05-06 17:40 (+08:00)
+最后更新：2026-05-06 18:00 (+08:00)
 本轮范围：系统管理
 
 ## 已发现结构
@@ -31,6 +31,7 @@ unlisted: true
 - 系统管理 / [菜单管理](./system-management/menu-management.md)（本轮新增）
 - 系统管理 / [会话管理](./system-management/session-management.md)
 - 系统管理 / [系统设置](./system-management/system-settings.md)
+- 系统管理 / [任务管理](./system-management/task-management.md)（本轮新增）
 - 系统管理 / [通知渠道](./system-management/channel-management.md)（本轮新增）
 - 系统管理 / [认证源](./system-management/auth-provider-management.md)
 - 系统管理 / [身份源管理](./system-management/identity-source-management.md)（本轮新增）
@@ -38,15 +39,12 @@ unlisted: true
 
 ## 待补齐（按优先级）
 
-中优先级：
-1. 任务管理
-
 低优先级：
-2. 公告管理
+1. 公告管理
 
 ## 本轮处理说明
 
-- 扫描菜单映射（`internal/seed/menus.go`）、前端路由（`web/src/App.tsx`）与中文文案（`web/src/i18n/locales/zh-CN/channels.json`）后，确认“通知渠道”是当前最高优先级未覆盖模块。
-- 按“缺口优先补齐”规则，本轮仅新增 1 篇：通知渠道。
+- 扫描菜单映射（`internal/seed/menus.go`）、前端路由（`web/src/App.tsx`）与中文文案（`web/src/i18n/locales/zh-CN/tasks.json`）后，确认“任务管理”是当前最高优先级未覆盖模块。
+- 按“缺口优先补齐”规则，本轮仅新增 1 篇：任务管理。
 - 新文档采用统一四段结构（功能概览 / 功能清单 / 常见任务操作 / 风险与注意事项），并为每个功能补齐“功能介绍 + 使用场景”。
-- 已同步更新系统管理侧边栏，并在系统设置文档补充“通知渠道”反向链接，确保相关模块互链可点击。
+- 已同步更新系统管理侧边栏，并在系统设置文档补充“任务管理”反向链接，确保相关模块互链可点击。
