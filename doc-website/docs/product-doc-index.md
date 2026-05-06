@@ -5,7 +5,7 @@ unlisted: true
 
 # 产品文档索引（自动维护）
 
-最后更新：2026-05-06 18:20 (+08:00)
+最后更新：2026-05-06 18:40 (+08:00)
 本轮范围：系统管理
 
 ## 已发现结构
@@ -44,7 +44,7 @@ unlisted: true
 
 ## 本轮处理说明
 
-- 扫描菜单映射（`internal/seed/menus.go`）、前端页面入口（`web/src/pages/announcements/index.tsx`）与中文文案（`web/src/i18n/locales/zh-CN/announcements.json`）后，确认“公告管理”是系统管理域最后一个未覆盖模块。
-- 按“缺口优先补齐”规则，本轮仅新增 1 篇：公告管理。
-- 新文档采用统一四段结构（功能概览 / 功能清单 / 常见任务操作 / 风险与注意事项），并为每个功能补齐“功能介绍 + 使用场景”。
-- 已同步更新系统管理侧边栏与通知渠道文档反向链接，确保相关模块互链可点击。
+- 复核范围：系统设置（`/settings`）。
+- 证据对照：前端路由（`web/src/App.tsx`）、页面结构（`web/src/pages/settings/index.tsx`、`web/src/pages/settings/security-card.tsx`）、中文文案（`web/src/i18n/locales/zh-CN/settings.json`）。
+- 结论：当前文档与代码一致，本轮无正文改动；继续保持“功能概览 / 功能清单 / 常见任务操作 / 风险与注意事项”四段结构与模块互链。
+- 覆盖状态：系统管理域 11 个模块均已覆盖，待补齐列表保持为空。
