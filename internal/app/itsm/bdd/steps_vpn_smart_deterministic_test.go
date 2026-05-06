@@ -50,13 +50,21 @@ func (bc *bddContext) givenStaticSmartServicePublished() error {
 	// Static workflow — minimal but valid structure.
 	staticWorkflow := json.RawMessage(`{
 		"nodes": [
-			{"id": "start", "type": "start", "label": "开始"},
-				{"id": "process", "type": "process", "label": "处理", "config": {"participant_type": "position_department", "position_code": "network_admin", "department_code": "it"}},
-			{"id": "end", "type": "end", "label": "结束"}
+			{"id": "start", "type": "start", "data": {"label": "开始", "nodeType": "start"}},
+			{"id": "gateway1", "type": "exclusive", "data": {"label": "访问原因路由", "nodeType": "exclusive"}},
+			{"id": "process_net", "type": "process", "data": {"label": "网络管理员处理", "nodeType": "process", "participants": [{"type": "position_department", "position_code": "network_admin", "department_code": "it"}]}},
+			{"id": "process_sec", "type": "process", "data": {"label": "信息安全管理员处理", "nodeType": "process", "participants": [{"type": "position_department", "position_code": "security_admin", "department_code": "it"}]}},
+			{"id": "end", "type": "end", "data": {"label": "结束", "nodeType": "end"}},
+			{"id": "end_rejected", "type": "end", "data": {"label": "驳回结束", "nodeType": "end"}}
 		],
 		"edges": [
-				{"source": "start", "target": "process"},
-				{"source": "process", "target": "end", "condition": "completed"}
+			{"id": "e1", "source": "start", "target": "gateway1"},
+			{"id": "e2", "source": "gateway1", "target": "process_net", "data": {"condition": {"field": "form.request_kind", "operator": "contains_any", "value": ["online_support", "troubleshooting", "production_emergency", "network_access_issue"]}}},
+			{"id": "e3", "source": "gateway1", "target": "process_sec", "data": {"condition": {"field": "form.request_kind", "operator": "contains_any", "value": ["external_collaboration", "long_term_remote_work", "cross_border_access", "security_compliance"]}}},
+			{"id": "e4", "source": "process_net", "target": "end", "data": {"outcome": "completed"}},
+			{"id": "e5", "source": "process_sec", "target": "end", "data": {"outcome": "completed"}},
+			{"id": "e6", "source": "process_net", "target": "end_rejected", "data": {"outcome": "rejected"}},
+			{"id": "e7", "source": "process_sec", "target": "end_rejected", "data": {"outcome": "rejected"}}
 		]
 	}`)
 
@@ -127,7 +135,7 @@ func (bc *bddContext) givenFallbackAssigneeInactive() error {
 	bc.fallbackUserID = user.ID
 	configProvider := &testConfigProvider{fallbackAssigneeID: user.ID}
 
-	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall}
+	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall, recordToolResult: bc.recordToolResult}
 	userProvider := &testUserProvider{db: bc.db}
 	orgSvc := &testOrgService{db: bc.db}
 	resolver := engine.NewParticipantResolver(orgSvc)

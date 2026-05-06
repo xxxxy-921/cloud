@@ -14,7 +14,7 @@ Feature: IT 服务台智能体 — 时间语义解析
     And 已发布 VPN 对话测试服务
 
   Scenario: 明天下午 5 点 — Agent 调用时间工具并写入可落表时间
-    Given 用户消息为 "我要申请VPN，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段明天下午5点"
+    Given 用户消息为 "我要申请VPN，VPN账号wenhaowu@dev.com，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段明天下午5点"
     When 服务台 Agent 处理用户消息
     Then 工具调用序列包含 "itsm.service_match"
     And 工具调用序列包含 "itsm.service_load"
@@ -23,27 +23,27 @@ Feature: IT 服务台智能体 — 时间语义解析
     And draft_prepare 的访问时段等于基于当前时间的明天 17 点
 
   Scenario: 下午 5 点 — Agent 不得把当前日期下已过去的时间写入草稿
-    Given 用户消息为 "我要申请VPN，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段下午5点"
+    Given 用户消息为 "我要申请VPN，VPN账号wenhaowu@dev.com，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段下午5点"
     When 服务台 Agent 处理用户消息
     Then 工具调用序列包含 "general.current_time"
     And 下午 5 点没有被解析为过去时间
 
   Scenario: 明天晚上 — Agent 追问具体时刻而不是自行补全
-    Given 用户消息为 "我要申请VPN，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段明天晚上"
+    Given 用户消息为 "我要申请VPN，VPN账号wenhaowu@dev.com，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段明天晚上"
     When 服务台 Agent 处理用户消息
     Then 工具调用序列包含 "general.current_time"
     And Agent 未进入可确认草稿
     And 回复内容匹配 "具体.*(时间|时刻)|几点|几分|明确.*时间"
 
   Scenario: 22:00-01:00 — Agent 默认按跨天区间写入草稿
-    Given 用户消息为 "我要申请VPN，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段22:00-01:00"
+    Given 用户消息为 "我要申请VPN，VPN账号wenhaowu@dev.com，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段22:00-01:00"
     When 服务台 Agent 处理用户消息
     Then 工具调用序列包含 "general.current_time"
     And 工具调用序列包含 "itsm.draft_prepare"
     And draft_prepare 的访问时段按当前时间解析为跨天区间 "22:00" 到 "01:00"
 
   Scenario: 12:00-10:00 — Agent 默认按跨天区间写入草稿
-    Given 用户消息为 "我要申请VPN，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段12:00-10:00"
+    Given 用户消息为 "我要申请VPN，VPN账号wenhaowu@dev.com，线上支持用的，访问原因online_support，申请原因是远程处理线上问题，访问时段12:00-10:00"
     When 服务台 Agent 处理用户消息
     Then 工具调用序列包含 "general.current_time"
     And 工具调用序列包含 "itsm.draft_prepare"

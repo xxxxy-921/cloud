@@ -15,7 +15,7 @@ Feature: VPN 开通申请 — 草稿字段变更后 Agent 自愈重试
 
   Scenario: 草稿版本校验 — 字段变更后 Agent 自动重试
     Given 服务字段将在草稿准备后变更
-    And 用户消息为 "我要申请VPN开通，类型L2TP，原因网络调试，访问时段2026-05-01 09:00:00~18:00:00"
+    And 用户消息为 "我要申请VPN开通，VPN账号wenhaowu@dev.com，类型L2TP，原因网络调试，访问时段2026-05-01 09:00:00~18:00:00"
     When 服务台 Agent 处理用户消息（含字段变更）
     Then 工具调用序列包含 "itsm.draft_confirm"
     And "itsm.service_load" 被调用至少 2 次

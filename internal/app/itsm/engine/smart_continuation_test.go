@@ -136,6 +136,7 @@ func TestSmartProgressContinuationWaitsForParallelGroupConvergence(t *testing.T)
 	if err := db.Create(&second).Error; err != nil {
 		t.Fatalf("create second activity: %v", err)
 	}
+	assignSmartActivityToOperator(t, db, ticket.ID, second.ID, 1)
 
 	submitter := &txRecordingSubmitter{}
 	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
@@ -244,6 +245,46 @@ func TestSmartStartInitializesWorkflowWithoutRunningDecision(t *testing.T) {
 	}
 	if activityCount != 0 {
 		t.Fatalf("initial smart start should not run decision synchronously, got %d activities", activityCount)
+	}
+}
+
+func TestSmartStartAllowsServiceWithoutServiceAgent(t *testing.T) {
+	db := newSmartContinuationDB(t)
+
+	service := serviceModel{
+		Name:       "智能 VPN 服务",
+		EngineType: "smart",
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	ticket := ticketModel{
+		ServiceID:   service.ID,
+		Status:      "pending",
+		EngineType:  "smart",
+		RequesterID: 7,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, nil, nil)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return eng.Start(context.Background(), tx, StartParams{
+			TicketID:    ticket.ID,
+			RequesterID: ticket.RequesterID,
+		})
+	})
+	if err != nil {
+		t.Fatalf("start smart workflow without service agent: %v", err)
+	}
+
+	var reloaded ticketModel
+	if err := db.First(&reloaded, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if reloaded.Status != TicketStatusDecisioning {
+		t.Fatalf("expected ticket status %q, got %q", TicketStatusDecisioning, reloaded.Status)
 	}
 }
 
@@ -487,7 +528,7 @@ func TestSmartDecisionPositionAssignmentWithoutUsersWaitsForHuman(t *testing.T) 
 	}
 
 	var timeline timelineModel
-	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "participant_resolution_pending").First(&timeline).Error; err != nil {
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "participant_fallback_warning").First(&timeline).Error; err != nil {
 		t.Fatalf("load pending timeline: %v", err)
 	}
 	if timeline.Message == "" {
@@ -511,11 +552,30 @@ func createSmartContinuationTicket(t *testing.T, db *gorm.DB, groupID string, ac
 	if err := db.Create(&activity).Error; err != nil {
 		t.Fatalf("create activity: %v", err)
 	}
+	if activityStatus == ActivityPending {
+		assignSmartActivityToOperator(t, db, ticket.ID, activity.ID, 1)
+	}
 	if err := db.Model(&ticketModel{}).Where("id = ?", ticket.ID).Update("current_activity_id", activity.ID).Error; err != nil {
 		t.Fatalf("set current activity: %v", err)
 	}
 	ticket.CurrentActivityID = &activity.ID
 	return ticket, activity
+}
+
+func assignSmartActivityToOperator(t *testing.T, db *gorm.DB, ticketID uint, activityID uint, operatorID uint) {
+	t.Helper()
+	assignment := assignmentModel{
+		TicketID:        ticketID,
+		ActivityID:      activityID,
+		ParticipantType: "user",
+		UserID:          &operatorID,
+		AssigneeID:      &operatorID,
+		Status:          ActivityPending,
+		IsCurrent:       true,
+	}
+	if err := db.Create(&assignment).Error; err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
 }
 
 type rootDBPositionResolver struct {
@@ -755,8 +815,8 @@ func TestSmartRecoveryFirstRunSubmits(t *testing.T) {
 		t.Fatalf("smart recovery handler: %v", err)
 	}
 
-	if submitter.calls != 0 {
-		t.Fatalf("expected recovery to avoid scheduler submit calls, got %d", submitter.calls)
+	if submitter.calls != 1 || submitter.lastName != "itsm-smart-progress" {
+		t.Fatalf("expected recovery to enqueue one smart-progress task, got calls=%d lastName=%q", submitter.calls, submitter.lastName)
 	}
 
 	// Verify dedup map was populated
@@ -785,20 +845,20 @@ func TestSmartRecoveryDedupSkipsRecent(t *testing.T) {
 	eng := NewSmartEngine(availableDecisionExecutor{}, nil, nil, nil, submitter, nil)
 	handler := HandleSmartRecovery(db, eng)
 
-	// First run should dispatch direct recovery and populate dedup.
+	// First run should enqueue recovery and populate dedup.
 	if err := handler(context.Background(), nil); err != nil {
 		t.Fatalf("first recovery run: %v", err)
 	}
-	if submitter.calls != 0 {
-		t.Fatalf("expected no scheduler submit after first run, got %d", submitter.calls)
+	if submitter.calls != 1 || submitter.lastName != "itsm-smart-progress" {
+		t.Fatalf("expected first run to enqueue one smart-progress task, got calls=%d lastName=%q", submitter.calls, submitter.lastName)
 	}
 
 	// Second run within 10 minutes — should skip (dedup)
 	if err := handler(context.Background(), nil); err != nil {
 		t.Fatalf("second recovery run: %v", err)
 	}
-	if submitter.calls != 0 {
-		t.Fatalf("expected still no scheduler submit after second run, got %d", submitter.calls)
+	if submitter.calls != 1 {
+		t.Fatalf("expected second run to be deduped without another scheduler submit, got %d", submitter.calls)
 	}
 }
 
@@ -828,8 +888,8 @@ func TestSmartRecoveryDedupExpiresAfter10Min(t *testing.T) {
 		t.Fatalf("recovery after expiry: %v", err)
 	}
 
-	if submitter.calls != 0 {
-		t.Fatalf("expected no scheduler submit after dedup entry expired, got %d", submitter.calls)
+	if submitter.calls != 1 || submitter.lastName != "itsm-smart-progress" {
+		t.Fatalf("expected expired dedup entry to enqueue one smart-progress task, got calls=%d lastName=%q", submitter.calls, submitter.lastName)
 	}
 
 	// Verify the dedup map was updated with a fresh timestamp

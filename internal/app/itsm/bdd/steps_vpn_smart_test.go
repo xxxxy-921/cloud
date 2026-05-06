@@ -21,10 +21,14 @@ func registerSmartSteps(sc *godog.ScenarioContext, bc *bddContext) {
 	sc.Given(`^已基于协作规范发布 VPN 开通服务（智能引擎）$`, bc.givenSmartServicePublished)
 	sc.Given(`^已基于协作规范发布 VPN 服务（智能引擎）$`, bc.givenSmartServicePublished)
 	sc.Given(`^"([^"]*)" 已创建 VPN 工单，访问原因为 "([^"]*)"$`, bc.givenSmartTicketCreated)
+	sc.Given(`^"([^"]*)" 已创建 VPN 工单，表单数据为:$`, bc.givenSmartTicketCreatedWithFormData)
 	sc.Given(`^"([^"]*)" 已创建 VPN 工单，访问原因同时包含网络和安全诉求$`, bc.givenSmartTicketWithConflictingReasons)
 	sc.Given(`^智能引擎置信度阈值设为 ([0-9.]+)$`, bc.givenConfidenceThreshold)
 	sc.Given(`^VPN 处理人均已停用$`, bc.givenVPNOperatorsInactive)
+	sc.Given(`^VPN 安全管理员处理人已停用$`, bc.givenVPNSecurityOperatorInactive)
 	sc.Given(`^"([^"]*)" 已创建 VPN 工单（使用缺失参与者的工作流）$`, bc.givenSmartTicketMissingParticipant)
+	sc.Given(`^VPN 工作流参考图错误地把网络类诉求指向安全管理员$`, bc.givenVPNWorkflowRoutesNetworkToSecurity)
+	sc.Given(`^VPN 工作流参考图错误地把驳回指向申请人补充表单$`, bc.givenVPNWorkflowRejectedReturnsRequesterForm)
 
 	sc.When(`^智能引擎执行决策循环$`, bc.whenSmartEngineDecisionCycle)
 	sc.When(`^管理员接管该人工处置决策$`, bc.whenAdminConfirmsPendingDecision)
@@ -40,13 +44,20 @@ func registerSmartSteps(sc *godog.ScenarioContext, bc *bddContext) {
 	sc.Then(`^若指定了参与人则参与人在候选列表内$`, bc.thenParticipantInCandidates)
 	sc.Then(`^时间线应包含 AI 决策相关事件$`, bc.thenTimelineContainsAIDecision)
 	sc.Then(`^决策工具 "([^"]*)" 已被调用$`, bc.thenDecisionToolCalled)
+	sc.Then(`^参与人解析工具使用岗位部门 "([^"]*)/([^"]*)"$`, bc.thenResolveParticipantUsedPositionDepartment)
 	sc.Then(`^当前处理任务未分配到岗位 "([^"]*)"$`, bc.thenCurrentProcessNotAssignedToPosition)
+	sc.Then(`^当前活跃人工任务数为 (\d+)$`, bc.thenActiveHumanActivityCountIs)
+	sc.Then(`^当前岗位 "([^"]*)" 的活跃处理任务数为 (\d+)$`, bc.thenActiveProcessActivityCountForPositionIs)
 	sc.Then(`^没有不可执行的高置信人工任务$`, bc.thenNoUnexecutableHighConfidenceHumanTask)
 	sc.Then(`^决策诊断事件已记录$`, bc.thenDecisionDiagnosticRecorded)
 	sc.Then(`^不得高置信选择单一路由$`, bc.thenNoHighConfidenceSingleRouteChoice)
 	sc.Then(`^进入澄清或低置信人工处置$`, bc.thenClarificationOrLowConfidenceHandling)
 	sc.Then(`^不会重复创建刚完成的人工作业$`, bc.thenNoDuplicateAfterCompletedHumanWork)
 	sc.Then(`^不得创建申请人补充表单$`, bc.thenNoRequesterSupplementForm)
+	sc.Then(`^工单结果为 "([^"]*)"$`, bc.thenTicketOutcomeIs)
+	sc.Then(`^工单处于驳回终态或已有决策诊断$`, bc.thenTicketRejectedOrDiagnosticRecorded)
+	sc.Then(`^工单活动数保持为 (\d+)$`, bc.thenActivityCountIs)
+	sc.Then(`^AI 决策依据包含 "([^"]*)"$`, bc.thenAIDecisionEvidenceContains)
 	sc.Then(`^当前活动状态为 "([^"]*)"$`, bc.thenCurrentActivityStatusIs)
 	sc.Then(`^当前活动状态不为 "([^"]*)"$`, bc.thenCurrentActivityStatusIsNot)
 	sc.Then(`^活动记录中包含 AI 推理说明$`, bc.thenActivityContainsAIReasoning)
@@ -59,29 +70,44 @@ func (bc *bddContext) givenSmartServicePublished() error {
 }
 
 func (bc *bddContext) givenSmartTicketCreated(username, requestKind string) error {
-	user, ok := bc.usersByName[username]
-	if !ok {
-		return fmt.Errorf("user %q not found in context", username)
-	}
-
 	normalizedKind := normalizeVPNRequestKind(requestKind)
 	formData := map[string]any{
 		"request_kind": normalizedKind,
 		"vpn_account":  fmt.Sprintf("%s@dev.local", username),
 		"device_usage": vpnDeviceUsageForKind(normalizedKind),
 	}
+	return bc.createSmartVPNTicket(username, fmt.Sprintf("VPN开通申请(智能) - %s", requestKind), formData, bc.service.WorkflowJSON)
+}
+
+func (bc *bddContext) givenSmartTicketCreatedWithFormData(username string, doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("missing form data doc string")
+	}
+	var formData map[string]any
+	if err := json.Unmarshal([]byte(doc.Content), &formData); err != nil {
+		return fmt.Errorf("parse form data JSON: %w", err)
+	}
+	return bc.createSmartVPNTicket(username, "VPN开通申请(智能) - corner case", formData, bc.service.WorkflowJSON)
+}
+
+func (bc *bddContext) createSmartVPNTicket(username, title string, formData map[string]any, workflowJSON JSONField) error {
+	user, ok := bc.usersByName[username]
+	if !ok {
+		return fmt.Errorf("user %q not found in context", username)
+	}
+
 	formJSON, _ := json.Marshal(formData)
 
 	ticket := &Ticket{
 		Code:         fmt.Sprintf("VPN-S-%d", time.Now().UnixNano()),
-		Title:        fmt.Sprintf("VPN开通申请(智能) - %s", requestKind),
+		Title:        title,
 		ServiceID:    bc.service.ID,
 		EngineType:   "smart",
 		Status:       "pending",
 		PriorityID:   bc.priority.ID,
 		RequesterID:  user.ID,
 		FormData:     JSONField(formJSON),
-		WorkflowJSON: bc.service.WorkflowJSON,
+		WorkflowJSON: workflowJSON,
 	}
 	if err := bc.db.Create(ticket).Error; err != nil {
 		return fmt.Errorf("create ticket: %w", err)
@@ -165,15 +191,26 @@ func (bc *bddContext) givenConfidenceThreshold(threshold string) error {
 
 func (bc *bddContext) givenVPNOperatorsInactive() error {
 	for _, username := range []string{"network-operator", "security-operator"} {
-		user, ok := bc.usersByName[username]
-		if !ok {
-			return fmt.Errorf("user %q not found in context", username)
+		if err := bc.deactivateUser(username); err != nil {
+			return err
 		}
-		if err := bc.db.Table("users").Where("id = ?", user.ID).Update("is_active", false).Error; err != nil {
-			return fmt.Errorf("deactivate %q: %w", username, err)
-		}
-		user.IsActive = false
 	}
+	return nil
+}
+
+func (bc *bddContext) givenVPNSecurityOperatorInactive() error {
+	return bc.deactivateUser("security-operator")
+}
+
+func (bc *bddContext) deactivateUser(username string) error {
+	user, ok := bc.usersByName[username]
+	if !ok {
+		return fmt.Errorf("user %q not found in context", username)
+	}
+	if err := bc.db.Table("users").Where("id = ?", user.ID).Update("is_active", false).Error; err != nil {
+		return fmt.Errorf("deactivate %q: %w", username, err)
+	}
+	user.IsActive = false
 	return nil
 }
 
@@ -212,6 +249,212 @@ func (bc *bddContext) givenSmartTicketMissingParticipant(username string) error 
 	}
 	bc.ticket = ticket
 	return nil
+}
+
+func (bc *bddContext) givenVPNWorkflowRoutesNetworkToSecurity() error {
+	if bc.service == nil {
+		return fmt.Errorf("no service in context")
+	}
+	corrupted, err := corruptVPNWorkflowRouteTargets(json.RawMessage(bc.service.WorkflowJSON))
+	if err != nil {
+		return err
+	}
+	bc.service.WorkflowJSON = JSONField(corrupted)
+	return bc.db.Save(bc.service).Error
+}
+
+func (bc *bddContext) givenVPNWorkflowRejectedReturnsRequesterForm() error {
+	if bc.service == nil {
+		return fmt.Errorf("no service in context")
+	}
+	corrupted, err := corruptVPNWorkflowRejectedTarget(json.RawMessage(bc.service.WorkflowJSON))
+	if err != nil {
+		return err
+	}
+	bc.service.WorkflowJSON = JSONField(corrupted)
+	return bc.db.Save(bc.service).Error
+}
+
+type vpnWorkflowDoc struct {
+	Nodes []vpnWorkflowNode `json:"nodes"`
+	Edges []vpnWorkflowEdge `json:"edges"`
+}
+
+type vpnWorkflowNode struct {
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	Position map[string]any `json:"position,omitempty"`
+	Data     map[string]any `json:"data,omitempty"`
+}
+
+type vpnWorkflowEdge struct {
+	ID     string         `json:"id"`
+	Source string         `json:"source"`
+	Target string         `json:"target"`
+	Data   map[string]any `json:"data,omitempty"`
+}
+
+func corruptVPNWorkflowRouteTargets(raw json.RawMessage) (json.RawMessage, error) {
+	var wf vpnWorkflowDoc
+	if err := json.Unmarshal(raw, &wf); err != nil {
+		return nil, fmt.Errorf("parse workflow_json: %w", err)
+	}
+
+	networkNodeID, securityNodeID := "", ""
+	for _, node := range wf.Nodes {
+		switch vpnProcessPositionCode(node) {
+		case "network_admin":
+			networkNodeID = node.ID
+		case "security_admin":
+			securityNodeID = node.ID
+		}
+	}
+	if networkNodeID == "" || securityNodeID == "" {
+		return nil, fmt.Errorf("workflow_json missing network/security process nodes")
+	}
+
+	changed := false
+	for i := range wf.Edges {
+		values := vpnConditionValues(wf.Edges[i].Data)
+		if containsAnyVPNKind(values, []string{"online_support", "troubleshooting", "production_emergency", "network_access_issue"}) {
+			wf.Edges[i].Target = securityNodeID
+			changed = true
+			continue
+		}
+		if containsAnyVPNKind(values, []string{"external_collaboration", "long_term_remote_work", "cross_border_access", "security_compliance"}) {
+			wf.Edges[i].Target = networkNodeID
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, fmt.Errorf("workflow_json has no request_kind routing edges to corrupt")
+	}
+
+	corrupted, err := json.Marshal(wf)
+	if err != nil {
+		return nil, fmt.Errorf("marshal corrupted workflow_json: %w", err)
+	}
+	return corrupted, nil
+}
+
+func corruptVPNWorkflowRejectedTarget(raw json.RawMessage) (json.RawMessage, error) {
+	var wf vpnWorkflowDoc
+	if err := json.Unmarshal(raw, &wf); err != nil {
+		return nil, fmt.Errorf("parse workflow_json: %w", err)
+	}
+
+	formID := "requester_supplement"
+	wf.Nodes = append(wf.Nodes, vpnWorkflowNode{
+		ID:   formID,
+		Type: engine.NodeForm,
+		Data: map[string]any{
+			"label":    "申请人补充 VPN 信息",
+			"nodeType": engine.NodeForm,
+			"participants": []any{
+				map[string]any{"type": "requester"},
+			},
+			"formSchema": map[string]any{
+				"fields": []any{
+					map[string]any{"key": "supplement_reason", "type": "textarea", "label": "补充说明"},
+				},
+			},
+		},
+	})
+
+	changed := false
+	for i := range wf.Edges {
+		if edgeOutcome(wf.Edges[i].Data) == engine.ActivityRejected {
+			wf.Edges[i].Target = formID
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, fmt.Errorf("workflow_json has no rejected edges to corrupt")
+	}
+
+	if endID := firstEndNodeID(wf.Nodes); endID != "" {
+		wf.Edges = append(wf.Edges, vpnWorkflowEdge{
+			ID:     "edge_requester_supplement_end",
+			Source: formID,
+			Target: endID,
+		})
+	}
+
+	corrupted, err := json.Marshal(wf)
+	if err != nil {
+		return nil, fmt.Errorf("marshal corrupted workflow_json: %w", err)
+	}
+	return corrupted, nil
+}
+
+func vpnProcessPositionCode(node vpnWorkflowNode) string {
+	if node.Type != engine.NodeProcess && node.Type != engine.NodeApprove {
+		return ""
+	}
+	rawParticipants, ok := node.Data["participants"].([]any)
+	if !ok {
+		return ""
+	}
+	for _, rawParticipant := range rawParticipants {
+		participant, ok := rawParticipant.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fmt.Sprint(participant["type"]) == "position_department" {
+			return fmt.Sprint(participant["position_code"])
+		}
+	}
+	return ""
+}
+
+func vpnConditionValues(data map[string]any) []string {
+	condition, ok := data["condition"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawValue, ok := condition["value"]
+	if !ok {
+		return nil
+	}
+	switch value := rawValue.(type) {
+	case []any:
+		values := make([]string, 0, len(value))
+		for _, item := range value {
+			values = append(values, fmt.Sprint(item))
+		}
+		return values
+	case string:
+		return []string{value}
+	default:
+		return []string{fmt.Sprint(value)}
+	}
+}
+
+func containsAnyVPNKind(values []string, kinds []string) bool {
+	for _, value := range values {
+		for _, kind := range kinds {
+			if value == kind {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func edgeOutcome(data map[string]any) string {
+	if data == nil {
+		return ""
+	}
+	return fmt.Sprint(data["outcome"])
+}
+
+func firstEndNodeID(nodes []vpnWorkflowNode) string {
+	for _, node := range nodes {
+		if node.Type == engine.NodeEnd {
+			return node.ID
+		}
+	}
+	return ""
 }
 
 // --- When steps ---
@@ -501,9 +744,73 @@ func (bc *bddContext) thenDecisionToolCalled(name string) error {
 	return fmt.Errorf("expected decision tool %q to be called, got %+v", name, bc.toolCalls)
 }
 
+func (bc *bddContext) thenResolveParticipantUsedPositionDepartment(departmentCode, positionCode string) error {
+	for _, call := range bc.toolCalls {
+		if call.Name != "decision.resolve_participant" {
+			continue
+		}
+		var args struct {
+			Type           string `json:"type"`
+			Value          string `json:"value"`
+			PositionCode   string `json:"position_code"`
+			DepartmentCode string `json:"department_code"`
+		}
+		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+			return fmt.Errorf("parse decision.resolve_participant args %q: %w", call.Arguments, err)
+		}
+		if args.Type == "position_department" && args.DepartmentCode == departmentCode && args.PositionCode == positionCode {
+			return nil
+		}
+	}
+	return fmt.Errorf("expected decision.resolve_participant with position_department %s/%s, got %+v", departmentCode, positionCode, bc.toolCalls)
+}
+
 func (bc *bddContext) thenCurrentProcessNotAssignedToPosition(positionCode string) error {
 	if err := bc.thenCurrentProcessAssignedToPosition(positionCode); err == nil {
 		return fmt.Errorf("current process unexpectedly assigned to position %q", positionCode)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenActiveHumanActivityCountIs(expected int) error {
+	var count int64
+	if err := bc.db.Model(&TicketActivity{}).
+		Where("ticket_id = ? AND activity_type IN ? AND status IN ?",
+			bc.ticket.ID,
+			[]string{engine.NodeApprove, engine.NodeForm, engine.NodeProcess},
+			[]string{engine.ActivityPending, engine.ActivityInProgress}).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if int(count) != expected {
+		return fmt.Errorf("expected %d active human activities, got %d", expected, count)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenActiveProcessActivityCountForPositionIs(positionCode string, expected int) error {
+	var activities []TicketActivity
+	if err := bc.db.Where("ticket_id = ? AND activity_type = ? AND status IN ?",
+		bc.ticket.ID, engine.NodeProcess, []string{engine.ActivityPending, engine.ActivityInProgress}).
+		Find(&activities).Error; err != nil {
+		return err
+	}
+
+	actual := 0
+	for _, activity := range activities {
+		var assignments []TicketAssignment
+		if err := bc.db.Where("activity_id = ?", activity.ID).Find(&assignments).Error; err != nil {
+			return err
+		}
+		for _, assignment := range assignments {
+			if bc.assignmentTargetsPosition(assignment, positionCode) {
+				actual++
+				break
+			}
+		}
+	}
+	if actual != expected {
+		return fmt.Errorf("expected %d active process activities for position %q, got %d", expected, positionCode, actual)
 	}
 	return nil
 }
@@ -567,11 +874,8 @@ func (bc *bddContext) thenNoHighConfidenceSingleRouteChoice() error {
 			return err
 		}
 		for _, assignment := range assignments {
-			if assignment.PositionID == nil {
-				continue
-			}
-			for code, pos := range bc.positions {
-				if pos.ID == *assignment.PositionID && (code == "network_admin" || code == "security_admin") {
+			for _, code := range []string{"ops_admin", "network_admin", "security_admin"} {
+				if bc.assignmentTargetsPosition(assignment, code) {
 					return fmt.Errorf("high-confidence conflict decision chose single route %q via activity %d", code, activity.ID)
 				}
 			}
@@ -628,10 +932,18 @@ func isClarificationNotice(activity *TicketActivity) bool {
 		"明确",
 		"确认",
 		"冲突",
+		"未知",
+		"枚举",
+		"不在协作规范",
+		"无法确定",
+		"人工介入",
+		"人工处理",
 		"clarify",
 		"clarification",
 		"confirm",
 		"conflict",
+		"unknown",
+		"unsupported",
 	} {
 		if strings.Contains(content, marker) {
 			return true
@@ -692,11 +1004,93 @@ func (bc *bddContext) thenNoRequesterSupplementForm() error {
 		return err
 	}
 	for _, event := range timeline {
-		if strings.Contains(event.Message, "退回申请人补充") {
+		if strings.Contains(event.Message, "退回申请人补充") && !isRequesterSupplementGuardrailText(event.Message) {
 			return fmt.Errorf("timeline still implies requester supplement: %s", event.Message)
 		}
 	}
 	return nil
+}
+
+func isRequesterSupplementGuardrailText(text string) bool {
+	for _, marker := range []string{
+		"不得把驳回默认解释为退回申请人补充",
+		"不得创建申请人补充",
+		"不能退回申请人补充",
+		"禁止退回申请人补充",
+		"协作规范未显式定义",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (bc *bddContext) thenTicketOutcomeIs(expected string) error {
+	if bc.ticket == nil {
+		return fmt.Errorf("no ticket in context")
+	}
+	if err := bc.db.First(bc.ticket, bc.ticket.ID).Error; err != nil {
+		return fmt.Errorf("refresh ticket: %w", err)
+	}
+	if bc.ticket.Outcome != expected {
+		return fmt.Errorf("expected ticket outcome %q, got %q", expected, bc.ticket.Outcome)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenTicketRejectedOrDiagnosticRecorded() error {
+	if bc.ticket == nil {
+		return fmt.Errorf("no ticket in context")
+	}
+	if err := bc.db.First(bc.ticket, bc.ticket.ID).Error; err != nil {
+		return fmt.Errorf("refresh ticket: %w", err)
+	}
+	if bc.ticket.Status == TicketStatusRejected && bc.ticket.Outcome == TicketOutcomeRejected {
+		return nil
+	}
+	return bc.thenDecisionDiagnosticRecorded()
+}
+
+func (bc *bddContext) thenActivityCountIs(expected int) error {
+	var count int64
+	if err := bc.db.Model(&TicketActivity{}).Where("ticket_id = ?", bc.ticket.ID).Count(&count).Error; err != nil {
+		return err
+	}
+	if int(count) != expected {
+		return fmt.Errorf("expected %d activities, got %d", expected, count)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenAIDecisionEvidenceContains(needle string) error {
+	var activities []TicketActivity
+	if err := bc.db.Where("ticket_id = ?", bc.ticket.ID).Find(&activities).Error; err != nil {
+		return err
+	}
+	for _, activity := range activities {
+		haystack := strings.Join([]string{
+			activity.Name,
+			activity.AIReasoning,
+			activity.DecisionReasoning,
+			string(activity.AIDecision),
+		}, "\n")
+		if strings.Contains(haystack, needle) {
+			return nil
+		}
+	}
+
+	var timeline []TicketTimeline
+	if err := bc.db.Where("ticket_id = ?", bc.ticket.ID).Find(&timeline).Error; err != nil {
+		return err
+	}
+	for _, event := range timeline {
+		haystack := strings.Join([]string{event.Message, event.Reasoning, string(event.Details)}, "\n")
+		if strings.Contains(haystack, needle) {
+			return nil
+		}
+	}
+	return fmt.Errorf("expected AI decision evidence to contain %q", needle)
 }
 
 func (bc *bddContext) thenCurrentActivityStatusIs(expected string) error {
@@ -744,4 +1138,36 @@ func (bc *bddContext) getLatestActivity() (*TicketActivity, error) {
 		return nil, fmt.Errorf("no activity found for ticket %d: %w", bc.ticket.ID, err)
 	}
 	return &activity, nil
+}
+
+func (bc *bddContext) assignmentTargetsPosition(assignment TicketAssignment, positionCode string) bool {
+	if assignment.PositionID != nil {
+		if pos, ok := bc.positions[positionCode]; ok && pos.ID == *assignment.PositionID {
+			return true
+		}
+	}
+
+	var userID uint
+	if assignment.AssigneeID != nil {
+		userID = *assignment.AssigneeID
+	} else if assignment.UserID != nil {
+		userID = *assignment.UserID
+	}
+	if userID == 0 {
+		return false
+	}
+
+	orgSvc := &testOrgService{db: bc.db}
+	for deptCode := range bc.departments {
+		eligibleIDs, err := orgSvc.FindUsersByPositionAndDepartment(positionCode, deptCode)
+		if err != nil {
+			continue
+		}
+		for _, eligibleID := range eligibleIDs {
+			if eligibleID == userID {
+				return true
+			}
+		}
+	}
+	return false
 }

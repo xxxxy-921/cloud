@@ -50,6 +50,60 @@ func TestValidateWorkflowMissingFormParticipantSuggestsRequester(t *testing.T) {
 	}
 }
 
+func TestValidateWorkflowAllowsProcessOutcomesToShareEndNode(t *testing.T) {
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"process","type":"process","data":{"label":"处理","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"完成"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"process","data":{}},
+			{"id":"e2","source":"process","target":"end","data":{"outcome":"approved"}},
+			{"id":"e3","source":"process","target":"end","data":{"outcome":"rejected"}}
+		]
+	}`)
+
+	var blocking []ValidationError
+	for _, err := range ValidateWorkflow(workflowJSON) {
+		if !err.IsWarning() {
+			blocking = append(blocking, err)
+		}
+	}
+	if len(blocking) > 0 {
+		t.Fatalf("expected shared end node to validate, got %+v", blocking)
+	}
+}
+
+func TestValidateWorkflowRejectsProcessOutcomesSharingNonEndNode(t *testing.T) {
+	workflowJSON := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"process","type":"process","data":{"label":"处理","participants":[{"type":"requester"}]}},
+			{"id":"next","type":"process","data":{"label":"继续处理","participants":[{"type":"requester"}]}},
+			{"id":"end","type":"end","data":{"label":"完成"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"process","data":{}},
+			{"id":"e2","source":"process","target":"next","data":{"outcome":"approved"}},
+			{"id":"e3","source":"process","target":"next","data":{"outcome":"rejected"}},
+			{"id":"e4","source":"next","target":"end","data":{"outcome":"approved"}},
+			{"id":"e5","source":"next","target":"end","data":{"outcome":"rejected"}}
+		]
+	}`)
+
+	var found bool
+	for _, err := range ValidateWorkflow(workflowJSON) {
+		if !err.IsWarning() && strings.Contains(err.Message, "共同指向非结束节点") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected shared non-end target to be rejected")
+	}
+}
+
 func TestValidateWorkflowClassicNodeMatrix(t *testing.T) {
 	workflowJSON := json.RawMessage(`{
 		"nodes": [
@@ -234,6 +288,63 @@ func TestValidateFormSchemaReferences(t *testing.T) {
 			if e.IsWarning() && strings.Contains(e.Message, "formSchema") {
 				t.Fatalf("unexpected formSchema warning when no upstream form: %s", e.Message)
 			}
+		}
+	})
+
+	t.Run("falls back to generated intake form schema", func(t *testing.T) {
+		wf := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"gw","type":"exclusive","data":{"label":"分支"}},
+				{"id":"form1","type":"form","data":{"label":"申请表","participants":[{"type":"requester"}],"formSchema":{"fields":[{"key":"request_kind","type":"select","label":"类型"}]}}},
+				{"id":"p1","type":"process","data":{"label":"A","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"gw","data":{}},
+				{"id":"e2","source":"gw","target":"form1","data":{"condition":{"field":"form.request_kind","operator":"equals","value":"vpn"}}},
+				{"id":"e3","source":"gw","target":"p1","data":{"default":true}},
+				{"id":"e4","source":"form1","target":"end","data":{}},
+				{"id":"e5","source":"p1","target":"end","data":{"outcome":"approved"}},
+				{"id":"e5r","source":"p1","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+		errs := ValidateWorkflow(wf)
+		for _, e := range errs {
+			if e.IsWarning() && strings.Contains(e.Message, "formSchema") {
+				t.Fatalf("unexpected formSchema warning when intake schema has field: %s", e.Message)
+			}
+		}
+	})
+
+	t.Run("warns when generated intake form schema misses field", func(t *testing.T) {
+		wf := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"gw","type":"exclusive","data":{"label":"分支"}},
+				{"id":"form1","type":"form","data":{"label":"申请表","participants":[{"type":"requester"}],"formSchema":{"fields":[{"key":"request_kind","type":"select","label":"类型"}]}}},
+				{"id":"p1","type":"process","data":{"label":"A","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"gw","data":{}},
+				{"id":"e2","source":"gw","target":"form1","data":{"condition":{"field":"form.urgency","operator":"equals","value":"high"}}},
+				{"id":"e3","source":"gw","target":"p1","data":{"default":true}},
+				{"id":"e4","source":"form1","target":"end","data":{}},
+				{"id":"e5","source":"p1","target":"end","data":{"outcome":"approved"}},
+				{"id":"e5r","source":"p1","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+		errs := ValidateWorkflow(wf)
+		var found bool
+		for _, e := range errs {
+			if e.IsWarning() && strings.Contains(e.Message, "form.urgency") && strings.Contains(e.Message, "申请确认表单") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected missing intake schema field warning, got %+v", errs)
 		}
 	})
 }

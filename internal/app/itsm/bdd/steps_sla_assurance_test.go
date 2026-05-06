@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"metis/internal/app"
 	. "metis/internal/app/itsm/domain"
+	"strings"
 	"time"
 
 	"github.com/cucumber/godog"
@@ -26,10 +28,23 @@ const bddSLAAssuranceAgentPrompt = `你是 SLA 保障岗，负责监督智能 IT
 func registerSLAAssuranceSteps(sc *godog.ScenarioContext, bc *bddContext) {
 	sc.Given(`^已发布带 SLA 的智能服务和 SLA 保障岗$`, bc.givenPublishedSLAServiceAndAssuranceAgent)
 	sc.Given(`^存在响应 SLA 已超时且命中 "([^"]*)" 升级规则的工单$`, bc.givenResponseSLABreachedTicketWithRule)
+	sc.Given(`^存在响应 SLA 尚未超时但配置 "([^"]*)" 升级规则的工单$`, bc.givenResponseSLANotBreachedTicketWithRule)
+	sc.Given(`^存在响应 SLA 已超时但 "([^"]*)" 升级规则需等待 (\d+) 分钟的工单$`, bc.givenResponseSLABreachedTicketWithDelayedRule)
+	sc.Given(`^已记录当前 SLA 升级规则的 "([^"]*)" 时间线$`, bc.givenCurrentSLAEscalationRuleRecorded)
+	sc.Given(`^SLA 保障岗未绑定$`, bc.givenSLAAssurancePostUnbound)
 	sc.When(`^执行 SLA 保障扫描$`, bc.whenRunSLAAssuranceScan)
+	sc.When(`^执行 SLA 保障扫描，使用 "([^"]*)" 模拟智能体$`, bc.whenRunSLAAssuranceScanWithMode)
+	sc.When(`^执行 SLA 保障扫描，AI 执行器不可用$`, bc.whenRunSLAAssuranceScanWithoutExecutor)
 	sc.Then(`^SLA 保障岗已调用工具 "([^"]*)"$`, bc.thenSLAAssuranceToolCalled)
+	sc.Then(`^SLA 保障岗未调用工具 "([^"]*)"$`, bc.thenSLAAssuranceToolNotCalled)
+	sc.Then(`^SLA 保障工具 "([^"]*)" 返回错误包含 "([^"]*)"$`, bc.thenSLAAssuranceToolErrorContains)
 	sc.Then(`^工单已转派给 "([^"]*)"$`, bc.thenTicketAssignedToUser)
+	sc.Then(`^工单处理人为 "([^"]*)"$`, bc.thenTicketAssignedToUser)
 	sc.Then(`^工单优先级为 "([^"]*)"$`, bc.thenTicketPriorityIs)
+	sc.Then(`^工单 SLA 状态为 "([^"]*)"$`, bc.thenTicketSLAStatusIs)
+	sc.Then(`^时间线中 "([^"]*)" 类型事件数量为 (\d+)$`, bc.thenTimelineEventCountIs)
+	sc.Then(`^最新 "([^"]*)" 时间线原因包含 "([^"]*)"$`, bc.thenLatestTimelineReasoningContains)
+	sc.Then(`^最新 "([^"]*)" 时间线详情包含当前 SLA 规则$`, bc.thenLatestTimelineDetailsContainCurrentSLARule)
 }
 
 func (bc *bddContext) givenPublishedSLAServiceAndAssuranceAgent() error {
@@ -109,6 +124,18 @@ func (bc *bddContext) givenPublishedSLAServiceAndAssuranceAgent() error {
 }
 
 func (bc *bddContext) givenResponseSLABreachedTicketWithRule(actionType string) error {
+	return bc.createResponseSLATicketWithRule(actionType, 0, -5*time.Minute)
+}
+
+func (bc *bddContext) givenResponseSLANotBreachedTicketWithRule(actionType string) error {
+	return bc.createResponseSLATicketWithRule(actionType, 0, 5*time.Minute)
+}
+
+func (bc *bddContext) givenResponseSLABreachedTicketWithDelayedRule(actionType string, waitMinutes int) error {
+	return bc.createResponseSLATicketWithRule(actionType, waitMinutes, -5*time.Minute)
+}
+
+func (bc *bddContext) createResponseSLATicketWithRule(actionType string, waitMinutes int, responseDeadlineOffset time.Duration) error {
 	if bc.service == nil || bc.service.SLAID == nil {
 		return fmt.Errorf("SLA service is not prepared")
 	}
@@ -129,7 +156,7 @@ func (bc *bddContext) givenResponseSLABreachedTicketWithRule(actionType string) 
 		SLAID:        *bc.service.SLAID,
 		TriggerType:  "response_timeout",
 		Level:        1,
-		WaitMinutes:  0,
+		WaitMinutes:  waitMinutes,
 		ActionType:   actionType,
 		TargetConfig: JSONField(targetConfig),
 		IsActive:     true,
@@ -139,7 +166,7 @@ func (bc *bddContext) givenResponseSLABreachedTicketWithRule(actionType string) 
 	}
 
 	now := time.Now()
-	responseDeadline := now.Add(-5 * time.Minute)
+	responseDeadline := now.Add(responseDeadlineOffset)
 	resolutionDeadline := now.Add(55 * time.Minute)
 	ticket := &Ticket{
 		Code:                  fmt.Sprintf("SLA-BDD-%d", now.UnixNano()),
@@ -161,6 +188,41 @@ func (bc *bddContext) givenResponseSLABreachedTicketWithRule(actionType string) 
 		return fmt.Errorf("create ticket: %w", err)
 	}
 	bc.ticket = ticket
+	return nil
+}
+
+func (bc *bddContext) givenCurrentSLAEscalationRuleRecorded(eventType string) error {
+	if bc.ticket == nil {
+		return fmt.Errorf("no ticket in context")
+	}
+	rule, err := bc.currentSLAEscalationRule()
+	if err != nil {
+		return err
+	}
+	details, err := json.Marshal(map[string]any{
+		"rule_id":      rule.ID,
+		"sla_id":       rule.SLAID,
+		"trigger_type": rule.TriggerType,
+		"level":        rule.Level,
+		"action_type":  rule.ActionType,
+		"agent_id":     bc.slaAssuranceAgentID,
+		"agent_name":   "BDD SLA 保障智能体",
+	})
+	if err != nil {
+		return err
+	}
+	return bc.db.Create(&TicketTimeline{
+		TicketID:   bc.ticket.ID,
+		OperatorID: 0,
+		EventType:  eventType,
+		Message:    "SLA 升级：已由既有记录处理",
+		Details:    JSONField(details),
+		Reasoning:  "BDD 预置既有 SLA 保障记录",
+	}).Error
+}
+
+func (bc *bddContext) givenSLAAssurancePostUnbound() error {
+	bc.slaAssuranceAgentID = 0
 	return nil
 }
 
@@ -196,7 +258,24 @@ func (bc *bddContext) slaTargetConfig(actionType string) ([]byte, error) {
 
 func (bc *bddContext) whenRunSLAAssuranceScan() error {
 	bc.toolCalls = nil
-	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall}
+	bc.toolResults = nil
+	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall, recordToolResult: bc.recordToolResult}
+	return bc.runSLAAssuranceScanWithExecutor(executor)
+}
+
+func (bc *bddContext) whenRunSLAAssuranceScanWithMode(mode string) error {
+	bc.toolCalls = nil
+	bc.toolResults = nil
+	return bc.runSLAAssuranceScanWithExecutor(&deterministicSLAAssuranceExecutor{bc: bc, mode: mode})
+}
+
+func (bc *bddContext) whenRunSLAAssuranceScanWithoutExecutor() error {
+	bc.toolCalls = nil
+	bc.toolResults = nil
+	return bc.runSLAAssuranceScanWithExecutor(nil)
+}
+
+func (bc *bddContext) runSLAAssuranceScanWithExecutor(executor app.AIDecisionExecutor) error {
 	handler := engine.HandleSLACheck(bc.db, &bddConfigProvider{bc: bc}, executor, engine.NewParticipantResolver(nil), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -207,11 +286,99 @@ func (bc *bddContext) whenRunSLAAssuranceScan() error {
 	return nil
 }
 
+type deterministicSLAAssuranceExecutor struct {
+	bc   *bddContext
+	mode string
+}
+
+func (e *deterministicSLAAssuranceExecutor) Execute(_ context.Context, _ uint, req app.AIDecisionRequest) (*app.AIDecisionResponse, error) {
+	if e.mode == "只说不做" {
+		return &app.AIDecisionResponse{Content: "我已经声称已经处理该 SLA 升级，请放心。", Turns: 1}, nil
+	}
+
+	rule, err := e.bc.currentSLAEscalationRule()
+	if err != nil {
+		return nil, err
+	}
+	ticketID := e.bc.ticket.ID
+	if e.mode == "错误工单" {
+		ticketID += 999
+	}
+	ruleID := rule.ID
+	if e.mode == "错误规则" {
+		ruleID += 999
+	}
+
+	if err := e.callTool(req, "sla.risk_queue", json.RawMessage(`{}`)); err != nil {
+		return nil, err
+	}
+	if err := e.callTool(req, "sla.ticket_context", mustMarshalJSON(map[string]any{"ticket_id": e.bc.ticket.ID})); err != nil {
+		return nil, err
+	}
+	if err := e.callTool(req, "sla.escalation_rules", mustMarshalJSON(map[string]any{"ticket_id": e.bc.ticket.ID, "trigger_type": rule.TriggerType})); err != nil {
+		return nil, err
+	}
+	if err := e.callTool(req, "sla.trigger_escalation", mustMarshalJSON(map[string]any{
+		"ticket_id": ticketID,
+		"rule_id":   ruleID,
+		"reasoning": fmt.Sprintf("BDD 模拟智能体按 %s 模式触发 SLA 升级", e.mode),
+	})); err != nil {
+		return nil, err
+	}
+	return &app.AIDecisionResponse{Content: "done", Turns: 1}, nil
+}
+
+func (e *deterministicSLAAssuranceExecutor) callTool(req app.AIDecisionRequest, name string, args json.RawMessage) error {
+	e.bc.recordToolCall(name, args)
+	result, err := req.ToolHandler(name, args)
+	if err != nil {
+		payload := json.RawMessage(fmt.Sprintf(`{"error":%q}`, err.Error()))
+		e.bc.recordToolResult(name, payload, true)
+		return err
+	}
+	e.bc.recordToolResult(name, result, false)
+	return nil
+}
+
+var _ app.AIDecisionExecutor = (*deterministicSLAAssuranceExecutor)(nil)
+
+func mustMarshalJSON(v any) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
 func (bc *bddContext) thenSLAAssuranceToolCalled(name string) error {
 	if bc.hasToolCall(name) {
 		return nil
 	}
 	return fmt.Errorf("expected SLA assurance tool %q to be called, got %+v", name, bc.toolCalls)
+}
+
+func (bc *bddContext) thenSLAAssuranceToolNotCalled(name string) error {
+	if !bc.hasToolCall(name) {
+		return nil
+	}
+	return fmt.Errorf("expected SLA assurance tool %q not to be called, got %+v", name, bc.toolCalls)
+}
+
+func (bc *bddContext) thenSLAAssuranceToolErrorContains(name, expected string) error {
+	for i := len(bc.toolResults) - 1; i >= 0; i-- {
+		result := bc.toolResults[i]
+		if result.Name != name {
+			continue
+		}
+		if !result.IsError {
+			return fmt.Errorf("expected SLA assurance tool %q to return error, got success: %s", name, result.Output)
+		}
+		if !strings.Contains(result.Output, expected) {
+			return fmt.Errorf("expected SLA assurance tool %q error to contain %q, got %s", name, expected, result.Output)
+		}
+		return nil
+	}
+	return fmt.Errorf("SLA assurance tool result %q not found; results=%+v", name, bc.toolResults)
 }
 
 func (bc *bddContext) thenTicketAssignedToUser(username string) error {
@@ -234,6 +401,90 @@ func (bc *bddContext) thenTicketAssignedToUser(username string) error {
 		return fmt.Errorf("expected assignee %s(%d), got %d", username, user.ID, actual)
 	}
 	return nil
+}
+
+func (bc *bddContext) thenTicketSLAStatusIs(expected string) error {
+	if bc.ticket == nil {
+		return fmt.Errorf("no ticket in context")
+	}
+	var ticket Ticket
+	if err := bc.db.First(&ticket, bc.ticket.ID).Error; err != nil {
+		return fmt.Errorf("refresh ticket: %w", err)
+	}
+	if ticket.SLAStatus != expected {
+		return fmt.Errorf("expected ticket SLA status %q, got %q", expected, ticket.SLAStatus)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenTimelineEventCountIs(eventType string, expected int) error {
+	count, err := bc.timelineEventCount(eventType)
+	if err != nil {
+		return err
+	}
+	if count != int64(expected) {
+		return fmt.Errorf("expected %q timeline count %d, got %d", eventType, expected, count)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenLatestTimelineReasoningContains(eventType, expected string) error {
+	event, err := bc.latestTimelineByType(eventType)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(event.Reasoning, expected) {
+		return fmt.Errorf("expected latest %q timeline reasoning to contain %q, got %q", eventType, expected, event.Reasoning)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenLatestTimelineDetailsContainCurrentSLARule(eventType string) error {
+	event, err := bc.latestTimelineByType(eventType)
+	if err != nil {
+		return err
+	}
+	rule, err := bc.currentSLAEscalationRule()
+	if err != nil {
+		return err
+	}
+	details := string(event.Details)
+	expectedFragments := []string{
+		fmt.Sprintf(`"rule_id":%d`, rule.ID),
+		fmt.Sprintf(`"trigger_type":"%s"`, rule.TriggerType),
+		fmt.Sprintf(`"action_type":"%s"`, rule.ActionType),
+		fmt.Sprintf(`"agent_id":%d`, bc.slaAssuranceAgentID),
+	}
+	for _, fragment := range expectedFragments {
+		if !strings.Contains(details, fragment) {
+			return fmt.Errorf("expected latest %q timeline details to contain %s, got %s", eventType, fragment, details)
+		}
+	}
+	return nil
+}
+
+func (bc *bddContext) latestTimelineByType(eventType string) (*TicketTimeline, error) {
+	if bc.ticket == nil {
+		return nil, fmt.Errorf("no ticket in context")
+	}
+	var event TicketTimeline
+	if err := bc.db.Where("ticket_id = ? AND event_type = ?", bc.ticket.ID, eventType).
+		Order("id DESC").
+		First(&event).Error; err != nil {
+		return nil, fmt.Errorf("load latest %q timeline: %w", eventType, err)
+	}
+	return &event, nil
+}
+
+func (bc *bddContext) currentSLAEscalationRule() (*EscalationRule, error) {
+	if bc.service == nil || bc.service.SLAID == nil {
+		return nil, fmt.Errorf("SLA service is not prepared")
+	}
+	var rule EscalationRule
+	if err := bc.db.Where("sla_id = ?", *bc.service.SLAID).Order("id DESC").First(&rule).Error; err != nil {
+		return nil, fmt.Errorf("load current SLA escalation rule: %w", err)
+	}
+	return &rule, nil
 }
 
 func (bc *bddContext) thenTicketPriorityIs(priorityCode string) error {

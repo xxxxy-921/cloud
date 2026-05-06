@@ -31,7 +31,11 @@ func TestBDDAgentic(t *testing.T) {
 	if !hasLLMConfig() {
 		t.Skip("Agentic BDD tests require LLM: set LLM_TEST_BASE_URL, LLM_TEST_API_KEY, LLM_TEST_MODEL")
 	}
-	runGodogSuite(t, "itsm-bdd-agentic", initializeScenario, bddPaths("features/agentic"), bddTags("~@wip"))
+	runGodogSuite(t, "itsm-bdd-agentic", initializeScenario, bddPaths("features/agentic"), bddTags("~@wip && ~@deterministic"))
+}
+
+func TestBDDAgenticDeterministic(t *testing.T) {
+	runGodogSuite(t, "itsm-bdd-agentic-deterministic", initializeScenario, bddPaths("features/agentic"), bddTags("@deterministic && ~@wip"))
 }
 
 func runGodogSuite(t *testing.T, name string, initializer func(*godog.ScenarioContext), paths []string, tags string) {
@@ -101,6 +105,7 @@ func initializeScenario(sc *godog.ScenarioContext) {
 	registerSessionIsolationSteps(sc, bc)
 	registerKnowledgeRoutingSteps(sc, bc)
 	registerSLAAssuranceSteps(sc, bc)
+	registerAgenticQualitySteps(sc, bc)
 }
 
 func initializeAPIScenario(sc *godog.ScenarioContext) {

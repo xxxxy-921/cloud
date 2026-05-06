@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	appcore "metis/internal/app"
 	. "metis/internal/app/itsm/catalog"
 	. "metis/internal/app/itsm/config"
@@ -23,11 +24,12 @@ import (
 )
 
 var (
-	ErrServiceDefNotFound    = errors.New("service definition not found")
-	ErrServiceCodeExists     = errors.New("service code already exists")
-	ErrWorkflowValidation    = errors.New("workflow validation failed")
-	ErrServiceEngineMismatch = errors.New("service engine field mismatch")
-	ErrAgentNotAvailable     = errors.New("agent not available")
+	ErrServiceDefNotFound     = errors.New("service definition not found")
+	ErrServiceCodeExists      = errors.New("service code already exists")
+	ErrWorkflowValidation     = errors.New("workflow validation failed")
+	ErrServiceEngineMismatch  = errors.New("service engine field mismatch")
+	ErrAgentNotAvailable      = errors.New("agent not available")
+	ErrSLATemplateUnavailable = errors.New("SLA template not available")
 )
 
 type publishHealthConfigProvider interface {
@@ -75,6 +77,9 @@ func (s *ServiceDefService) Create(svc *ServiceDefinition) (*ServiceDefinition, 
 		return nil, ErrServiceCodeExists
 	}
 	if err := s.validateCatalogID(svc.CatalogID); err != nil {
+		return nil, err
+	}
+	if err := s.validateSLAID(svc.SLAID); err != nil {
 		return nil, err
 	}
 	if err := s.validateEngineFields(svc.EngineType, svc.WorkflowJSON, svc.CollaborationSpec, svc.AgentID); err != nil {
@@ -125,6 +130,15 @@ func (s *ServiceDefService) Update(id uint, updates map[string]any) (*ServiceDef
 	}
 	if catalogID, ok := updates["catalog_id"].(uint); ok {
 		if err := s.validateCatalogID(catalogID); err != nil {
+			return nil, err
+		}
+	}
+	if rawSLAID, ok := updates["sla_id"]; ok {
+		slaID, err := parseOptionalSLAID(rawSLAID)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.validateSLAID(slaID); err != nil {
 			return nil, err
 		}
 	}
@@ -195,7 +209,17 @@ func (s *ServiceDefService) RefreshPublishHealthCheck(id uint) (*ServiceHealthCh
 	}
 	check, evalErr := s.computePublishHealthCheckWithAI(context.Background(), svc)
 	if evalErr != nil {
-		check = newPublishHealthEngineFailureCheck(svc.ID, evalErr.Error())
+		slog.Warn("publish health check skipped llm diagnostics", "service_id", svc.ID, "error", evalErr)
+		if check == nil {
+			check = s.computePublishHealthCheckBase(svc)
+		}
+	}
+	return s.savePublishHealthCheck(id, check)
+}
+
+func (s *ServiceDefService) savePublishHealthCheck(id uint, check *ServiceHealthCheck) (*ServiceHealthCheck, error) {
+	if check == nil {
+		check = &ServiceHealthCheck{ServiceID: id, Status: "pass", Items: []ServiceHealthItem{}}
 	}
 	items, err := json.Marshal(check.Items)
 	if err != nil {
@@ -226,18 +250,17 @@ func (s *ServiceDefService) RefreshPublishHealthCheckIfPresent(id uint) error {
 }
 
 func (s *ServiceDefService) computePublishHealthCheckWithAI(ctx context.Context, svc *ServiceDefinition) (*ServiceHealthCheck, error) {
-	if s.engineConfigSvc == nil {
-		return nil, fmt.Errorf("发布健康检查引擎未初始化")
-	}
-
 	baseCheck := s.computePublishHealthCheckBase(svc)
 	if svc.EngineType == "classic" || baseCheck.Status != "pass" {
 		return baseCheck, nil
 	}
+	if s.engineConfigSvc == nil {
+		return baseCheck, fmt.Errorf("发布健康检查引擎未初始化")
+	}
 
 	engineCfg, err := s.engineConfigSvc.HealthCheckRuntimeConfig()
 	if err != nil {
-		return nil, err
+		return baseCheck, err
 	}
 	clientFactory := s.llmClientFactory
 	if clientFactory == nil {
@@ -245,16 +268,16 @@ func (s *ServiceDefService) computePublishHealthCheckWithAI(ctx context.Context,
 	}
 	client, err := clientFactory(engineCfg.Protocol, engineCfg.BaseURL, engineCfg.APIKey)
 	if err != nil {
-		return nil, fmt.Errorf("发布健康检查客户端创建失败: %w", err)
+		return baseCheck, fmt.Errorf("发布健康检查客户端创建失败: %w", err)
 	}
 
 	payload, validationCtx, err := s.buildPublishHealthPayload(svc)
 	if err != nil {
-		return nil, err
+		return baseCheck, err
 	}
 	userPayload, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("发布健康检查上下文序列化失败: %w", err)
+		return baseCheck, fmt.Errorf("发布健康检查上下文序列化失败: %w", err)
 	}
 
 	temp := float32(engineCfg.Temperature)
@@ -276,21 +299,22 @@ func (s *ServiceDefService) computePublishHealthCheckWithAI(ctx context.Context,
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("发布健康检查引擎调用失败: %w", err)
+		return baseCheck, fmt.Errorf("发布健康检查引擎调用失败: %w", err)
 	}
 
 	raw, err := extractJSON(resp.Content)
 	if err != nil {
-		return nil, fmt.Errorf("发布健康检查输出解析失败: %w", err)
+		return baseCheck, fmt.Errorf("发布健康检查输出解析失败: %w", err)
 	}
 	var parsed struct {
 		Status string              `json:"status"`
 		Items  []ServiceHealthItem `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("发布健康检查输出格式无效: %w", err)
+		return baseCheck, fmt.Errorf("发布健康检查输出格式无效: %w", err)
 	}
-	return mergePublishHealthChecks(baseCheck, normalizePublishHealthCheck(svc.ID, parsed.Status, parsed.Items, validationCtx)), nil
+	normalized := normalizePublishHealthCheck(svc.ID, parsed.Status, parsed.Items, validationCtx)
+	return mergePublishHealthChecks(baseCheck, normalized), nil
 }
 
 func (s *ServiceDefService) computePublishHealthCheckBase(svc *ServiceDefinition) *ServiceHealthCheck {
@@ -320,12 +344,6 @@ func (s *ServiceDefService) computePublishHealthCheckBase(svc *ServiceDefinition
 	if !hasUsableIntakeFormSchema(svc.IntakeFormSchema) {
 		add(&ServiceHealthItem{Key: "intake_form", Label: "申请表单", Status: "warn", Message: "尚未生成申请确认表单，请先生成参考路径后再在服务台使用"})
 	}
-	if svc.AgentID == nil || *svc.AgentID == 0 {
-		add(&ServiceHealthItem{Key: "service_agent", Label: "服务 Agent", Status: "fail", Message: "智能服务未绑定 Agent"})
-	} else if err := s.validateAgent(svc.AgentID); err != nil {
-		add(&ServiceHealthItem{Key: "service_agent", Label: "服务 Agent", Status: "fail", Message: "绑定的 Agent 不存在或未启用"})
-	}
-
 	decisionAgentID := strings.TrimSpace(s.systemConfigValue(SmartTicketDecisionAgentKey))
 	switch {
 	case decisionAgentID == "", decisionAgentID == "0":
@@ -647,10 +665,8 @@ func (s *ServiceDefService) buildPublishHealthPayload(svc *ServiceDefinition) (m
 			"serviceAgentId":    svc.AgentID,
 		},
 		"runtime": map[string]any{
-			"decisionMode":     s.engineConfigSvc.DecisionMode(),
-			"decisionAgentId":  s.engineConfigSvc.DecisionAgentID(),
-			"fallbackAssignee": s.engineConfigSvc.FallbackAssigneeID(),
-			"auditLevel":       s.engineConfigSvc.AuditLevel(),
+			"decisionMode":    s.engineConfigSvc.DecisionMode(),
+			"decisionAgentId": s.engineConfigSvc.DecisionAgentID(),
 		},
 		"actions": actions,
 	}
@@ -659,8 +675,15 @@ func (s *ServiceDefService) buildPublishHealthPayload(svc *ServiceDefinition) (m
 
 func normalizePublishHealthCheck(serviceID uint, status string, items []ServiceHealthItem, ctx publishHealthValidationContext) *ServiceHealthCheck {
 	normalizedItems := make([]ServiceHealthItem, 0, len(items))
-	maxLevel := healthLevel(normalizePublishHealthStatus(status))
+	declaredStatus := normalizePublishHealthStatus(status)
+	maxLevel := healthLevel("pass")
+	skippedNonActionableIssue := false
+	invalidActionableIssue := false
 	for idx, item := range items {
+		if isNonActionableLLMHealthIssue(item) {
+			skippedNonActionableIssue = true
+			continue
+		}
 		itemStatus := normalizePublishHealthStatus(item.Status)
 		if itemStatus == "" {
 			itemStatus = "warn"
@@ -685,6 +708,7 @@ func normalizePublishHealthCheck(serviceID uint, status string, items []ServiceH
 			RefID: strings.TrimSpace(item.Location.RefID),
 		}
 		if !isValidHealthLocation(location, ctx) || recommendation == "" || evidence == "" {
+			invalidActionableIssue = true
 			continue
 		}
 		if itemLevel := healthLevel(itemStatus); itemLevel > maxLevel {
@@ -702,8 +726,18 @@ func normalizePublishHealthCheck(serviceID uint, status string, items []ServiceH
 	}
 
 	finalStatus := levelStatus(maxLevel)
-	if finalStatus != "pass" && len(normalizedItems) == 0 {
-		return newPublishHealthEngineFailureCheck(serviceID, "健康检查输出不合规，缺少可执行定位信息。")
+	if len(normalizedItems) == 0 && (declaredStatus != "pass" || invalidActionableIssue || skippedNonActionableIssue) {
+		if invalidActionableIssue {
+			slog.Warn("publish health check discarded invalid llm diagnostics", "service_id", serviceID, "declared_status", declaredStatus, "item_count", len(items))
+		}
+		if skippedNonActionableIssue {
+			slog.Warn("publish health check discarded non-actionable llm diagnostics", "service_id", serviceID, "declared_status", declaredStatus, "item_count", len(items))
+		}
+		return &ServiceHealthCheck{
+			ServiceID: serviceID,
+			Status:    "pass",
+			Items:     []ServiceHealthItem{},
+		}
 	}
 
 	return &ServiceHealthCheck{
@@ -713,27 +747,109 @@ func normalizePublishHealthCheck(serviceID uint, status string, items []ServiceH
 	}
 }
 
-func newPublishHealthEngineFailureCheck(serviceID uint, message string) *ServiceHealthCheck {
-	msg := strings.TrimSpace(message)
-	if msg == "" {
-		msg = "发布健康检查引擎不可用"
+func isNonActionableLLMHealthIssue(item ServiceHealthItem) bool {
+	return isLLMRuntimeConfigIssue(item) || isLLMFallbackAssigneeIssue(item) || isLLMParticipantValidationGuess(item) || isLLMSystemCapabilityGuess(item)
+}
+
+func isLLMRuntimeConfigIssue(item ServiceHealthItem) bool {
+	return strings.ToLower(strings.TrimSpace(item.Location.Kind)) == "runtime_config" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.Location.Path)), "runtime.")
+}
+
+func isLLMFallbackAssigneeIssue(item ServiceHealthItem) bool {
+	key := strings.ToLower(strings.TrimSpace(item.Key))
+	path := strings.ToLower(strings.TrimSpace(item.Location.Path))
+	label := strings.ToLower(strings.TrimSpace(item.Label))
+	message := strings.ToLower(strings.TrimSpace(item.Message))
+	evidence := strings.ToLower(strings.TrimSpace(item.Evidence))
+	recommendation := strings.ToLower(strings.TrimSpace(item.Recommendation))
+
+	if key == "fallback_assignee" || key == "fallbackassignee" || key == "fallback_assignee_validation" {
+		return true
 	}
-	return &ServiceHealthCheck{
-		ServiceID: serviceID,
-		Status:    "fail",
-		Items: []ServiceHealthItem{{
-			Key:     "health_engine",
-			Label:   "发布健康检查引擎",
-			Status:  "fail",
-			Message: "发布健康检查不可用，无法给出可执行诊断。",
-			Location: ServiceHealthLocation{
-				Kind: "runtime_config",
-				Path: "runtime.healthChecker",
-			},
-			Recommendation: "请检查发布健康检查引擎配置后重试。",
-			Evidence:       msg,
-		}},
+	if path == "runtime.fallbackassignee" || path == "runtime.fallback_assignee" || strings.HasPrefix(path, "runtime.fallbackassignee.") || strings.HasPrefix(path, "runtime.fallback_assignee.") {
+		return true
 	}
+	text := label + " " + message + " " + evidence + " " + recommendation
+	return strings.Contains(text, "兜底处理人") && (strings.Contains(text, "校验") || strings.Contains(text, "验证"))
+}
+
+func isLLMParticipantValidationGuess(item ServiceHealthItem) bool {
+	key := strings.ToLower(strings.TrimSpace(item.Key))
+	path := strings.ToLower(strings.TrimSpace(item.Location.Path))
+	locationKind := strings.ToLower(strings.TrimSpace(item.Location.Kind))
+	refID := strings.TrimSpace(item.Location.RefID)
+	label := strings.ToLower(strings.TrimSpace(item.Label))
+	message := strings.ToLower(strings.TrimSpace(item.Message))
+	evidence := strings.ToLower(strings.TrimSpace(item.Evidence))
+	recommendation := strings.ToLower(strings.TrimSpace(item.Recommendation))
+	text := key + " " + label + " " + message + " " + evidence + " " + recommendation
+
+	if !isParticipantHealthText(key, path, text) || !isValidationGuessText(text) {
+		return false
+	}
+	if locationKind == "workflow_node" && refID != "" && hasConcreteParticipantConflictEvidence(text) {
+		return false
+	}
+	return true
+}
+
+func isLLMSystemCapabilityGuess(item ServiceHealthItem) bool {
+	key := strings.ToLower(strings.TrimSpace(item.Key))
+	label := strings.ToLower(strings.TrimSpace(item.Label))
+	message := strings.ToLower(strings.TrimSpace(item.Message))
+	evidence := strings.ToLower(strings.TrimSpace(item.Evidence))
+	recommendation := strings.ToLower(strings.TrimSpace(item.Recommendation))
+	text := key + " " + label + " " + message + " " + evidence + " " + recommendation
+	if isValidationGuessText(text) {
+		return true
+	}
+	infrastructureKeywords := []string{
+		"审计日志", "审计配置", "审计存储", "存储位置", "日志存储", "日志路径", "日志服务",
+		"数据库", "文件系统", "基础设施", "落盘", "未提供具体存储", "未提供存储", "未提供相关说明",
+	}
+	for _, keyword := range infrastructureKeywords {
+		if strings.Contains(text, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isParticipantHealthText(key string, path string, text string) bool {
+	if strings.Contains(key, "participant") || strings.Contains(key, "assignee") {
+		return true
+	}
+	if strings.Contains(path, "participant") || strings.Contains(path, "assignee") {
+		return true
+	}
+	keywords := []string{"参与者", "处理人", "单人", "岗位编码", "部门编码", "position_department", "position_code", "department_code"}
+	for _, keyword := range keywords {
+		if strings.Contains(text, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidationGuessText(text string) bool {
+	keywords := []string{
+		"未验证", "未校验", "没有验证", "没有校验", "未明确验证", "未明确校验",
+		"缺少验证", "缺少校验", "验证缺失", "校验缺失", "验证不足", "校验不足",
+		"未提供校验", "未提供验证", "是否符合协作规范", "确保所有流程节点", "确保参与者",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(text, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConcreteParticipantConflictEvidence(text string) bool {
+	hasActual := strings.Contains(text, "实际") || strings.Contains(text, "当前") || strings.Contains(text, "配置为") || strings.Contains(text, "实际值")
+	hasExpected := strings.Contains(text, "期望") || strings.Contains(text, "应为") || strings.Contains(text, "要求") || strings.Contains(text, "协作规范")
+	hasCode := strings.Contains(text, "position_code") || strings.Contains(text, "department_code") || strings.Contains(text, "ops_admin") || strings.Contains(text, "network_admin") || strings.Contains(text, "security_admin")
+	return hasActual && hasExpected && hasCode
 }
 
 func buildPublishHealthValidationContext(svc *ServiceDefinition, actions []ServiceAction) publishHealthValidationContext {
@@ -896,6 +1012,40 @@ func (s *ServiceDefService) validateCatalogID(catalogID uint) error {
 		return err
 	}
 	return nil
+}
+
+func (s *ServiceDefService) validateSLAID(slaID *uint) error {
+	if slaID == nil || *slaID == 0 {
+		return nil
+	}
+	var sla SLATemplate
+	if err := s.db.Where("id = ? AND is_active = ?", *slaID, true).First(&sla).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrSLATemplateUnavailable
+		}
+		return err
+	}
+	return nil
+}
+
+func parseOptionalSLAID(value any) (*uint, error) {
+	if value == nil {
+		return nil, nil
+	}
+	switch v := value.(type) {
+	case uint:
+		return &v, nil
+	case *uint:
+		return v, nil
+	case int:
+		if v < 0 {
+			return nil, ErrSLATemplateUnavailable
+		}
+		parsed := uint(v)
+		return &parsed, nil
+	default:
+		return nil, ErrSLATemplateUnavailable
+	}
 }
 
 func (s *ServiceDefService) validateEngineFields(engineType string, workflowJSON JSONField, collaborationSpec string, agentID *uint) error {

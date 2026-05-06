@@ -3,32 +3,33 @@ package domain
 import (
 	"time"
 
+	"metis/internal/app/itsm/contract"
 	"metis/internal/model"
 )
 
 // Ticket status constants
 const (
-	TicketStatusSubmitted           = "submitted"
-	TicketStatusWaitingHuman        = "waiting_human"
-	TicketStatusApprovedDecisioning = "approved_decisioning"
-	TicketStatusRejectedDecisioning = "rejected_decisioning"
-	TicketStatusDecisioning         = "decisioning"
-	TicketStatusExecutingAction     = "executing_action"
-	TicketStatusCompleted           = "completed"
-	TicketStatusRejected            = "rejected"
-	TicketStatusWithdrawn           = "withdrawn"
-	TicketStatusCancelled           = "cancelled"
-	TicketStatusFailed              = "failed"
+	TicketStatusSubmitted           = string(contract.TicketStatusSubmitted)
+	TicketStatusWaitingHuman        = string(contract.TicketStatusWaitingHuman)
+	TicketStatusApprovedDecisioning = string(contract.TicketStatusApprovedDecisioning)
+	TicketStatusRejectedDecisioning = string(contract.TicketStatusRejectedDecisioning)
+	TicketStatusDecisioning         = string(contract.TicketStatusDecisioning)
+	TicketStatusExecutingAction     = string(contract.TicketStatusExecutingAction)
+	TicketStatusCompleted           = string(contract.TicketStatusCompleted)
+	TicketStatusRejected            = string(contract.TicketStatusRejected)
+	TicketStatusWithdrawn           = string(contract.TicketStatusWithdrawn)
+	TicketStatusCancelled           = string(contract.TicketStatusCancelled)
+	TicketStatusFailed              = string(contract.TicketStatusFailed)
 )
 
 // Ticket outcome constants
 const (
-	TicketOutcomeApproved  = "approved"
-	TicketOutcomeRejected  = "rejected"
-	TicketOutcomeFulfilled = "fulfilled"
-	TicketOutcomeWithdrawn = "withdrawn"
-	TicketOutcomeCancelled = "cancelled"
-	TicketOutcomeFailed    = "failed"
+	TicketOutcomeApproved  = string(contract.TicketOutcomeApproved)
+	TicketOutcomeRejected  = string(contract.TicketOutcomeRejected)
+	TicketOutcomeFulfilled = string(contract.TicketOutcomeFulfilled)
+	TicketOutcomeWithdrawn = string(contract.TicketOutcomeWithdrawn)
+	TicketOutcomeCancelled = string(contract.TicketOutcomeCancelled)
+	TicketOutcomeFailed    = string(contract.TicketOutcomeFailed)
 )
 
 // Ticket source constants
@@ -46,15 +47,15 @@ const (
 
 // Assignment status constants
 const (
-	AssignmentPending        = "pending"
-	AssignmentInProgress     = "in_progress"
-	AssignmentApproved       = "approved"
-	AssignmentRejected       = "rejected"
-	AssignmentTransferred    = "transferred"
-	AssignmentDelegated      = "delegated"
-	AssignmentClaimedByOther = "claimed_by_other"
-	AssignmentCancelled      = "cancelled"
-	AssignmentFailed         = "failed"
+	AssignmentPending        = string(contract.ActivityStatusPending)
+	AssignmentInProgress     = string(contract.ActivityStatusInProgress)
+	AssignmentApproved       = string(contract.ActivityStatusApproved)
+	AssignmentRejected       = string(contract.ActivityStatusRejected)
+	AssignmentTransferred    = string(contract.ActivityStatusTransferred)
+	AssignmentDelegated      = string(contract.ActivityStatusDelegated)
+	AssignmentClaimedByOther = string(contract.ActivityStatusClaimedByOther)
+	AssignmentCancelled      = string(contract.ActivityStatusCancelled)
+	AssignmentFailed         = string(contract.ActivityStatusFailed)
 )
 
 // Ticket 工单
@@ -64,6 +65,7 @@ type Ticket struct {
 	Title                 string     `json:"title" gorm:"size:256;not null"`
 	Description           string     `json:"description" gorm:"type:text"`
 	ServiceID             uint       `json:"serviceId" gorm:"not null;index"`
+	ServiceVersionID      *uint      `json:"serviceVersionId" gorm:"index"`
 	EngineType            string     `json:"engineType" gorm:"size:16;not null"`
 	Status                string     `json:"status" gorm:"size:32;not null;default:submitted;index"`
 	Outcome               string     `json:"outcome" gorm:"size:32;index"`
@@ -91,6 +93,7 @@ type TicketResponse struct {
 	Title                 string               `json:"title"`
 	Description           string               `json:"description"`
 	ServiceID             uint                 `json:"serviceId"`
+	ServiceVersionID      *uint                `json:"serviceVersionId"`
 	ServiceName           string               `json:"serviceName"`
 	IntakeFormSchema      JSONField            `json:"intakeFormSchema,omitempty"`
 	EngineType            string               `json:"engineType"`
@@ -147,6 +150,7 @@ type RecoveryAction struct {
 type TicketMonitorSummary struct {
 	ActiveTotal         int `json:"activeTotal"`
 	StuckTotal          int `json:"stuckTotal"`
+	RiskTotal           int `json:"riskTotal"`
 	SLARiskTotal        int `json:"slaRiskTotal"`
 	AIIncidentTotal     int `json:"aiIncidentTotal"`
 	CompletedTodayTotal int `json:"completedTodayTotal"`
@@ -154,15 +158,24 @@ type TicketMonitorSummary struct {
 	ClassicActiveTotal  int `json:"classicActiveTotal"`
 }
 
+type TicketMonitorReason struct {
+	MetricCode string         `json:"metricCode"`
+	RuleCode   string         `json:"ruleCode"`
+	Severity   string         `json:"severity"`
+	Message    string         `json:"message"`
+	Evidence   map[string]any `json:"evidence"`
+}
+
 type TicketMonitorItem struct {
 	TicketResponse
-	RiskLevel                string     `json:"riskLevel"`
-	Stuck                    bool       `json:"stuck"`
-	StuckReasons             []string   `json:"stuckReasons"`
-	WaitingMinutes           int        `json:"waitingMinutes"`
-	CurrentActivityName      string     `json:"currentActivityName"`
-	CurrentActivityType      string     `json:"currentActivityType"`
-	CurrentActivityStartedAt *time.Time `json:"currentActivityStartedAt"`
+	RiskLevel                string                `json:"riskLevel"`
+	Stuck                    bool                  `json:"stuck"`
+	StuckReasons             []string              `json:"stuckReasons"`
+	MonitorReasons           []TicketMonitorReason `json:"monitorReasons"`
+	WaitingMinutes           int                   `json:"waitingMinutes"`
+	CurrentActivityName      string                `json:"currentActivityName"`
+	CurrentActivityType      string                `json:"currentActivityType"`
+	CurrentActivityStartedAt *time.Time            `json:"currentActivityStartedAt"`
 }
 
 type TicketMonitorResponse struct {
@@ -199,6 +212,7 @@ func (t *Ticket) ToResponse() TicketResponse {
 		Title:                 t.Title,
 		Description:           t.Description,
 		ServiceID:             t.ServiceID,
+		ServiceVersionID:      t.ServiceVersionID,
 		EngineType:            t.EngineType,
 		Status:                t.Status,
 		Outcome:               t.Outcome,

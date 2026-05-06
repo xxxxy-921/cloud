@@ -22,15 +22,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Architecture
 
 - 单仓库：后端入口 `cmd/server/main.go`，开发编排入口 `cmd/dev/main.go`，前端入口 `web/src/main.tsx`。生产构建把 `web/dist` 嵌进 Go 二进制；`-tags dev` 下前端不嵌入，走 Vite。Sidecar 是独立进程，入口 `cmd/sidecar/main.go`。
-- 后端使用 GORM（SQLite）、Gin、Casbin（RBAC）、samber/do v2（依赖注入容器）。
+- 后端使用 GORM、Gin、Casbin（RBAC）、samber/do v2（依赖注入容器）。数据库支持 SQLite 和 PostgreSQL；`make dev-sqlite` 零依赖单文件运行，`make dev` 默认 PostgreSQL（需 docker-compose，见 `support-files/dev/`）。
 - 可插拔 App 的真实接口以 `internal/app/app.go` 为准，当前 `Seed` 签名是 `Seed(db, enforcer, install bool)`；`internal/app/README.md` 有旧说明时不要信。App 可以实现可选接口（`LocaleProvider`、`OrgResolver`、`AIAgentProvider`、`ToolRegistryProvider` 等），消费方需判空处理。
 - 新增 App 至少同步：`internal/app/<name>/`、对应 `cmd/server/edition_*.go` 的空白导入、`web/src/apps/<name>/module.ts`，以及 `scripts/gen-registry.sh` 的 `ALL_APPS`。前端是否生效还取决于 `web/src/apps/_bootstrap.ts` 的副作用导入。
 - `cmd/server/edition_full.go` 的空白导入顺序决定 `app.Register()` 顺序，分三层：Tier 0（org/node/apm/observe/license）→ Tier 1（ai）→ Tier 2（itsm）；启动时按 `Models -> Providers -> Seed -> Routes -> Tasks` 装配；有跨 App 依赖时不要随意重排。
 - `handler.Register()` 返回的 `/api/v1` 鉴权链固定为 `JWT -> PasswordExpiry -> Casbin -> DataScope -> Audit`；App 路由默认挂在这条链后面。
+- 前端路由注册走 `web/src/apps/registry.ts` 的 `registerApp()`，但副作用导入集中在 `web/src/apps/_bootstrap.ts`，由 `gen-registry.sh` 根据 `APPS` 过滤生成。App 的 `module.ts` 里也可以调用 `registerTranslations()` 注册 i18n 资源。
+- 系统启动分两种模式：若 `config.yml` 不存在或数据库未安装，进入**安装向导模式**（只注册安装路由和静态资源）；已安装则进入**正常模式**（完整引导、Casbin 同步、App 装配、调度器启动）。
+- `server seed` 是完整安装命令（`install=true`），`server seed-dev` / `make seed-dev` 是开发环境一键安装（含测试用户、VPN 角色、AI provider 等）。`make dev` 检测到 `.env.dev` 且未安装时会自动执行 seed-dev。
 
 ## Gotchas
 
 - 后端统一响应是 `R{code,message,data}`，不是裸 JSON；前端优先复用 `web/src/lib/api.ts`，里面已经处理 token 刷新、并发 401 排队和 `FormData` 上传。
-- 某个 API 若只要求“已登录”不要求细粒度权限，除了注册路由，还要同步更新 `internal/middleware/casbin.go` 的白名单、前缀白名单或 `KeyMatch` 规则，否则会被 Casbin 拦住。
-- 运行时配置主要来自 `config.yml` 和数据库里的 `SystemConfig`，不是通用 `.env`；`.env.dev` 只给开发 bootstrap，`.env.test` 只给测试。
+- 某个 API 若只要求"已登录"不要求细粒度权限，除了注册路由，还要同步更新 `internal/middleware/casbin.go` 的白名单（精确匹配、前缀匹配、`KeyMatch2` 三种机制），否则会被 Casbin 拦住。
+- 运行时配置主要来自 `config.yml`（基础设施：DB、密钥）和数据库里的 `SystemConfig`（应用级设置），不是通用 `.env`；`.env.dev` 只给开发 bootstrap（配置 AI provider），`.env.test` 只给测试（LLM API key）。
 - React Compiler 已在 `web/vite.config.ts` 开启；前端改动避免破坏 hooks 顺序、在 effect 里同步 `setState`、或在 render 中读写 `ref.current`。

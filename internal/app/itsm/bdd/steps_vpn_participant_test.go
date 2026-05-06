@@ -73,7 +73,7 @@ func (bc *bddContext) givenFallbackAssignee(username string) error {
 	bc.fallbackUserID = user.ID
 	configProvider := &testConfigProvider{fallbackAssigneeID: user.ID}
 
-	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall}
+	executor := &testDecisionExecutor{db: bc.db, llmCfg: bc.llmCfg, recordToolCall: bc.recordToolCall, recordToolResult: bc.recordToolResult}
 	userProvider := &testUserProvider{db: bc.db}
 	orgSvc := &testOrgService{db: bc.db}
 	resolver := engine.NewParticipantResolver(orgSvc)

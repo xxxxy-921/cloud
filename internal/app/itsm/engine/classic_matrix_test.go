@@ -55,6 +55,12 @@ func newClassicMatrixFixture(t *testing.T) *classicMatrixFixture {
 	if err := db.Exec("ALTER TABLE itsm_tickets ADD COLUMN assignee_id INTEGER").Error; err != nil {
 		t.Fatalf("add ticket assignee_id: %v", err)
 	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime)`).Error; err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, username, is_active, deleted_at) VALUES (7, 'classic-operator', true, NULL)`).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 	if err := db.Exec("CREATE UNIQUE INDEX idx_matrix_process_variables_unique ON itsm_process_variables(ticket_id, scope_id, key)").Error; err != nil {
 		t.Fatalf("create process variable unique index: %v", err)
 	}
@@ -123,6 +129,15 @@ func (f *classicMatrixFixture) ticketStatus(t *testing.T, ticketID uint) string 
 	return ticket.Status
 }
 
+func (f *classicMatrixFixture) ticketStatusOutcome(t *testing.T, ticketID uint) (string, string) {
+	t.Helper()
+	var ticket ticketModel
+	if err := f.db.First(&ticket, ticketID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	return ticket.Status, ticket.Outcome
+}
+
 func TestClassicMatrixStartToEndCompletesTicket(t *testing.T) {
 	f := newClassicMatrixFixture(t)
 	workflow := json.RawMessage(`{
@@ -152,6 +167,50 @@ func TestClassicMatrixStartToEndCompletesTicket(t *testing.T) {
 	f.db.Model(&timelineModel{}).Where("ticket_id = ? AND event_type = ?", ticket.ID, "workflow_completed").Count(&count)
 	if count != 1 {
 		t.Fatalf("workflow_completed timeline count = %d, want 1", count)
+	}
+}
+
+func TestClassicMatrixSharedEndPreservesHumanOutcomeOnTicket(t *testing.T) {
+	tests := []struct {
+		name        string
+		outcome     string
+		wantStatus  string
+		wantOutcome string
+	}{
+		{name: "approved", outcome: ActivityApproved, wantStatus: TicketStatusCompleted, wantOutcome: TicketOutcomeApproved},
+		{name: "rejected", outcome: ActivityRejected, wantStatus: TicketStatusRejected, wantOutcome: TicketOutcomeRejected},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newClassicMatrixFixture(t)
+			workflow := json.RawMessage(`{
+				"nodes":[
+					{"id":"start","type":"start","data":{"label":"开始"}},
+					{"id":"process","type":"process","data":{"label":"处理","participants":[{"type":"user","value":"7"}]}},
+					{"id":"end","type":"end","data":{"label":"完成"}}
+				],
+				"edges":[
+					{"id":"e1","source":"start","target":"process","data":{}},
+					{"id":"e2","source":"process","target":"end","data":{"outcome":"approved"}},
+					{"id":"e3","source":"process","target":"end","data":{"outcome":"rejected"}}
+				]
+			}`)
+			ticket := f.createTicket(t, workflow)
+			if err := f.start(t, ticket, workflow); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			activity := f.firstActivity(t, ticket.ID, NodeProcess)
+
+			if err := f.progress(t, ticket.ID, activity, tt.outcome, nil); err != nil {
+				t.Fatalf("progress: %v", err)
+			}
+
+			gotStatus, gotOutcome := f.ticketStatusOutcome(t, ticket.ID)
+			if gotStatus != tt.wantStatus || gotOutcome != tt.wantOutcome {
+				t.Fatalf("ticket status/outcome = %s/%s, want %s/%s", gotStatus, gotOutcome, tt.wantStatus, tt.wantOutcome)
+			}
+		})
 	}
 }
 

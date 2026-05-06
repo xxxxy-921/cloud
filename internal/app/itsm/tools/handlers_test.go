@@ -43,6 +43,8 @@ type stubOperator struct {
 	createdServiceID    uint
 	createdSummary      string
 	createdFormData     map[string]any
+	createTicketCalls   int
+	submitDraftCalls    int
 	createdDraftVersion int
 	createdFieldsHash   string
 	createdRequestHash  string
@@ -64,12 +66,14 @@ func (s *stubOperator) LoadService(serviceID uint) (*ServiceDetail, error) {
 	return s.detail, nil
 }
 func (s *stubOperator) CreateTicket(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint) (*TicketResult, error) {
+	s.createTicketCalls++
 	s.createdServiceID = serviceID
 	s.createdSummary = summary
 	s.createdFormData = formData
 	return &TicketResult{TicketID: 123, TicketCode: "TICK-000123", Status: "in_progress"}, nil
 }
-func (s *stubOperator) SubmitConfirmedDraft(userID uint, serviceID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
+func (s *stubOperator) SubmitConfirmedDraft(userID uint, serviceID uint, serviceVersionID uint, summary string, formData map[string]any, sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*TicketResult, error) {
+	s.submitDraftCalls++
 	s.createdServiceID = serviceID
 	s.createdSummary = summary
 	s.createdFormData = formData
@@ -301,6 +305,23 @@ func TestServiceLoad_ReturnsMissingFieldsAndRecommendedStep(t *testing.T) {
 	}
 }
 
+func TestServiceLoad_RejectsHallucinatedServiceIDBeforeMatch(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{details: map[uint]*ServiceDetail{5: vpnServiceDetail(5)}}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	_, err := serviceLoadHandler(op, store)(ctx, 1, []byte(`{"service_id":5}`))
+	if err == nil {
+		t.Fatal("expected service_load to reject direct loading before service_match")
+	}
+	if !strings.Contains(err.Error(), "service_match") {
+		t.Fatalf("expected service_match guidance, got %v", err)
+	}
+	if _, ok := store.states[1]; ok {
+		t.Fatalf("service_load should not persist state when service_id is hallucinated, got %+v", store.states[1])
+	}
+}
+
 func TestServiceMatch_ShortConfirmationReusesLoadedServiceWithoutClearingPrefill(t *testing.T) {
 	store := newMemStateStore()
 	op := &stubOperator{
@@ -364,6 +385,9 @@ func TestCurrentRequestContext_ReturnsStateAndNextExpectedAction(t *testing.T) {
 			"device_usage": "线上支持用",
 			"request_kind": "online_support",
 		},
+		MissingFields:    []string{"vpn_account", "device_usage"},
+		AskedFields:      []string{"vpn_account"},
+		MinDecisionReady: false,
 	}
 	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
 
@@ -391,8 +415,8 @@ func TestCurrentRequestContext_ReturnsStateAndNextExpectedAction(t *testing.T) {
 	if resp.RequestText == "" || resp.PrefillFormData["vpn_account"] != "wenhaowu@dev.com" {
 		t.Fatalf("expected request text and prefill data, got %+v", resp)
 	}
-	if resp.MinDecisionReady || len(resp.MissingFields) != 0 || len(resp.AskedFields) != 0 {
-		t.Fatalf("expected no missing/asked fields in prefilled state, got %+v", resp)
+	if resp.MinDecisionReady || !containsAll(resp.MissingFields, "vpn_account") || !containsAll(resp.MissingFields, "device_usage") || !containsAll(resp.AskedFields, "vpn_account") {
+		t.Fatalf("expected conversation progress fields in context response, got %+v", resp)
 	}
 }
 
@@ -439,6 +463,56 @@ func TestDraftPrepare_UsesPrefillSuggestionsBeforeRequiredValidation(t *testing.
 		resp.FormData["device_usage"] != "线上支持用" ||
 		resp.FormData["request_kind"] != "online_support" {
 		t.Fatalf("expected complete form data from prefill, got %+v", resp.FormData)
+	}
+}
+
+func TestDraftPrepare_BlocksSmartServiceWithoutGeneratedFormSchemaWithReadableGuidance(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: &ServiceDetail{
+		ServiceID:  5,
+		Name:       "未生成参考路径的智能服务",
+		EngineType: "smart",
+		FieldsHash: "empty-form-schema",
+		FormFields: nil,
+		FormSchema: nil,
+	}}
+	store.states[1] = &ServiceDeskState{
+		Stage:           "service_loaded",
+		LoadedServiceID: 5,
+		FieldsHash:      "empty-form-schema",
+	}
+	ctx := context.WithValue(context.Background(), app.SessionIDKey, uint(1))
+
+	result, err := draftPrepareHandler(op, store)(ctx, 1, []byte(`{"summary":"申请","form_data":{}}`))
+	if err != nil {
+		t.Fatalf("prepare draft: %v", err)
+	}
+
+	var resp struct {
+		OK                   bool   `json:"ok"`
+		ReadyForConfirmation bool   `json:"ready_for_confirmation"`
+		NextRequiredTool     string `json:"next_required_tool"`
+		RecommendedNextStep  string `json:"recommended_next_step"`
+		Warnings             []struct {
+			Type    string `json:"type"`
+			Field   string `json:"field"`
+			Message string `json:"message"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.OK || resp.ReadyForConfirmation {
+		t.Fatalf("expected missing generated form schema to block draft, got %s", string(result))
+	}
+	if resp.NextRequiredTool != "generate_reference_path" || resp.RecommendedNextStep != "generate_reference_path" {
+		t.Fatalf("expected reference path guidance, got %+v", resp)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Type != "missing_form_schema" || resp.Warnings[0].Field != "intake_form_schema" {
+		t.Fatalf("expected missing_form_schema warning, got %+v", resp.Warnings)
+	}
+	if strings.Contains(resp.Warnings[0].Message, "ç") || !strings.Contains(resp.Warnings[0].Message, "申请确认表单未生成") {
+		t.Fatalf("expected readable Chinese warning, got %q", resp.Warnings[0].Message)
 	}
 }
 
@@ -525,7 +599,7 @@ func TestDraftPrepare_CanonicalizesLabeledAbsoluteTimeIntoTimeField(t *testing.T
 			"vpn_account":"wenhaowu@dev.com",
 			"device_usage":"线上支持用",
 			"request_kind":"online_support",
-			"reason":"线上支持用，访问时段2026-04-28 12:00:00~2026-04-29 10:00:00"
+			"reason":"线上支持用，访问时段2026-05-01 12:00:00~2026-05-02 10:00:00"
 		}
 	}`))
 	if err != nil {
@@ -542,7 +616,7 @@ func TestDraftPrepare_CanonicalizesLabeledAbsoluteTimeIntoTimeField(t *testing.T
 	if !resp.OK || !resp.ReadyForConfirmation {
 		t.Fatalf("expected canonicalized time field to be ready, got %s", string(result))
 	}
-	if resp.FormData["access_period"] != "2026-04-28 12:00:00~2026-04-29 10:00:00" {
+	if resp.FormData["access_period"] != "2026-05-01 12:00:00~2026-05-02 10:00:00" {
 		t.Fatalf("expected access_period to be canonicalized, got %+v", resp.FormData)
 	}
 }
@@ -1213,6 +1287,12 @@ func TestServiceDeskFlow_UsesLoadedServiceAndConfirmedDraftWhenModelFallsBackToI
 	}
 	if op.createdFormData["request_kind"] != "online_support" {
 		t.Fatalf("expected confirmed draft form data to be used, got %+v", op.createdFormData)
+	}
+	if op.createTicketCalls != 0 || op.submitDraftCalls != 1 {
+		t.Fatalf("expected confirmed draft submission path only, create=%d submit=%d", op.createTicketCalls, op.submitDraftCalls)
+	}
+	if op.createdDraftVersion != 1 || op.createdFieldsHash != "vpn123" || op.createdRequestHash == "" {
+		t.Fatalf("expected draft identity to be submitted, version=%d fields=%q request=%q", op.createdDraftVersion, op.createdFieldsHash, op.createdRequestHash)
 	}
 }
 

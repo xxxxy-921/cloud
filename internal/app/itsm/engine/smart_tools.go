@@ -117,7 +117,7 @@ func toolTicketContext() decisionToolDef {
 				assignments, _ := ctx.data.GetActivityAssignments(a.ID)
 				entry := activityFactMap(&a, assignments)
 				history = append(history, entry)
-				if a.Status == ActivityCompleted && isHumanActivityType(a.ActivityType) {
+				if IsCompletedActivityStatus(a.Status) && isHumanActivityType(a.ActivityType) {
 					satisfied := isPositiveActivityOutcome(a.TransitionOutcome)
 					completedRequirements = append(completedRequirements, map[string]any{
 						"type":                       a.ActivityType,
@@ -179,7 +179,7 @@ func toolTicketContext() decisionToolDef {
 
 			// Executed actions — shows which service actions have been successfully run
 			execs, _ := ctx.data.GetExecutedActions(ctx.ticketID)
-			totalActions, _ := ctx.data.CountActiveServiceActions(ctx.serviceID)
+			totalActions, _ := ctx.data.CountActiveServiceActions(ctx.ticketID, ctx.serviceID)
 			actionProgress := map[string]any{
 				"total":         totalActions,
 				"executed":      len(execs),
@@ -249,7 +249,7 @@ func activityFactMap(a *activityModel, assignments []ActivityAssignmentInfo) map
 	if a.FinishedAt != nil {
 		entry["completed_at"] = a.FinishedAt.Format(time.RFC3339)
 	}
-	if a.Status == ActivityCompleted && isHumanActivityType(a.ActivityType) {
+	if IsCompletedActivityStatus(a.Status) && isHumanActivityType(a.ActivityType) {
 		satisfied := isPositiveActivityOutcome(a.TransitionOutcome)
 		entry["satisfied"] = satisfied
 		if !satisfied {
@@ -645,7 +645,7 @@ func toolListActions() decisionToolDef {
 			},
 		},
 		Handler: func(ctx *decisionToolContext, _ json.RawMessage) (json.RawMessage, error) {
-			actions, _ := ctx.data.ListActiveServiceActions(ctx.serviceID)
+			actions, _ := ctx.data.ListActiveServiceActions(ctx.ticketID, ctx.serviceID)
 
 			items := make([]map[string]any, len(actions))
 			for i, a := range actions {
@@ -692,12 +692,22 @@ func toolExecuteAction() decisionToolDef {
 			}
 
 			// Verify action exists and is active
-			action, err := ctx.data.GetServiceAction(params.ActionID, ctx.serviceID)
+			action, err := ctx.data.GetServiceAction(ctx.ticketID, params.ActionID, ctx.serviceID)
 			if err != nil {
 				return toolError("动作不存在")
 			}
 			if !action.IsActive {
 				return toolError("动作已停用")
+			}
+
+			if looksLikeDBBackupWhitelistSpec(ctx.collaborationSpec) && isDBBackupWhitelistActionCode(action.Code) {
+				ticket, err := ctx.data.GetTicketContext(ctx.ticketID)
+				if err != nil {
+					return toolError(fmt.Sprintf("读取工单上下文失败: %v", err))
+				}
+				if err := validateDBBackupWhitelistFormJSON(ticket.FormData); err != nil {
+					return toolError(err.Error())
+				}
 			}
 
 			// Idempotency: check if this action was already successfully executed for this ticket
@@ -721,9 +731,9 @@ func toolExecuteAction() decisionToolDef {
 			execCtx, cancel := context.WithTimeout(ctx.ctx, 120*time.Second)
 			defer cancel()
 
-			err = ctx.actionExecutor.Execute(
+			err = ctx.actionExecutor.ExecuteWithConfig(
 				execCtx,
-				ctx.ticketID, 0, params.ActionID,
+				ctx.ticketID, 0, params.ActionID, action.ActionType, action.ConfigJSON,
 			)
 
 			if err != nil {

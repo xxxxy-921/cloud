@@ -336,6 +336,20 @@ var vpnFormSchema = `{
 	"version": 1,
 	"fields": [
 		{
+			"key": "vpn_account",
+			"type": "email",
+			"label": "VPN账号",
+			"description": "用于登录 VPN 的账号；用户给出的完整邮箱可直接作为账号",
+			"required": true
+		},
+		{
+			"key": "device_usage",
+			"type": "textarea",
+			"label": "设备与用途说明",
+			"description": "说明访问 VPN 的设备或用途；用户已给出用途时不需要额外追问设备型号",
+			"required": true
+		},
+		{
 			"key": "request_kind",
 			"type": "select",
 				"label": "访问原因",
@@ -556,6 +570,102 @@ func (bc *bddContext) draftPrepareFormValue(field string) (string, error) {
 	return value, nil
 }
 
+func (bc *bddContext) serviceLoadResult() (*tools.ServiceDetail, error) {
+	result := getToolResult(bc.dialogState.toolResults, "itsm.service_load")
+	if result == nil {
+		return nil, fmt.Errorf("itsm.service_load result was not captured")
+	}
+	var detail tools.ServiceDetail
+	if err := json.Unmarshal([]byte(result.Output), &detail); err != nil {
+		return nil, fmt.Errorf("parse service_load result: %w; output=%s", err, result.Output)
+	}
+	return &detail, nil
+}
+
+func splitCSVKeys(raw string) []string {
+	parts := strings.Split(raw, ",")
+	keys := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key := strings.TrimSpace(part)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func (bc *bddContext) thenServiceLoadFieldCollectionContainsRequiredFields(rawKeys string) error {
+	detail, err := bc.serviceLoadResult()
+	if err != nil {
+		return err
+	}
+	if detail.FieldCollection == nil {
+		return fmt.Errorf("service_load result missing field_collection")
+	}
+	required := make(map[string]struct{}, len(detail.FieldCollection.RequiredFields))
+	for _, item := range detail.FieldCollection.RequiredFields {
+		required[item.Key] = struct{}{}
+	}
+	for _, key := range splitCSVKeys(rawKeys) {
+		if _, ok := required[key]; !ok {
+			return fmt.Errorf("expected service_load required field %q, got %+v", key, detail.FieldCollection.RequiredFields)
+		}
+	}
+	return nil
+}
+
+func (bc *bddContext) thenServiceLoadMissingRequiredFields(rawKeys string) error {
+	detail, err := bc.serviceLoadResult()
+	if err != nil {
+		return err
+	}
+	if detail.FieldCollection == nil {
+		return fmt.Errorf("service_load result missing field_collection")
+	}
+	missing := make(map[string]struct{}, len(detail.FieldCollection.MissingRequiredFields))
+	for _, item := range detail.FieldCollection.MissingRequiredFields {
+		missing[item.Key] = struct{}{}
+	}
+	for _, key := range splitCSVKeys(rawKeys) {
+		if _, ok := missing[key]; !ok {
+			return fmt.Errorf("expected service_load missing required field %q, got %+v", key, detail.FieldCollection.MissingRequiredFields)
+		}
+	}
+	if detail.FieldCollection.ReadyForDraft {
+		return fmt.Errorf("expected service_load field_collection to block draft, got %+v", detail.FieldCollection)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenServiceLoadPrefilledFieldEquals(field, expected string) error {
+	detail, err := bc.serviceLoadResult()
+	if err != nil {
+		return err
+	}
+	if detail.PrefillSuggestions == nil {
+		return fmt.Errorf("service_load result missing prefill_suggestions")
+	}
+	actual, ok := detail.PrefillSuggestions[field]
+	if !ok {
+		return fmt.Errorf("service_load prefill_suggestions missing %q; got %+v", field, detail.PrefillSuggestions)
+	}
+	if fmt.Sprintf("%v", actual) != expected {
+		return fmt.Errorf("expected service_load prefill %s=%q, got %v", field, expected, actual)
+	}
+	return nil
+}
+
+func (bc *bddContext) thenDraftPrepareFieldEquals(field, expected string) error {
+	actual, err := bc.draftPrepareFormValue(field)
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return fmt.Errorf("expected draft_prepare form_data.%s=%q, got %q", field, expected, actual)
+	}
+	return nil
+}
+
 func formValueFromDraftPrepareResult(results []toolResultRecord, field string) (string, bool, error) {
 	result := getToolResult(results, "itsm.draft_prepare")
 	if result == nil {
@@ -741,6 +851,10 @@ func registerDialogValidationSteps(sc *godog.ScenarioContext, bc *bddContext) {
 	sc.Then(`^Agent 未调用 draft_prepare$`, bc.thenDraftPrepareNotCalled)
 	sc.Then(`^Agent 未进入可确认草稿$`, bc.thenDraftNotReadyForConfirmation)
 	sc.Then(`^draft_prepare 的路由字段为单值$`, bc.thenDraftPrepareCalledWithSingleRouteValue)
+	sc.Then(`^service_load 的字段收集包含必填字段 "([^"]*)"$`, bc.thenServiceLoadFieldCollectionContainsRequiredFields)
+	sc.Then(`^service_load 的字段收集缺失必填字段 "([^"]*)"$`, bc.thenServiceLoadMissingRequiredFields)
+	sc.Then(`^service_load 已从用户请求预填 "([^"]*)" 为 "([^"]*)"$`, bc.thenServiceLoadPrefilledFieldEquals)
+	sc.Then(`^draft_prepare 表单字段 "([^"]*)" 等于 "([^"]*)"$`, bc.thenDraftPrepareFieldEquals)
 	sc.Then(`^draft_prepare 的访问时段等于基于当前时间的明天 17 点$`, bc.thenAccessPeriodIsTomorrowAt17FromCurrentTime)
 	sc.Then(`^draft_prepare 的访问时段按当前时间解析为跨天区间 "([^"]*)" 到 "([^"]*)"$`, bc.thenAccessPeriodIsCrossDayRange)
 	sc.Then(`^下午 5 点没有被解析为过去时间$`, bc.thenAccessPeriodNeverUsesPastAfternoonFive)

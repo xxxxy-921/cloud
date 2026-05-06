@@ -402,7 +402,7 @@ const decisionAgentSystemPrompt = `你是流程决策智能体，负责为智能
 - decision.ticket_context.action_progress.all_completed=true 只代表动作完成，不自动代表流程结束；必须同时满足服务规范允许结束、当前无待处理项、处理前置已完成。
 - 只有在 current_activities 为空、parallel_groups 无未完成项、规范允许结束且前置动作/人工活动都完成时，才能输出 next_step_type=complete。
 - 如果 completed_activity 已满足最后一个待处理人工前置条件，优先输出 complete，不要再次输出同一 process/form 活动。
-- 如果 completed_activity.outcome=rejected 或 satisfied=false，必须按协作规范定义的恢复路径处理；协作规范未显式定义补充信息或返工路径时，不得退回申请人补充；不得只因为原表单字段仍匹配就再次创建刚被驳回的同一处理任务。
+- 如果 completed_activity.outcome=rejected 或 satisfied=false，必须按协作规范定义的恢复路径处理；协作规范未显式定义补充信息或返工路径时，不得退回申请人补充，也不得创建申请人补充/返工类人工活动；不得只因为原表单字段仍匹配就再次创建刚被驳回的同一处理任务。
 - is_terminal=true 时不再创建活动。
 
 ## 输出约束
