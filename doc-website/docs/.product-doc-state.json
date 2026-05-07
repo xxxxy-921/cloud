@@ -1,12 +1,12 @@
 {
-  "lastRunAt": "2026-05-07T17:41:00+08:00",
+  "lastRunAt": "2026-05-07T18:00:00+08:00",
   "scope": "system-management",
   "roundResult": {
     "type": "review",
-    "module": "通知渠道",
-    "docPath": "docs/system-management/channel-management.md",
-    "changed": true,
-    "reason": "文档与代码能力一致；补充“页面标题显示为消息通道”以对齐菜单与页面文案。"
+    "module": "认证源",
+    "docPath": "docs/system-management/auth-provider-management.md",
+    "changed": false,
+    "reason": "文档与代码能力一致，本轮复核无需改动正文。"
   },
   "discovered": {
     "businessDomains": [

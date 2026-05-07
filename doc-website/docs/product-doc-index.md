@@ -5,7 +5,7 @@ unlisted: true
 
 # 产品文档索引（自动维护）
 
-最后更新：2026-05-07 17:41 (+08:00)
+最后更新：2026-05-07 18:00 (+08:00)
 本轮范围：系统管理
 
 ## 已发现结构
@@ -44,7 +44,7 @@ unlisted: true
 
 ## 本轮处理说明
 
-- 复核范围：通知渠道（`/channels`）。
-- 证据对照：前端路由（`web/src/App.tsx`）、菜单映射（`internal/seed/menus.go`）、页面结构（`web/src/pages/channels/index.tsx`）、中文文案（`web/src/i18n/locales/zh-CN/channels.json`、`web/src/i18n/locales/zh-CN/layout.json`）。
-- 结论：模块能力与文档一致；为避免术语歧义，已在文档补充“页面标题显示为消息通道”的说明，其他内容保持不变。
+- 复核范围：认证源（`/auth-providers`）。
+- 证据对照：前端路由（`web/src/App.tsx`）、菜单映射（`internal/seed/menus.go`）、页面结构（`web/src/pages/auth-providers/index.tsx`、`web/src/pages/auth-providers/provider-sheet.tsx`）、中文文案（`web/src/i18n/locales/zh-CN/authProviders.json`、`web/src/i18n/locales/zh-CN/layout.json`）。
+- 结论：模块能力与文档一致，本轮无需改动正文文档。
 - 覆盖状态：系统管理域 11 个模块均已覆盖，待补齐列表保持为空。
