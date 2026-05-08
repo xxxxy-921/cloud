@@ -53,7 +53,7 @@ type bddContext struct {
 	ticket              *Ticket
 	tickets             map[string]*Ticket // multi-ticket scenarios, key = alias
 	lastCompletedUserID uint
-	fallbackUserID      uint               // fallback assignee for participant validation scenarios
+	fallbackUserID      uint // fallback assignee for participant validation scenarios
 	slaAssuranceAgentID uint
 	toolCalls           []bddToolCall
 	toolResults         []bddToolResult
@@ -136,6 +136,7 @@ func (bc *bddContext) reset() {
 		// ITSM — configuration
 		&ServiceCatalog{},
 		&ServiceDefinition{},
+		&ServiceDefinitionVersion{},
 		&ServiceAction{},
 		&Priority{},
 		&SLATemplate{},

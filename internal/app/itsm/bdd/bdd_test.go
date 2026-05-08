@@ -94,6 +94,8 @@ func initializeScenario(sc *godog.ScenarioContext) {
 	registerServerAccessDialogSteps(sc, bc)
 	registerDbBackupSteps(sc, bc)
 	registerBossSteps(sc, bc)
+	registerBossDialogSteps(sc, bc)
+	registerBossExtraSteps(sc, bc)
 	registerWithdrawSteps(sc, bc)
 	registerParticipantSteps(sc, bc)
 	registerDeterministicSteps(sc, bc)
