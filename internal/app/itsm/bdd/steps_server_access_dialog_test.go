@@ -104,7 +104,7 @@ func registerServerAccessDialogSteps(sc *godog.ScenarioContext, bc *bddContext) 
 	sc.Then(`^response does not match "([^"]*)"$`, bc.thenResponseNotMatches)
 	sc.Then(`^"([^"]*)" is called at least (\d+) times$`, bc.thenToolCalledAtLeastParsed)
 	sc.Then(`^draft_prepare field "([^"]*)" contains "([^"]*)"$`, bc.thenDraftPrepareFieldContains)
-	sc.Then(`^draft_prepare field "([^"]*)" equals "([^"]*)"$`, bc.thenDraftPrepareFieldEquals)
+	sc.Then(`^draft_prepare field "([^"]*)" equals "([^"]*)"$`, bc.thenServerAccessDraftFieldEquals)
 	sc.Then(`^draft_prepare field "([^"]*)" contains all of "([^"]*)"$`, bc.thenDraftPrepareFieldContainsAll)
 }
 
@@ -281,7 +281,7 @@ func (bc *bddContext) thenDraftPrepareFieldContains(field, expected string) erro
 	return nil
 }
 
-func (bc *bddContext) thenDraftPrepareFieldEquals(field, expected string) error {
+func (bc *bddContext) thenServerAccessDraftFieldEquals(field, expected string) error {
 	value, err := bc.draftPrepareFormValue(field)
 	if err != nil {
 		return err
