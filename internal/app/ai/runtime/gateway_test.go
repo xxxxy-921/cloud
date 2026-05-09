@@ -202,6 +202,108 @@ func TestBuildExecuteMessagesFromSessionMessages_SkipsIncompleteToolTranscript(t
 	}
 }
 
+func TestBuildExecuteMessagesFromSessionMessages_TruncatesAtNewRequest(t *testing.T) {
+	// Simulates a session where the user submitted one ticket (ticket A with
+	// target_system="堡垒机-A"), then called itsm.new_request to start a second
+	// ticket without providing target_system. The LLM must NOT see the first
+	// ticket's messages so it cannot reuse "堡垒机-A" for the new ticket.
+	messages := []SessionMessage{
+		// --- First ticket conversation ---
+		{Role: MessageRoleUser, Content: "申请临时访问堡垒机-A", Sequence: 1},
+		{
+			Role:     MessageRoleToolCall,
+			Metadata: model.JSONText([]byte(`{"tool_call_id":"c1","tool_name":"itsm.service_match","tool_args":{},"status":"running"}`)),
+			Sequence: 2,
+		},
+		{
+			Role:     MessageRoleToolResult,
+			Content:  `{"ok":true}`,
+			Metadata: model.JSONText([]byte(`{"tool_call_id":"c1","status":"completed"}`)),
+			Sequence: 3,
+		},
+		{Role: MessageRoleAssistant, Content: "已提交工单 TICK-000074。", Sequence: 4},
+		// --- new_request boundary ---
+		{Role: MessageRoleUser, Content: "再提一张", Sequence: 5},
+		{
+			Role:     MessageRoleToolCall,
+			Metadata: model.JSONText([]byte(`{"tool_call_id":"c2","tool_name":"itsm.new_request","tool_args":{},"status":"running"}`)),
+			Sequence: 6,
+		},
+		{
+			Role:     MessageRoleToolResult,
+			Content:  `{"ok":true,"message":"已就绪，请描述您的需求"}`,
+			Metadata: model.JSONText([]byte(`{"tool_call_id":"c2","status":"completed"}`)),
+			Sequence: 7,
+		},
+		{Role: MessageRoleAssistant, Content: "请描述您的新需求。", Sequence: 8},
+		// --- Second ticket conversation (no target_system) ---
+		{Role: MessageRoleUser, Content: "申请多角色并签", Sequence: 9},
+	}
+
+	execMessages := buildExecuteMessagesFromSessionMessages(messages)
+
+	// Must NOT contain any content from the first ticket.
+	for _, m := range execMessages {
+		if m.Content == "申请临时访问堡垒机-A" {
+			t.Fatalf("first ticket user message leaked into LLM context: %+v", execMessages)
+		}
+		if m.Content == "已提交工单 TICK-000074。" {
+			t.Fatalf("first ticket assistant message leaked into LLM context: %+v", execMessages)
+		}
+	}
+
+	// Must contain the new_request boundary and everything after it.
+	foundNewRequest := false
+	foundSecondTicketMsg := false
+	for _, m := range execMessages {
+		if len(m.ToolCalls) > 0 && m.ToolCalls[0].Name == "itsm.new_request" {
+			foundNewRequest = true
+		}
+		if m.Content == "申请多角色并签" {
+			foundSecondTicketMsg = true
+		}
+	}
+	if !foundNewRequest {
+		t.Errorf("expected itsm.new_request tool call to be present in context")
+	}
+	if !foundSecondTicketMsg {
+		t.Errorf("expected second ticket user message to be present in context")
+	}
+}
+
+func TestNewRequestBoundary_ReturnsLastOccurrence(t *testing.T) {
+	makeToolCall := func(id, name string, seq int) SessionMessage {
+		return SessionMessage{
+			Role:     MessageRoleToolCall,
+			Metadata: model.JSONText([]byte(`{"tool_call_id":"` + id + `","tool_name":"` + name + `","tool_args":{},"status":"running"}`)),
+			Sequence: seq,
+		}
+	}
+
+	t.Run("no new_request returns zero", func(t *testing.T) {
+		messages := []SessionMessage{
+			{Role: MessageRoleUser, Content: "hello", Sequence: 1},
+			makeToolCall("c1", "itsm.service_match", 2),
+		}
+		if got := newRequestBoundary(messages); got != 0 {
+			t.Errorf("expected 0, got %d", got)
+		}
+	})
+
+	t.Run("returns index of last new_request", func(t *testing.T) {
+		messages := []SessionMessage{
+			{Role: MessageRoleUser, Content: "再提一张", Sequence: 1},
+			makeToolCall("c1", "itsm.new_request", 2), // index 1
+			makeToolCall("c2", "itsm.service_match", 3),
+			{Role: MessageRoleUser, Content: "再提一张", Sequence: 4},
+			makeToolCall("c3", "itsm.new_request", 5), // index 4 — last
+		}
+		if got := newRequestBoundary(messages); got != 4 {
+			t.Errorf("expected 4, got %d", got)
+		}
+	})
+}
+
 func TestGateway_Run_CompletesSession(t *testing.T) {
 	db := setupTestDB(t)
 	mockLLM := newMockLLMClient([]llm.StreamEvent{
@@ -295,6 +397,74 @@ func TestGateway_Run_ReplaysStoredToolTranscriptToLLM(t *testing.T) {
 	}
 	if !foundAssistantToolCall || !foundToolResult {
 		t.Fatalf("expected stored tool transcript in LLM request, got %+v", requests[0].Messages)
+	}
+}
+
+func TestGateway_Run_ContinuesAfterTicketSubmissionHistory(t *testing.T) {
+	db := setupTestDB(t)
+	mockLLM := newMockLLMClient([]llm.StreamEvent{
+		{Type: "content_delta", Content: "我可以继续帮你处理下一项需求。"},
+		{Type: "done", Usage: &llm.Usage{InputTokens: 9, OutputTokens: 6}},
+	}, nil)
+	gw := newGatewayForTest(t, db, mockLLM)
+
+	modelID := uint(1)
+	agent := &Agent{Name: "Agent", Type: AgentTypeAssistant, ModelID: &modelID, Strategy: AgentStrategyReact, CreatedBy: 1}
+	_ = gw.agentSvc.Create(agent)
+	session, _ := gw.sessionSvc.Create(agent.ID, 1)
+
+	_, _ = gw.sessionSvc.StoreMessage(session.ID, MessageRoleUser, "我要申请 VPN", nil, 0)
+	_, _ = gw.sessionSvc.StoreMessage(
+		session.ID,
+		MessageRoleToolCall,
+		"",
+		model.JSONText([]byte(`{"tool_call_id":"call_match","tool_name":"itsm.service_match","tool_args":{"query":"我要申请 VPN"},"status":"running"}`)),
+		0,
+	)
+	_, _ = gw.sessionSvc.StoreMessage(
+		session.ID,
+		MessageRoleToolResult,
+		`{"selected_service_id":5,"next_required_tool":"itsm.draft_prepare"}`,
+		model.JSONText([]byte(`{"tool_call_id":"call_match","status":"completed"}`)),
+		0,
+	)
+	_, _ = gw.sessionSvc.StoreMessage(
+		session.ID,
+		MessageRoleAssistant,
+		"",
+		model.JSONText([]byte(`{"ui_surface":{"surfaceId":"draft-1","surfaceType":"itsm.draft_form","payload":{"status":"submitted","ticketCode":"TICK-000053","message":"工单已提交"}}}`)),
+		0,
+	)
+	_, _ = gw.sessionSvc.StoreMessage(session.ID, MessageRoleUser, "再帮我申请风险变更", nil, 0)
+
+	reader, err := gw.Run(context.Background(), session.ID, 1)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	_ = drainReader(reader)
+	time.Sleep(100 * time.Millisecond)
+
+	requests := mockLLM.Requests()
+	if len(requests) == 0 {
+		t.Fatalf("expected LLM request")
+	}
+	for _, msg := range requests[0].Messages {
+		if msg.Role == llm.RoleAssistant && msg.Content == "" {
+			t.Fatalf("expected provider-safe assistant content, got empty string in %+v", requests[0].Messages)
+		}
+	}
+
+	last := requests[0].Messages[len(requests[0].Messages)-1]
+	if last.Role != llm.RoleUser || last.Content != "再帮我申请风险变更" {
+		t.Fatalf("expected follow-up user message to remain intact, got %+v", last)
+	}
+
+	messages, err := gw.sessionSvc.GetMessages(session.ID)
+	if err != nil {
+		t.Fatalf("get messages: %v", err)
+	}
+	if messages[len(messages)-1].Role != MessageRoleAssistant || messages[len(messages)-1].Content != "我可以继续帮你处理下一项需求。" {
+		t.Fatalf("expected final assistant reply to persist, got %+v", messages[len(messages)-1])
 	}
 }
 

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,36 @@ func TestOpenAIClientBuildRequestKeepsTemperatureForOtherModels(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientBuildRequestSerializesAssistantToolCallsWithStringContent(t *testing.T) {
+	client := &openaiClient{}
+
+	req := client.buildRequest(ChatRequest{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{
+				Role:    RoleAssistant,
+				Content: " ",
+				ToolCalls: []ToolCall{{
+					ID:        "call_1",
+					Name:      "itsm.service_match",
+					Arguments: `{"query":"VPN"}`,
+				}},
+			},
+		},
+	})
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if !jsonContainsString(payload, `"content":" "`) {
+		t.Fatalf("expected assistant tool call message to serialize string content, got %s", payload)
+	}
+	if !jsonContainsString(payload, `"tool_calls"`) {
+		t.Fatalf("expected tool_calls to be preserved, got %s", payload)
+	}
+}
+
 func jsonContainsKey(payload []byte, key string) bool {
 	var data map[string]any
 	if err := json.Unmarshal(payload, &data); err != nil {
@@ -54,4 +85,8 @@ func jsonContainsKey(payload []byte, key string) bool {
 	}
 	_, ok := data[key]
 	return ok
+}
+
+func jsonContainsString(payload []byte, token string) bool {
+	return string(payload) != "" && strings.Contains(string(payload), token)
 }

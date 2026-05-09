@@ -408,6 +408,11 @@ type storedToolResultMeta struct {
 }
 
 func buildExecuteMessagesFromSessionMessages(messages []SessionMessage) []ExecuteMessage {
+	// If itsm.new_request was called at any point, only include messages from the
+	// last such call forward. This prevents field values from a prior ticket's
+	// conversation from polluting the LLM context for the current ticket.
+	messages = messages[newRequestBoundary(messages):]
+
 	execMessages := make([]ExecuteMessage, 0, len(messages))
 	for i := 0; i < len(messages); {
 		m := messages[i]
@@ -424,6 +429,28 @@ func buildExecuteMessagesFromSessionMessages(messages []SessionMessage) []Execut
 		}
 	}
 	return execMessages
+}
+
+// newRequestBoundary returns the index of the last itsm.new_request tool call in
+// the session message log. When the user starts a new ticket in the same session,
+// messages before this boundary are excluded from the LLM context so that field
+// values from the previous ticket cannot be inadvertently reused.
+// Returns 0 if no new_request call is found, meaning all messages are included.
+func newRequestBoundary(messages []SessionMessage) int {
+	boundary := 0
+	for i, m := range messages {
+		if m.Role != MessageRoleToolCall {
+			continue
+		}
+		call, ok := parseStoredToolCall(m)
+		if !ok {
+			continue
+		}
+		if call.Name == "itsm.new_request" {
+			boundary = i
+		}
+	}
+	return boundary
 }
 
 func executeMessageFromChatMessage(m SessionMessage) ExecuteMessage {

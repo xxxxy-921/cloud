@@ -102,6 +102,7 @@ func initializeScenario(sc *godog.ScenarioContext) {
 	registerDialogValidationSteps(sc, bc)
 	registerDraftRecoverySteps(sc, bc)
 	registerCountersignSteps(sc, bc)
+	registerParallelApprovalSteps(sc, bc)
 	registerRecoverySteps(sc, bc)
 	registerServiceDeskDialogSteps(sc, bc)
 	registerSessionIsolationSteps(sc, bc)

@@ -349,6 +349,8 @@
     "complete": "Complete",
     "approve": "Approve",
     "reject": "Reject",
+    "submit": "Submit",
+    "complete": "Complete",
     "confirmApprove": "Confirm Approve",
     "confirmReject": "Confirm Reject",
     "approvalOpinion": "Handling Opinion",
