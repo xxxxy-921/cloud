@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	appcore "metis/internal/app"
 	"metis/internal/app/itsm/engine"
 	"metis/internal/app/itsm/testutil"
@@ -23,6 +22,8 @@ import (
 	"metis/internal/database"
 	"metis/internal/model"
 	"metis/internal/scheduler"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -115,6 +116,85 @@ func TestAgentDraftSubmission_IdempotentConfirmedDraftStartsSmartProgressTask(t 
 	}
 	if payload.TicketID != first.TicketID || payload.CompletedActivityID != nil || payload.TriggerReason != engine.TriggerReasonTicketCreated {
 		t.Fatalf("unexpected smart progress payload: %+v", payload)
+	}
+}
+
+func TestAgentDraftSubmission_SameSessionDifferentRequestHashCreatesNewTicket(t *testing.T) {
+	db := newTestDB(t)
+	ticketSvc := newSubmissionTicketService(t, db)
+	service := testutil.SeedSmartSubmissionService(t, db)
+
+	firstReq := tools.AgentTicketRequest{
+		UserID:       7,
+		ServiceID:    service.ID,
+		Summary:      "VPN 开通申请",
+		FormData:     map[string]any{"vpn_account": "admin@dev.com", "request_kind": "线上支持"},
+		SessionID:    99,
+		DraftVersion: 1,
+		FieldsHash:   "fields-v1",
+		RequestHash:  "request-v1",
+	}
+	secondReq := tools.AgentTicketRequest{
+		UserID:       7,
+		ServiceID:    service.ID,
+		Summary:      "VPN 权限变更申请",
+		FormData:     map[string]any{"vpn_account": "ops@dev.com", "request_kind": "权限变更"},
+		SessionID:    99,
+		DraftVersion: 1,
+		FieldsHash:   "fields-v1",
+		RequestHash:  "request-v2",
+	}
+
+	first, err := ticketSvc.CreateFromAgent(context.Background(), firstReq)
+	if err != nil {
+		t.Fatalf("first create from agent: %v", err)
+	}
+	second, err := ticketSvc.CreateFromAgent(context.Background(), secondReq)
+	if err != nil {
+		t.Fatalf("second create from agent: %v", err)
+	}
+	if second.TicketID == first.TicketID || second.TicketCode == first.TicketCode {
+		t.Fatalf("expected distinct ticket result for different request hash, first=%+v second=%+v", first, second)
+	}
+
+	var ticketCount int64
+	if err := db.Model(&Ticket{}).Count(&ticketCount).Error; err != nil {
+		t.Fatalf("count tickets: %v", err)
+	}
+	if ticketCount != 2 {
+		t.Fatalf("expected two tickets after distinct requests, got %d", ticketCount)
+	}
+
+	var submissions []ServiceDeskSubmission
+	if err := db.Where("session_id = ? AND draft_version = ? AND fields_hash = ?", firstReq.SessionID, firstReq.DraftVersion, firstReq.FieldsHash).
+		Order("request_hash asc").
+		Find(&submissions).Error; err != nil {
+		t.Fatalf("list submissions: %v", err)
+	}
+	if len(submissions) != 2 {
+		t.Fatalf("expected two submissions for distinct request hashes, got %+v", submissions)
+	}
+	if submissions[0].RequestHash == submissions[1].RequestHash {
+		t.Fatalf("expected unique request hashes, got %+v", submissions)
+	}
+
+	var tasks []model.TaskExecution
+	if err := db.Where("task_name = ?", "itsm-smart-progress").Find(&tasks).Error; err != nil {
+		t.Fatalf("load smart progress tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected two smart-progress tasks for distinct submissions, got %d", len(tasks))
+	}
+	var payloads []engine.SmartProgressPayload
+	for _, task := range tasks {
+		var payload engine.SmartProgressPayload
+		if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
+			t.Fatalf("decode smart progress payload: %v", err)
+		}
+		payloads = append(payloads, payload)
+	}
+	if payloads[0].TicketID == payloads[1].TicketID {
+		t.Fatalf("expected distinct smart-progress payloads, got %+v", payloads)
 	}
 }
 

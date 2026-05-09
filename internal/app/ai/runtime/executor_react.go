@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -264,15 +265,23 @@ func buildLLMMessages(req ExecuteRequest) []llm.Message {
 		msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: req.SystemPrompt})
 	}
 	for _, m := range req.Messages {
+		content := normalizeLLMMessageContent(m)
 		msgs = append(msgs, llm.Message{
 			Role:       m.Role,
-			Content:    m.Content,
+			Content:    content,
 			Images:     m.Images,
 			ToolCalls:  m.ToolCalls,
 			ToolCallID: m.ToolCallID,
 		})
 	}
 	return msgs
+}
+
+func normalizeLLMMessageContent(m ExecuteMessage) string {
+	if m.Role == llm.RoleAssistant && strings.TrimSpace(m.Content) == "" {
+		return " "
+	}
+	return m.Content
 }
 
 // buildLLMTools converts ToolDefinitions to llm.ToolDef format.

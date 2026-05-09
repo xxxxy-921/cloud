@@ -349,6 +349,8 @@
     "complete": "完结",
     "approve": "通过",
     "reject": "驳回",
+    "submit": "提交",
+    "complete": "完成处理",
     "confirmApprove": "确认通过",
     "confirmReject": "确认驳回",
     "approvalOpinion": "处理意见",

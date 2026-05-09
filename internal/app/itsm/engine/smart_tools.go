@@ -246,6 +246,12 @@ func activityFactMap(a *activityModel, assignments []ActivityAssignmentInfo) map
 	if a.NodeID != "" {
 		entry["node_id"] = a.NodeID
 	}
+	if a.ActivityGroupID != "" {
+		entry["activity_group_id"] = a.ActivityGroupID
+		entry["execution_mode"] = "parallel"
+	} else if a.ExecutionMode != "" {
+		entry["execution_mode"] = a.ExecutionMode
+	}
 	if a.FinishedAt != nil {
 		entry["completed_at"] = a.FinishedAt.Format(time.RFC3339)
 	}

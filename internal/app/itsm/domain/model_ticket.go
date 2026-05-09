@@ -382,7 +382,7 @@ type ServiceDeskSubmission struct {
 	SessionID    uint      `json:"sessionId" gorm:"not null;index;uniqueIndex:idx_itsm_submission_draft"`
 	DraftVersion int       `json:"draftVersion" gorm:"not null;uniqueIndex:idx_itsm_submission_draft"`
 	FieldsHash   string    `json:"fieldsHash" gorm:"size:128;not null;uniqueIndex:idx_itsm_submission_draft"`
-	RequestHash  string    `json:"requestHash" gorm:"size:128;not null"`
+	RequestHash  string    `json:"requestHash" gorm:"size:128;not null;uniqueIndex:idx_itsm_submission_draft"`
 	TicketID     uint      `json:"ticketId" gorm:"not null;index"`
 	Status       string    `json:"status" gorm:"size:32;not null"`
 	SubmittedBy  uint      `json:"submittedBy" gorm:"not null;index"`

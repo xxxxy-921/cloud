@@ -322,7 +322,7 @@ func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicke
 		return s.ticketRepo.FindByID(ticket.ID)
 	}
 
-	if ticket, ok, err := s.findSubmittedDraftTicket(req.SessionID, req.DraftVersion, req.FieldsHash); err != nil || ok {
+	if ticket, ok, err := s.findSubmittedDraftTicket(req.SessionID, req.DraftVersion, req.FieldsHash, req.RequestHash); err != nil || ok {
 		return ticket, err
 	}
 
@@ -334,7 +334,7 @@ func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicke
 	var created *Ticket
 	err = s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
 		var existing ServiceDeskSubmission
-		result := tx.Where("session_id = ? AND draft_version = ? AND fields_hash = ?", req.SessionID, req.DraftVersion, req.FieldsHash).
+		result := tx.Where("session_id = ? AND draft_version = ? AND fields_hash = ? AND request_hash = ?", req.SessionID, req.DraftVersion, req.FieldsHash, req.RequestHash).
 			Limit(1).
 			Find(&existing)
 		if result.Error != nil {
@@ -389,7 +389,7 @@ func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicke
 		return nil
 	})
 	if errors.Is(err, errSubmissionAlreadyExists) {
-		ticket, ok, findErr := s.findSubmittedDraftTicket(req.SessionID, req.DraftVersion, req.FieldsHash)
+		ticket, ok, findErr := s.findSubmittedDraftTicket(req.SessionID, req.DraftVersion, req.FieldsHash, req.RequestHash)
 		if findErr != nil {
 			return nil, findErr
 		}
@@ -416,10 +416,10 @@ func serviceVersionIDPointer(id uint) *uint {
 	return &id
 }
 
-func (s *TicketService) findSubmittedDraftTicket(sessionID uint, draftVersion int, fieldsHash string) (*Ticket, bool, error) {
+func (s *TicketService) findSubmittedDraftTicket(sessionID uint, draftVersion int, fieldsHash string, requestHash string) (*Ticket, bool, error) {
 	var submission ServiceDeskSubmission
 	result := s.ticketRepo.DB().
-		Where("session_id = ? AND draft_version = ? AND fields_hash = ?", sessionID, draftVersion, fieldsHash).
+		Where("session_id = ? AND draft_version = ? AND fields_hash = ? AND request_hash = ?", sessionID, draftVersion, fieldsHash, requestHash).
 		Limit(1).
 		Find(&submission)
 	if result.Error != nil {
@@ -748,6 +748,27 @@ func (s *TicketService) BuildResponses(items []Ticket, operatorID uint) ([]Ticke
 		}
 	}
 
+	// Expand parallel-group siblings so populateSmartSummary can aggregate owner names.
+	// current_activity_id only stores the first activity in the group; we need all pending siblings.
+	var parallelGroupIDs []string
+	for _, a := range activities {
+		if a.ActivityGroupID != "" {
+			parallelGroupIDs = append(parallelGroupIDs, a.ActivityGroupID)
+		}
+	}
+	if len(parallelGroupIDs) > 0 {
+		var siblings []TicketActivity
+		if err := db.Where("activity_group_id IN ? AND status IN ?", parallelGroupIDs,
+			[]string{engine.ActivityPending, engine.ActivityInProgress}).Find(&siblings).Error; err == nil {
+			for _, a := range siblings {
+				if _, exists := activities[a.ID]; !exists {
+					activities[a.ID] = a
+					activityIDs[a.ID] = struct{}{}
+				}
+			}
+		}
+	}
+
 	assignments, err := s.loadAssignmentDisplays(activityIDs, operatorID)
 	if err != nil {
 		return responses, err
@@ -1058,12 +1079,38 @@ func (s *TicketService) populateSmartSummary(resp *TicketResponse, activities ma
 	if resp.NextStepSummary == "" {
 		resp.NextStepSummary = activity.ActivityType
 	}
-	if assignment, ok := assignments[activity.ID]; ok {
+	if activity.ActivityGroupID != "" {
+		// Parallel group: aggregate owner names from all pending siblings.
+		var ownerNames []string
+		for _, a := range activities {
+			if a.ActivityGroupID != activity.ActivityGroupID {
+				continue
+			}
+			if asgn, ok := assignments[a.ID]; ok {
+				if asgn.OwnerName != "" {
+					ownerNames = append(ownerNames, asgn.OwnerName)
+				}
+				if asgn.CanAct {
+					resp.CanAct = true
+				}
+			}
+		}
+		if len(ownerNames) > 0 {
+			sort.Strings(ownerNames)
+			resp.CurrentOwnerType = "parallel"
+			resp.CurrentOwnerName = strings.Join(ownerNames, " / ")
+		}
+	} else if assignment, ok := assignments[activity.ID]; ok {
 		resp.CurrentOwnerType = assignment.ParticipantType
 		resp.CurrentOwnerName = assignment.OwnerName
 		resp.CanAct = assignment.CanAct
 	}
 	switch {
+	case activity.ActivityGroupID != "" && resp.CurrentOwnerName != "":
+		// current_activity_id may point at a completed parallel child while
+		// sibling approvals are still pending. In that case, keep showing the
+		// remaining human approver set instead of falling through to AI.
+		resp.SmartState = "waiting_human"
 	case activity.ActivityType == engine.NodeAction && (activity.Status == engine.ActivityPending || activity.Status == engine.ActivityInProgress):
 		resp.SmartState = "action_running"
 		resp.CurrentOwnerType = "system"

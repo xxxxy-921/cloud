@@ -157,14 +157,10 @@ function useApprovalSchema() {
 }
 
 function getNodeOutcomes(activityType: string): ApprovalOutcome[] {
-  switch (activityType) {
-    case "approve":
-    case "form":
-    case "process":
-      return ["approved", "rejected"]
-    default:
-      return ["approved", "rejected"]
+  if (activityType === "form") {
+    return ["approved"]
   }
+  return ["approved", "rejected"]
 }
 
 function parseDecision(activity?: ActivityItem | null): DecisionPlan | null {
@@ -373,6 +369,9 @@ function DecisionButtonContent({ icon: Icon, children }: { icon: LucideIcon; chi
 }
 
 function outcomeLabel(activity: ActivityItem, outcome: string, t: (key: string) => string) {
+  if (activity.activityType === "form" && outcome === "approved") return t("itsm:tickets.submit")
+  if (activity.activityType === "process" && outcome === "approved") return t("itsm:tickets.complete")
+  if (activity.activityType === "process" && outcome === "rejected") return t("itsm:tickets.reject")
   if (outcome === "approved") return t("itsm:tickets.approve")
   if (outcome === "rejected") return t("itsm:tickets.reject")
   return `${activity.name}: ${outcome}`
