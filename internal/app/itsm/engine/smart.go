@@ -2197,11 +2197,27 @@ func (e *SmartEngine) ensureContinuation(tx *gorm.DB, ticket *ticketModel, compl
 
 	decisioningStatus := TicketStatusDecisioning
 	if completedActivityID > 0 {
-		var outcome string
-		if err := tx.Model(&activityModel{}).Where("id = ?", completedActivityID).Select("transition_outcome").Scan(&outcome).Error; err != nil {
-			return false, err
+		var groupID string
+		_ = tx.Model(&activityModel{}).Where("id = ?", completedActivityID).Select("activity_group_id").Scan(&groupID).Error
+
+		if groupID != "" {
+			// Parallel group converged: if ANY sibling was rejected, the aggregate outcome is rejected.
+			var rejectedCount int64
+			tx.Model(&activityModel{}).
+				Where("activity_group_id = ? AND transition_outcome = ?", groupID, ActivityRejected).
+				Count(&rejectedCount)
+			if rejectedCount > 0 {
+				decisioningStatus = TicketDecisioningStatusForOutcome(ActivityRejected)
+			} else {
+				decisioningStatus = TicketDecisioningStatusForOutcome(ActivityApproved)
+			}
+		} else {
+			var outcome string
+			if err := tx.Model(&activityModel{}).Where("id = ?", completedActivityID).Select("transition_outcome").Scan(&outcome).Error; err != nil {
+				return false, err
+			}
+			decisioningStatus = TicketDecisioningStatusForOutcome(outcome)
 		}
-		decisioningStatus = TicketDecisioningStatusForOutcome(outcome)
 	}
 	if err := tx.Model(&ticketModel{}).Where("id = ?", ticket.ID).Updates(map[string]any{
 		"status":              decisioningStatus,
@@ -2602,12 +2618,13 @@ const agenticToolGuidance = `## 工具使用指引
 2. 如果 is_terminal=true，直接输出 complete 或保持终态判断，不要创建新活动。
 3. 当 trigger_reason=activity_completed 时，必须先读取 completed_activity、completed_requirements 和 workflow_context；刚完成的人工活动如果已经满足当前服务规范，不得再次创建同一处理/表单，必须进入下一条件或 complete。
 4. 当 completed_activity.outcome=rejected 或 completed_activity.satisfied=false 时，必须先解释驳回原因、协作规范定义的恢复路径，以及 workflow_json 与该路径的关系。协作规范未显式定义补充信息或返工路径时，不得把 rejected 解释为退回申请人补充，也不得创建申请人补充/返工类人工活动；没有新证据时不得重复创建刚被驳回的同一人工处理任务。
-5. 用 decision.list_actions 查看是否有可用自动化动作；协作规范要求预检、放行等同步动作时，优先 decision.execute_action，而不是输出 action 活动。
-6. 如需查阅处理规范或知识库，使用 decision.knowledge_search。知识不可用或无命中时可以降级，但要在 reasoning 说明。
-7. 需要人工处理/表单时，必须先用 decision.resolve_participant 解析参与人；count=0 时不得高置信输出该人工活动。
-8. 候选多人时，可用 decision.user_workload 选择负载较低者；SLA 风险明显时可用 decision.sla_status。
-9. 如果需要多角色并行处理，设置 execution_mode 为 "parallel"，在 activities 中列出所有并行角色。
-10. 最终输出决策 JSON（不调用任何工具）。
+5. 当 completed_activity.activity_group_id 不为空时，表示并签组刚刚收敛。必须查看 activity_history 中所有 activity_group_id 相同的活动，汇总各分支结果：若存在任意 outcome=rejected 的活动，整体视为驳回结果，依照协作规范和 workflow_json 的驳回路径决策（通常是直接结束/rejected）；全部 approved 才视为通过，进入下一步。不得仅看 completed_activity.outcome 而忽略同组其他分支的结果。
+6. 用 decision.list_actions 查看是否有可用自动化动作；协作规范要求预检、放行等同步动作时，优先 decision.execute_action，而不是输出 action 活动。
+7. 如需查阅处理规范或知识库，使用 decision.knowledge_search。知识不可用或无命中时可以降级，但要在 reasoning 说明。
+8. 需要人工处理/表单时，必须先用 decision.resolve_participant 解析参与人；count=0 时不得高置信输出该人工活动。
+9. 候选多人时，可用 decision.user_workload 选择负载较低者；SLA 风险明显时可用 decision.sla_status。
+10. 如果需要多角色并行处理，设置 execution_mode 为 "parallel"，在 activities 中列出所有并行角色。
+11. 最终输出决策 JSON（不调用任何工具）。
 
 ### 完成判断
 

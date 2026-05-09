@@ -32,6 +32,7 @@ coverage.out
 coverage.html
 test-report.xml
 test-llm-report.xml
+artifacts/bdd-nightly/
 
 # Env
 .env
@@ -51,3 +52,7 @@ sidecar
 .gocache/**
 .gocache-test/
 .codex/
+.scripts/**
+scripts/
+
+

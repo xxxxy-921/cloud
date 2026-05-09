@@ -156,11 +156,29 @@ func TestBuildLLMMessages_MapsToolTranscriptFields(t *testing.T) {
 	if len(messages) != 4 {
 		t.Fatalf("expected system + 3 messages, got %+v", messages)
 	}
+	if messages[2].Content != " " {
+		t.Fatalf("expected assistant tool transcript to use provider-safe blank content, got %q", messages[2].Content)
+	}
 	if len(messages[2].ToolCalls) != 1 || messages[2].ToolCalls[0].Name != "itsm.service_match" {
 		t.Fatalf("expected tool calls to be preserved, got %+v", messages[2])
 	}
 	if messages[3].Role != llm.RoleTool || messages[3].ToolCallID != "call_1" {
 		t.Fatalf("expected tool result to preserve call id, got %+v", messages[3])
+	}
+}
+
+func TestBuildLLMMessages_NormalizesSurfaceOnlyAssistantContent(t *testing.T) {
+	req := ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleAssistant, Content: ""}},
+	}
+
+	messages := buildLLMMessages(req)
+
+	if len(messages) != 1 {
+		t.Fatalf("expected one assistant message, got %+v", messages)
+	}
+	if messages[0].Content != " " {
+		t.Fatalf("expected provider-safe blank assistant content, got %q", messages[0].Content)
 	}
 }
 
