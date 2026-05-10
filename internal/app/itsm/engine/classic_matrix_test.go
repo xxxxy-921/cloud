@@ -313,6 +313,67 @@ func TestClassicMatrixFormBindingsSkipEmptyValues(t *testing.T) {
 	}
 }
 
+func TestClassicMatrixScriptWarningsDoNotBlockSubsequentAssignments(t *testing.T) {
+	f := newClassicMatrixFixture(t)
+	workflow := json.RawMessage(`{
+		"nodes":[
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"script","type":"script","data":{"label":"脚本","assignments":[
+				{"variable":"bad","expression":"missing_var + 1"},
+				{"variable":"ticket_summary","expression":"ticket_status + '-ok'"},
+				{"variable":"priority_plus_one","expression":"ticket_priority_id + 1"}
+			]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges":[
+			{"id":"e1","source":"start","target":"script","data":{}},
+			{"id":"e2","source":"script","target":"end","data":{}}
+		]
+	}`)
+	ticket := f.createTicket(t, workflow)
+
+	if err := f.start(t, ticket, workflow); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got := f.ticketStatus(t, ticket.ID); got != TicketStatusCompleted {
+		t.Fatalf("ticket status = %q, want %s", got, TicketStatusCompleted)
+	}
+
+	var vars []processVariableModel
+	if err := f.db.Where("ticket_id = ?", ticket.ID).Order("key ASC").Find(&vars).Error; err != nil {
+		t.Fatalf("query vars: %v", err)
+	}
+	got := map[string]string{}
+	for _, v := range vars {
+		got[v.Key] = v.Value
+	}
+	if _, exists := got["bad"]; exists {
+		t.Fatalf("bad assignment should not persist variable, got %+v", got)
+	}
+	if got["ticket_summary"] != "waiting_human-ok" {
+		t.Fatalf("ticket_summary = %q, want waiting_human-ok", got["ticket_summary"])
+	}
+	if got["priority_plus_one"] != "5" {
+		t.Fatalf("priority_plus_one = %q, want 5", got["priority_plus_one"])
+	}
+
+	var warningCount int64
+	if err := f.db.Model(&timelineModel{}).Where("ticket_id = ? AND event_type = ?", ticket.ID, "warning").Count(&warningCount).Error; err != nil {
+		t.Fatalf("count warning timelines: %v", err)
+	}
+	if warningCount != 1 {
+		t.Fatalf("warning timeline count = %d, want 1", warningCount)
+	}
+
+	var scriptCount int64
+	if err := f.db.Model(&timelineModel{}).Where("ticket_id = ? AND event_type = ?", ticket.ID, "script_executed").Count(&scriptCount).Error; err != nil {
+		t.Fatalf("count script_executed timelines: %v", err)
+	}
+	if scriptCount != 1 {
+		t.Fatalf("script_executed timeline count = %d, want 1", scriptCount)
+	}
+}
+
 func TestClassicMatrixExclusiveGatewayBranches(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -85,10 +85,10 @@ func (r *LicenseRepo) List(params LicenseListParams) ([]LicenseListItem, int64, 
 	if params.LicenseeID > 0 {
 		base = base.Where("license_licenses.licensee_id = ?", params.LicenseeID)
 	}
-	if params.Status != "" {
+	if params.Status != "" && params.Status != "all" {
 		base = base.Where("license_licenses.status = ?", params.Status)
 	}
-	if params.LifecycleStatus != "" {
+	if params.LifecycleStatus != "" && params.LifecycleStatus != "all" {
 		base = base.Where("license_licenses.lifecycle_status = ?", params.LifecycleStatus)
 	}
 	if params.Keyword != "" {
@@ -125,14 +125,16 @@ func (r *LicenseRepo) UpdateStatusInTx(tx *gorm.DB, id uint, updates map[string]
 
 func (r *LicenseRepo) UpdateExpiredStatus(now time.Time, statuses []string) error {
 	return r.db.Model(&domain.License{}).
-		Where("lifecycle_status IN ? AND valid_until IS NOT NULL AND valid_until <= ?", statuses, now).
+		Where("status != ? AND lifecycle_status IN ? AND valid_until IS NOT NULL AND valid_until <= ?",
+			domain.LicenseStatusRevoked, statuses, now).
 		Update("lifecycle_status", domain.LicenseLifecycleExpired).Error
 }
 
 func (r *LicenseRepo) CountByProductAndKeyVersionLessThan(productID uint, version int) (int64, error) {
 	var count int64
 	err := r.db.Model(&domain.License{}).
-		Where("product_id = ? AND status != ? AND key_version < ?", productID, domain.LicenseStatusRevoked, version).
+		Where("product_id = ? AND status != ? AND lifecycle_status != ? AND key_version < ?",
+			productID, domain.LicenseStatusRevoked, domain.LicenseLifecycleRevoked, version).
 		Count(&count).Error
 	return count, err
 }
@@ -148,7 +150,8 @@ func (r *LicenseRepo) FindByProductID(productID uint) ([]domain.License, error) 
 
 func (r *LicenseRepo) FindReissueableByProductID(productID uint, version int) ([]domain.License, error) {
 	var items []domain.License
-	err := r.db.Where("product_id = ? AND status != ? AND key_version < ?", productID, domain.LicenseStatusRevoked, version).Find(&items).Error
+	err := r.db.Where("product_id = ? AND status != ? AND lifecycle_status != ? AND key_version < ?",
+		productID, domain.LicenseStatusRevoked, domain.LicenseLifecycleRevoked, version).Find(&items).Error
 	if err != nil {
 		return nil, err
 	}

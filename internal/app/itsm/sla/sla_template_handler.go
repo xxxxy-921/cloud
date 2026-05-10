@@ -52,6 +52,14 @@ func (h *SLATemplateHandler) Create(c *gin.Context) {
 			handler.Fail(c, http.StatusConflict, err.Error())
 			return
 		}
+		if errors.Is(err, ErrSLATemplateInvalidDuration) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, ErrSLATemplateInvalidIdentifier) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -127,6 +135,10 @@ func (h *SLATemplateHandler) Update(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrSLACodeExists):
 			handler.Fail(c, http.StatusConflict, err.Error())
+		case errors.Is(err, ErrSLATemplateInvalidDuration):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrSLATemplateInvalidIdentifier):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrSLATemplateInUse):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:

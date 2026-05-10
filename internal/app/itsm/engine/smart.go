@@ -122,6 +122,8 @@ var AllowedSmartStepTypes = map[string]bool{
 	"notify": true, "form": true, "complete": true, "escalate": true,
 }
 
+var ErrSmartTaskSchedulerUnavailable = errors.New("smart task scheduler is not configured")
+
 // --- SmartEngine ---
 
 // SmartEngine implements WorkflowEngine via AI Agent-driven decisions.
@@ -158,6 +160,16 @@ func NewSmartEngine(
 // IsAvailable returns true if the smart engine has AI dependencies.
 func (e *SmartEngine) IsAvailable() bool {
 	return e.decisionExecutor != nil
+}
+
+func (e *SmartEngine) CanDispatchDecisionTask() error {
+	if !e.IsAvailable() {
+		return ErrSmartEngineUnavailable
+	}
+	if e.scheduler == nil {
+		return ErrSmartTaskSchedulerUnavailable
+	}
+	return nil
 }
 
 // SetActionExecutor injects the action executor for decision.execute_action tool support.
@@ -224,6 +236,9 @@ func (e *SmartEngine) Progress(ctx context.Context, tx *gorm.DB, params Progress
 	// Load and complete the activity
 	var activity activityModel
 	if err := tx.First(&activity, params.ActivityID).Error; err != nil {
+		return ErrActivityNotFound
+	}
+	if activity.TicketID != params.TicketID {
 		return ErrActivityNotFound
 	}
 	if activity.Status != ActivityPending && activity.Status != ActivityInProgress {
@@ -298,9 +313,11 @@ func (e *SmartEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPara
 	// Update ticket
 	now := time.Now()
 	if err := tx.Model(&ticketModel{}).Where("id = ?", params.TicketID).Updates(map[string]any{
-		"status":      ticketCancelStatus(params.EventType),
-		"outcome":     ticketCancelOutcome(params.EventType),
-		"finished_at": now,
+		"status":              ticketCancelStatus(params.EventType),
+		"outcome":             ticketCancelOutcome(params.EventType),
+		"finished_at":         now,
+		"current_activity_id": nil,
+		"assignee_id":         nil,
 	}).Error; err != nil {
 		return err
 	}
@@ -758,7 +775,7 @@ func findActiveServiceActionByCodeAliases(tx *gorm.DB, serviceID uint, codes []s
 	for _, code := range codes {
 		err := tx.Table("itsm_service_actions").
 			Where("service_id = ? AND code = ? AND is_active = ? AND deleted_at IS NULL", serviceID, code, true).
-			Select("id, name, code, service_id, is_active, config_json").
+			Select("id, name, code, service_id, is_active, action_type, config_json").
 			First(action).Error
 		if err == nil {
 			return nil
@@ -1705,6 +1722,15 @@ func (e *SmartEngine) validateNoDuplicateCompletedHumanActivity(tx *gorm.DB, tic
 				return err
 			}
 			existingSignatures := participantSignaturesForAssignments(assignments)
+			// Allow explicitly justified recovery on the same rejected human path.
+			// The dedicated rejected-recovery validator will enforce whether the
+			// recovery path is actually permitted by collaborationSpec/workflow.
+			if !isPositiveActivityOutcome(existing.TransitionOutcome) &&
+				hasExplicitRecoveryIntent(plannedInstructions) &&
+				len(plannedSignatures) > 0 &&
+				participantSignaturesOverlap(plannedSignatures, existingSignatures) {
+				continue
+			}
 			if len(plannedSignatures) == 0 || participantSignaturesOverlap(plannedSignatures, existingSignatures) {
 				return fmt.Errorf("activities[%d] 重复创建已完成的人工活动：%s / %s", i, da.Type, plannedName)
 			}
@@ -2269,13 +2295,16 @@ func (e *SmartEngine) ExecuteDecisionPlan(tx *gorm.DB, ticketID uint, plan *Deci
 
 // SubmitProgressTask submits an async smart-progress task.
 func (e *SmartEngine) SubmitProgressTask(payload json.RawMessage) error {
-	if e.scheduler != nil {
-		return e.scheduler.SubmitTask("itsm-smart-progress", payload)
+	if err := e.CanDispatchDecisionTask(); err != nil {
+		return err
 	}
-	return nil
+	return e.scheduler.SubmitTask("itsm-smart-progress", payload)
 }
 
 func (e *SmartEngine) SubmitProgressTaskTx(tx *gorm.DB, payload json.RawMessage) error {
+	if err := e.CanDispatchDecisionTask(); err != nil {
+		return err
+	}
 	return submitTaskInTx(e.scheduler, tx, "itsm-smart-progress", payload)
 }
 
@@ -2542,6 +2571,7 @@ func normalizedTriggerReason(completedActivityID *uint, triggerReasons ...string
 }
 
 func normalizedDecisionMode(decisionMode string) string {
+	decisionMode = strings.TrimSpace(decisionMode)
 	if decisionMode == "" {
 		return "direct_first"
 	}

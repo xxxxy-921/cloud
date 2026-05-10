@@ -10,6 +10,7 @@ import (
 	"metis/internal/app/license/registration"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -134,7 +135,8 @@ func (h *LicenseHandler) Issue(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, productpkg.ErrProductNotFound) || errors.Is(err, ErrProductNotPublished) ||
 			errors.Is(err, licenseepkg.ErrLicenseeNotFound) || errors.Is(err, ErrLicenseeNotActive) ||
-			errors.Is(err, ErrProductKeyNotFound) || errors.Is(err, ErrRegistrationNotFound) ||
+			errors.Is(err, ErrProductKeyNotFound) || errors.Is(err, ErrRegistrationCodeRequired) || errors.Is(err, ErrRegistrationNotFound) ||
+			errors.Is(err, ErrRegistrationOwnership) || errors.Is(err, ErrInvalidValidityPeriod) ||
 			errors.Is(err, ErrRegistrationAlreadyBound) || errors.Is(err, ErrRegistrationExpired) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
@@ -149,27 +151,59 @@ func (h *LicenseHandler) Issue(c *gin.Context) {
 }
 
 func (h *LicenseHandler) List(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	var productID, licenseeID uint
 	if v := c.Query("productId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid productId")
+			return
+		}
+		if id == 0 {
+			handler.Fail(c, http.StatusBadRequest, "invalid productId")
+			return
+		}
 		productID = uint(id)
 	}
 	if v := c.Query("licenseeId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid licenseeId")
+			return
+		}
+		if id == 0 {
+			handler.Fail(c, http.StatusBadRequest, "invalid licenseeId")
+			return
+		}
 		licenseeID = uint(id)
 	}
 
 	params := LicenseListParams{
 		ProductID:       productID,
 		LicenseeID:      licenseeID,
-		Status:          c.Query("status"),
-		LifecycleStatus: c.Query("lifecycleStatus"),
+		Status:          normalizeLicenseListStatus(c.Query("status")),
+		LifecycleStatus: normalizeLicenseLifecycleStatus(c.Query("lifecycleStatus")),
 		Keyword:         c.Query("keyword"),
 		Page:            page,
 		PageSize:        pageSize,
+	}
+	if !isValidLicenseListStatus(params.Status) {
+		handler.Fail(c, http.StatusBadRequest, "invalid status")
+		return
+	}
+	if !isValidLicenseLifecycleStatus(params.LifecycleStatus) {
+		handler.Fail(c, http.StatusBadRequest, "invalid lifecycleStatus")
+		return
 	}
 
 	items, total, err := h.licenseSvc.ListLicenses(params)
@@ -192,6 +226,45 @@ func (h *LicenseHandler) List(c *gin.Context) {
 		"page":     page,
 		"pageSize": pageSize,
 	})
+}
+
+func isValidLicenseListStatus(status string) bool {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "", "all", domain.LicenseStatusIssued, domain.LicenseStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeLicenseListStatus(status string) string {
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "all" {
+		return ""
+	}
+	return status
+}
+
+func isValidLicenseLifecycleStatus(status string) bool {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "", "all",
+		domain.LicenseLifecyclePending,
+		domain.LicenseLifecycleActive,
+		domain.LicenseLifecycleExpired,
+		domain.LicenseLifecycleSuspended,
+		domain.LicenseLifecycleRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeLicenseLifecycleStatus(status string) string {
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "all" {
+		return ""
+	}
+	return status
 }
 
 func (h *LicenseHandler) Get(c *gin.Context) {
@@ -257,7 +330,11 @@ func (h *LicenseHandler) Export(c *gin.Context) {
 		return
 	}
 
-	format := c.DefaultQuery("format", "v1")
+	format := strings.TrimSpace(strings.ToLower(c.DefaultQuery("format", "v1")))
+	if !isValidLicenseExportFormat(format) {
+		handler.Fail(c, http.StatusBadRequest, "invalid format")
+		return
+	}
 	licFile, filename, err := h.licenseSvc.ExportLicFile(id, format)
 	if err != nil {
 		if errors.Is(err, ErrLicenseNotFound) {
@@ -274,6 +351,15 @@ func (h *LicenseHandler) Export(c *gin.Context) {
 
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(licFile))
+}
+
+func isValidLicenseExportFormat(format string) bool {
+	switch strings.TrimSpace(strings.ToLower(format)) {
+	case "", "v1", "v2":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *LicenseHandler) Renew(c *gin.Context) {
@@ -306,7 +392,7 @@ func (h *LicenseHandler) Renew(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, ErrLicenseAlreadyRevoked) {
+		if errors.Is(err, ErrLicenseAlreadyRevoked) || errors.Is(err, ErrProductKeyNotFound) || errors.Is(err, ErrInvalidValidityPeriod) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -363,13 +449,14 @@ func (h *LicenseHandler) Upgrade(c *gin.Context) {
 		IssuedBy:               userID.(uint),
 	})
 	if err != nil {
-		if errors.Is(err, ErrLicenseNotFound) || errors.Is(err, ErrLicenseAlreadyRevoked) {
+		if errors.Is(err, ErrLicenseNotFound) || errors.Is(err, ErrLicenseAlreadyRevoked) || errors.Is(err, ErrUpgradeScopeMismatch) || errors.Is(err, ErrInvalidValidityPeriod) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		if errors.Is(err, productpkg.ErrProductNotFound) || errors.Is(err, ErrProductNotPublished) ||
 			errors.Is(err, licenseepkg.ErrLicenseeNotFound) || errors.Is(err, ErrLicenseeNotActive) ||
-			errors.Is(err, ErrProductKeyNotFound) || errors.Is(err, ErrRegistrationNotFound) ||
+			errors.Is(err, ErrProductKeyNotFound) || errors.Is(err, ErrRegistrationCodeRequired) || errors.Is(err, ErrRegistrationNotFound) ||
+			errors.Is(err, ErrRegistrationOwnership) ||
 			errors.Is(err, ErrRegistrationAlreadyBound) || errors.Is(err, ErrRegistrationExpired) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
@@ -471,16 +558,40 @@ func (h *LicenseHandler) CreateRegistration(c *gin.Context) {
 }
 
 func (h *LicenseHandler) ListRegistrations(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	var productID, licenseeID uint
 	if v := c.Query("productId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid productId")
+			return
+		}
+		if id == 0 {
+			handler.Fail(c, http.StatusBadRequest, "invalid productId")
+			return
+		}
 		productID = uint(id)
 	}
 	if v := c.Query("licenseeId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid licenseeId")
+			return
+		}
+		if id == 0 {
+			handler.Fail(c, http.StatusBadRequest, "invalid licenseeId")
+			return
+		}
 		licenseeID = uint(id)
 	}
 	available := c.Query("available") == "true"

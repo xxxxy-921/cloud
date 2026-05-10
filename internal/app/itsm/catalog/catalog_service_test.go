@@ -189,3 +189,83 @@ func TestCatalogServiceServiceCounts_AggregatesDirectAndRootCounts(t *testing.T)
 		t.Fatalf("unexpected root counts: %+v", counts.ByRootCatalogID)
 	}
 }
+
+func TestCatalogServiceTreeAndCounts_EmptyStateContracts(t *testing.T) {
+	db := newTestDB(t)
+	svc := newCatalogServiceForTest(t, db)
+
+	tree, err := svc.Tree()
+	if err != nil {
+		t.Fatalf("Tree on empty state: %v", err)
+	}
+	if len(tree) != 0 {
+		t.Fatalf("expected empty tree, got %+v", tree)
+	}
+
+	counts, err := svc.ServiceCounts()
+	if err != nil {
+		t.Fatalf("ServiceCounts on empty state: %v", err)
+	}
+	if counts.Total != 0 || len(counts.ByCatalogID) != 0 || len(counts.ByRootCatalogID) != 0 {
+		t.Fatalf("unexpected empty counts: %+v", counts)
+	}
+}
+
+func TestCatalogServiceCreateGetAndUpdateContracts(t *testing.T) {
+	db := newTestDB(t)
+	svc := newCatalogServiceForTest(t, db)
+
+	root, err := svc.Create("Root", "root", "root desc", "folder", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+
+	t.Run("create rejects missing parent and third level", func(t *testing.T) {
+		missingParentID := uint(999)
+		if _, err := svc.Create("Ghost", "ghost", "", "", &missingParentID, 0); !errors.Is(err, ErrCatalogNotFound) {
+			t.Fatalf("expected ErrCatalogNotFound, got %v", err)
+		}
+
+		child, err := svc.Create("Child", "child", "", "", &root.ID, 20)
+		if err != nil {
+			t.Fatalf("create child: %v", err)
+		}
+		if _, err := svc.Create("Grand", "grand", "", "", &child.ID, 30); !errors.Is(err, ErrCatalogTooDeep) {
+			t.Fatalf("expected ErrCatalogTooDeep, got %v", err)
+		}
+	})
+
+	t.Run("get returns stored catalog and missing id", func(t *testing.T) {
+		got, err := svc.Get(root.ID)
+		if err != nil {
+			t.Fatalf("Get root: %v", err)
+		}
+		if got.Name != "Root" || got.Description != "root desc" || got.Icon != "folder" {
+			t.Fatalf("unexpected catalog payload: %+v", got)
+		}
+
+		if _, err := svc.Get(999); !errors.Is(err, ErrCatalogNotFound) {
+			t.Fatalf("expected ErrCatalogNotFound, got %v", err)
+		}
+	})
+
+	t.Run("update persists scalar fields and active flag", func(t *testing.T) {
+		updated, err := svc.Update(root.ID, map[string]any{
+			"name":        "Root Updated",
+			"description": "updated desc",
+			"icon":        "grid",
+			"sort_order":  99,
+			"is_active":   false,
+		})
+		if err != nil {
+			t.Fatalf("Update root: %v", err)
+		}
+		if updated.Name != "Root Updated" || updated.Description != "updated desc" || updated.Icon != "grid" || updated.SortOrder != 99 || updated.IsActive {
+			t.Fatalf("unexpected updated catalog: %+v", updated)
+		}
+
+		if _, err := svc.Update(999, map[string]any{"name": "ghost"}); !errors.Is(err, ErrCatalogNotFound) {
+			t.Fatalf("expected ErrCatalogNotFound on update missing catalog, got %v", err)
+		}
+	})
+}

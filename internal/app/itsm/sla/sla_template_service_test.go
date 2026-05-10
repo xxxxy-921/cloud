@@ -1,6 +1,7 @@
 package sla
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/samber/do/v2"
@@ -48,5 +49,27 @@ func TestSLATemplateServiceDeactivateRejectsActiveServiceReference(t *testing.T)
 
 	if _, err := svc.Update(sla.ID, map[string]any{"is_active": false}); err == nil {
 		t.Fatal("expected deactivate to fail when SLA is referenced by an active service")
+	}
+}
+
+func TestSLATemplateServiceRejectsNonPositiveDurations(t *testing.T) {
+	svc, db := newSLATemplateServiceForTest(t)
+
+	if _, err := svc.Create(&SLATemplate{
+		Name:              "Invalid Create",
+		Code:              "invalid-create",
+		ResponseMinutes:   0,
+		ResolutionMinutes: 30,
+	}); !errors.Is(err, ErrSLATemplateInvalidDuration) {
+		t.Fatalf("create invalid duration error = %v, want %v", err, ErrSLATemplateInvalidDuration)
+	}
+
+	valid := SLATemplate{Name: "Valid SLA", Code: "valid-sla", ResponseMinutes: 5, ResolutionMinutes: 30, IsActive: true}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatalf("create valid sla: %v", err)
+	}
+
+	if _, err := svc.Update(valid.ID, map[string]any{"resolution_minutes": 0}); !errors.Is(err, ErrSLATemplateInvalidDuration) {
+		t.Fatalf("update invalid duration error = %v, want %v", err, ErrSLATemplateInvalidDuration)
 	}
 }

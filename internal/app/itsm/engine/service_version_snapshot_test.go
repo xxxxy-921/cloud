@@ -59,6 +59,64 @@ func TestSmartEngineLoadServiceForTicket_UsesBoundRuntimeVersionSnapshot(t *test
 	}
 }
 
+func TestSmartEngineLoadServiceForTicket_FallsBackToLiveServiceWhenSnapshotUnavailable(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	service := testutil.SeedSmartSubmissionService(t, db)
+
+	t.Run("missing snapshot row falls back to live definition", func(t *testing.T) {
+		missingVersionID := uint(99999)
+		ticket := domain.Ticket{
+			Code:             "TICK-SNAPSHOT-MISSING",
+			Title:            "snapshot missing",
+			ServiceID:        service.ID,
+			ServiceVersionID: &missingVersionID,
+			EngineType:       "smart",
+			Status:           TicketStatusDecisioning,
+			PriorityID:       1,
+			RequesterID:      1,
+		}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+
+		engine := NewSmartEngine(nil, nil, nil, nil, nil, nil)
+		loaded, err := engine.loadServiceForTicket(db, ticket.ID)
+		if err != nil {
+			t.Fatalf("load service for missing snapshot ticket: %v", err)
+		}
+		if loaded.ID != service.ID || loaded.RuntimeVersionID != nil {
+			t.Fatalf("expected fallback to live service without runtime version, got %+v", loaded)
+		}
+		if loaded.CollaborationSpec != service.CollaborationSpec {
+			t.Fatalf("expected live collaboration spec %q, got %q", service.CollaborationSpec, loaded.CollaborationSpec)
+		}
+	})
+
+	t.Run("ticket without service_version_id uses live definition", func(t *testing.T) {
+		ticket := domain.Ticket{
+			Code:        "TICK-LIVE-SERVICE",
+			Title:       "live fallback",
+			ServiceID:   service.ID,
+			EngineType:  "smart",
+			Status:      TicketStatusDecisioning,
+			PriorityID:  1,
+			RequesterID: 1,
+		}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+
+		engine := NewSmartEngine(nil, nil, nil, nil, nil, nil)
+		loaded, err := engine.loadServiceForTicket(db, ticket.ID)
+		if err != nil {
+			t.Fatalf("load service for live ticket: %v", err)
+		}
+		if loaded.ID != service.ID || loaded.RuntimeVersionID != nil {
+			t.Fatalf("expected live service fallback, got %+v", loaded)
+		}
+	})
+}
+
 func TestDecisionDataStore_ListActionsUsesTicketRuntimeVersionSnapshot(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	service := testutil.SeedSmartSubmissionService(t, db)

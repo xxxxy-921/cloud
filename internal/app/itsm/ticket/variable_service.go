@@ -45,7 +45,7 @@ func (s *VariableService) ListByTicket(ticketID uint) ([]ProcessVariable, error)
 // BulkSet writes multiple variables in a batch (used for form binding).
 func (s *VariableService) BulkSet(tx *gorm.DB, vars []ProcessVariable) error {
 	for i := range vars {
-		if err := s.repo.SetVariable(tx, &vars[i]); err != nil {
+		if err := s.SetVariable(tx, &vars[i]); err != nil {
 			return err
 		}
 	}

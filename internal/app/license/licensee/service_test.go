@@ -36,6 +36,19 @@ func TestLicenseeService_Create(t *testing.T) {
 	if !errors.Is(err, ErrLicenseeNameExists) {
 		t.Errorf("expected ErrLicenseeNameExists, got %v", err)
 	}
+
+	_, err = svc.CreateLicensee(CreateLicenseeParams{Name: "   ", Notes: ""})
+	if !errors.Is(err, ErrInvalidLicenseeName) {
+		t.Errorf("blank name create error = %v, want %v", err, ErrInvalidLicenseeName)
+	}
+
+	trimmed, err := svc.CreateLicensee(CreateLicenseeParams{Name: "  Trimmed Corp  ", Notes: ""})
+	if err != nil {
+		t.Fatalf("trimmed create unexpected error: %v", err)
+	}
+	if trimmed.Name != "Trimmed Corp" {
+		t.Fatalf("trimmed create name = %q, want %q", trimmed.Name, "Trimmed Corp")
+	}
 }
 
 func TestLicenseeService_Update(t *testing.T) {
@@ -46,6 +59,10 @@ func TestLicenseeService_Update(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
+	other, err := svc.CreateLicensee(CreateLicenseeParams{Name: "Beta Corp", Notes: ""})
+	if err != nil {
+		t.Fatalf("setup other failed: %v", err)
+	}
 
 	newName := "Acme Inc"
 	updated, err := svc.UpdateLicensee(licensee.ID, UpdateLicenseeParams{Name: &newName})
@@ -54,6 +71,26 @@ func TestLicenseeService_Update(t *testing.T) {
 	}
 	if updated.Name != newName {
 		t.Errorf("Name = %q, want %q", updated.Name, newName)
+	}
+
+	duplicateName := other.Name
+	if _, err := svc.UpdateLicensee(licensee.ID, UpdateLicenseeParams{Name: &duplicateName}); !errors.Is(err, ErrLicenseeNameExists) {
+		t.Fatalf("duplicate update error = %v, want %v", err, ErrLicenseeNameExists)
+	}
+	blank := "   "
+	if _, err := svc.UpdateLicensee(licensee.ID, UpdateLicenseeParams{Name: &blank}); !errors.Is(err, ErrInvalidLicenseeName) {
+		t.Fatalf("blank update error = %v, want %v", err, ErrInvalidLicenseeName)
+	}
+	trimmedName := "  Acme Prime  "
+	updated, err = svc.UpdateLicensee(licensee.ID, UpdateLicenseeParams{Name: &trimmedName})
+	if err != nil {
+		t.Fatalf("trimmed update unexpected error: %v", err)
+	}
+	if updated.Name != "Acme Prime" {
+		t.Fatalf("trimmed update name = %q, want %q", updated.Name, "Acme Prime")
+	}
+	if _, err := svc.UpdateLicensee(999, UpdateLicenseeParams{Name: &newName}); !errors.Is(err, ErrLicenseeNotFound) {
+		t.Fatalf("missing update error = %v, want %v", err, ErrLicenseeNotFound)
 	}
 }
 
@@ -89,5 +126,11 @@ func TestLicenseeService_UpdateStatus(t *testing.T) {
 	// Invalid transition
 	if err := svc.UpdateLicenseeStatus(licensee.ID, "invalid"); !errors.Is(err, ErrLicenseeInvalidStatus) {
 		t.Errorf("expected ErrLicenseeInvalidStatus, got %v", err)
+	}
+	if err := svc.UpdateLicenseeStatus(999, domain.LicenseeStatusArchived); !errors.Is(err, ErrLicenseeNotFound) {
+		t.Errorf("expected ErrLicenseeNotFound, got %v", err)
+	}
+	if _, err := svc.GetLicensee(999); !errors.Is(err, ErrLicenseeNotFound) {
+		t.Errorf("expected ErrLicenseeNotFound on get, got %v", err)
 	}
 }

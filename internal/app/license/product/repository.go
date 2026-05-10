@@ -82,7 +82,7 @@ func (r *ProductRepo) List(params ProductListParams) ([]ProductListItem, int64, 
 		like := "%" + params.Keyword + "%"
 		query = query.Where("name LIKE ? OR code LIKE ?", like, like)
 	}
-	if params.Status != "" {
+	if params.Status != "" && params.Status != "all" {
 		query = query.Where("status = ?", params.Status)
 	}
 

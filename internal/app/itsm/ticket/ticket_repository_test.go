@@ -99,6 +99,113 @@ func TestRepairCompletedHumanAssignmentsMakesApproveHistoryVisible(t *testing.T)
 	}
 }
 
+func TestRepairCompletedHumanAssignmentsRepairsRejectedRowsOnceUsingTimelineFallback(t *testing.T) {
+	db := migrateTicketHistoryTestDB(t)
+	operatorID := uint(11)
+	otherOperatorID := uint(12)
+	priority := Priority{Name: "普通", Code: "normal-rejected", Value: 10, Color: "#666"}
+	if err := db.Create(&priority).Error; err != nil {
+		t.Fatalf("create priority: %v", err)
+	}
+	ticket := Ticket{
+		Code:        "TICK-REPAIR-REJECTED",
+		Title:       "审批驳回修复",
+		ServiceID:   1,
+		EngineType:  "smart",
+		Status:      TicketStatusRejected,
+		PriorityID:  priority.ID,
+		RequesterID: operatorID,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	activity := TicketActivity{
+		TicketID:          ticket.ID,
+		Name:              "驳回审批",
+		ActivityType:      "approve",
+		Status:            TicketOutcomeRejected,
+		TransitionOutcome: TicketOutcomeRejected,
+		FinishedAt:        nil,
+	}
+	if err := db.Create(&activity).Error; err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+
+	assignment := TicketAssignment{
+		TicketID:        ticket.ID,
+		ActivityID:      activity.ID,
+		ParticipantType: "user",
+		UserID:          &operatorID,
+		AssigneeID:      &operatorID,
+		Status:          AssignmentPending,
+		IsCurrent:       true,
+	}
+	if err := db.Create(&assignment).Error; err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+
+	foreignAssignment := TicketAssignment{
+		TicketID:        ticket.ID,
+		ActivityID:      activity.ID,
+		ParticipantType: "user",
+		UserID:          &otherOperatorID,
+		AssigneeID:      &otherOperatorID,
+		Status:          AssignmentPending,
+		IsCurrent:       true,
+	}
+	if err := db.Create(&foreignAssignment).Error; err != nil {
+		t.Fatalf("create foreign assignment: %v", err)
+	}
+
+	firstTimelineAt := time.Now().Add(-2 * time.Minute)
+	secondTimelineAt := time.Now().Add(-time.Minute)
+	for _, createdAt := range []time.Time{firstTimelineAt, secondTimelineAt} {
+		timeline := TicketTimeline{
+			TicketID:   ticket.ID,
+			ActivityID: &activity.ID,
+			OperatorID: operatorID,
+			EventType:  "activity_completed",
+			Message:    "活动 [驳回审批] 完成，结果: rejected",
+		}
+		if err := db.Create(&timeline).Error; err != nil {
+			t.Fatalf("create timeline: %v", err)
+		}
+		if err := db.Model(&timeline).Update("created_at", createdAt).Error; err != nil {
+			t.Fatalf("set timeline created_at: %v", err)
+		}
+	}
+
+	if err := RepairCompletedHumanAssignments(db.DB); err != nil {
+		t.Fatalf("repair assignments: %v", err)
+	}
+
+	var refreshed TicketAssignment
+	if err := db.First(&refreshed, assignment.ID).Error; err != nil {
+		t.Fatalf("reload repaired assignment: %v", err)
+	}
+	if refreshed.Status != AssignmentRejected {
+		t.Fatalf("assignment status = %q, want %q", refreshed.Status, AssignmentRejected)
+	}
+	if refreshed.AssigneeID == nil || *refreshed.AssigneeID != operatorID {
+		t.Fatalf("assignment assignee = %v, want %d", refreshed.AssigneeID, operatorID)
+	}
+	if refreshed.IsCurrent {
+		t.Fatalf("expected repaired assignment not current: %+v", refreshed)
+	}
+	if refreshed.FinishedAt == nil || !refreshed.FinishedAt.Equal(firstTimelineAt) {
+		t.Fatalf("assignment finished_at = %v, want %v", refreshed.FinishedAt, firstTimelineAt)
+	}
+
+	var untouched TicketAssignment
+	if err := db.First(&untouched, foreignAssignment.ID).Error; err != nil {
+		t.Fatalf("reload foreign assignment: %v", err)
+	}
+	if untouched.Status != AssignmentPending || !untouched.IsCurrent {
+		t.Fatalf("expected unmatched assignment untouched, got %+v", untouched)
+	}
+}
+
 func TestListApprovalHistoryDeduplicatesMultipleCompletedActivities(t *testing.T) {
 	db := migrateTicketHistoryTestDB(t)
 	operatorID := uint(1)

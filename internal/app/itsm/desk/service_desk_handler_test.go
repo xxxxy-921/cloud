@@ -410,3 +410,97 @@ func buildAgentRuntimeContextForTest(ctx context.Context, db *gorm.DB, configPro
 	}
 	return "## ITSM Service Desk Runtime Context\nUse this session state as current facts. Continue from next_expected_action unless the user explicitly starts a new request.\n```json\n" + string(b) + "\n```", nil
 }
+
+func TestNewServiceDeskHandlerWiresProvidedDependencies(t *testing.T) {
+	db := newTestDB(t)
+	injector := do.New()
+	engineConfig := newEngineConfigServiceOnly(t, db)
+	wrapped := &database.DB{DB: db}
+	stateStore := tools.NewSessionStateStore(db)
+	operator := &tools.Operator{}
+	sessionSvc := &ai.SessionService{}
+
+	do.ProvideValue(injector, wrapped)
+	do.ProvideValue(injector, engineConfig)
+	do.ProvideValue(injector, stateStore)
+	do.ProvideValue(injector, operator)
+	do.ProvideValue(injector, sessionSvc)
+
+	handler, err := NewServiceDeskHandler(injector)
+	if err != nil {
+		t.Fatalf("new service desk handler: %v", err)
+	}
+	if handler.db != db || handler.configProvider != engineConfig || handler.stateStore != stateStore || handler.operator != operator || handler.sessionSvc != sessionSvc {
+		t.Fatalf("expected constructor to wire injected dependencies, got %+v", handler)
+	}
+}
+
+func TestServiceDeskHandlerRejectsInvalidSessionIDAndBadPayloads(t *testing.T) {
+	db := newTestDB(t)
+	handler := &ServiceDeskHandler{
+		db:             db,
+		configProvider: newEngineConfigServiceOnly(t, db),
+		stateStore:     tools.NewSessionStateStore(db),
+	}
+
+	c, rec := newGinContext(http.MethodGet, "/state")
+	c.Params = gin.Params{{Key: "sid", Value: "bad"}}
+	c.Set("userId", uint(7))
+	handler.State(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid sid to return 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	intake := ai.Agent{Name: "受理岗", Type: ai.AgentTypeAssistant, IsActive: true, Visibility: "private", CreatedBy: 1}
+	if err := db.Create(&intake).Error; err != nil {
+		t.Fatalf("create intake agent: %v", err)
+	}
+	configureIntakeAgent(t, db, intake.ID)
+	session := ai.AgentSession{AgentID: intake.ID, UserID: 7, Status: "running"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	c, rec = newGinContext(http.MethodPost, "/draft/submit")
+	c.Params = gin.Params{{Key: "sid", Value: strconv.FormatUint(uint64(session.ID), 10)}}
+	c.Set("userId", uint(7))
+	c.Request.Body = io.NopCloser(strings.NewReader(`{"draftVersion":`))
+	c.Request.ContentLength = int64(len(`{"draftVersion":`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handler.SubmitDraft(c)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid json body to return 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServiceDeskHandlerStateSurfacesCorruptedStoredState(t *testing.T) {
+	db := newTestDB(t)
+	intake := ai.Agent{Name: "受理岗", Type: ai.AgentTypeAssistant, IsActive: true, Visibility: "private", CreatedBy: 1}
+	if err := db.Create(&intake).Error; err != nil {
+		t.Fatalf("create intake agent: %v", err)
+	}
+	configureIntakeAgent(t, db, intake.ID)
+	session := ai.AgentSession{AgentID: intake.ID, UserID: 7, Status: "running"}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := db.Table("ai_agent_sessions").Where("id = ?", session.ID).Update("state", "{bad-json").Error; err != nil {
+		t.Fatalf("corrupt session state: %v", err)
+	}
+
+	handler := &ServiceDeskHandler{
+		db:             db,
+		configProvider: newEngineConfigServiceOnly(t, db),
+		stateStore:     tools.NewSessionStateStore(db),
+	}
+	c, rec := newGinContext(http.MethodGet, "/state")
+	c.Params = gin.Params{{Key: "sid", Value: strconv.FormatUint(uint64(session.ID), 10)}}
+	c.Set("userId", uint(7))
+	handler.State(c)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected corrupted stored state to return 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid service desk state") {
+		t.Fatalf("expected body to expose invalid state error, got %s", rec.Body.String())
+	}
+}

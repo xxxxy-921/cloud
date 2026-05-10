@@ -186,6 +186,9 @@ func (m *LLMServiceMatcher) parseDecision(resp *llm.ChatResponse, candidates []s
 		if len(args.ServiceIDs) == 0 {
 			return nil, tools.MatchDecision{}, fmt.Errorf("need_clarification requires at least one service_id")
 		}
+		if strings.TrimSpace(args.Question) == "" {
+			return nil, tools.MatchDecision{}, fmt.Errorf("need_clarification requires a clarification question")
+		}
 		matches := make([]tools.ServiceMatch, 0, len(args.ServiceIDs))
 		for _, id := range args.ServiceIDs {
 			c, ok := byID[id]
@@ -195,7 +198,7 @@ func (m *LLMServiceMatcher) parseDecision(resp *llm.ChatResponse, candidates []s
 			matches = append(matches, candidateToMatch(c, 0, "需要用户澄清"))
 		}
 		return matches,
-			tools.MatchDecision{Kind: tools.MatchDecisionNeedClarification, ClarificationQuestion: args.Question}, nil
+			tools.MatchDecision{Kind: tools.MatchDecisionNeedClarification, ClarificationQuestion: strings.TrimSpace(args.Question)}, nil
 	case "no_match":
 		return nil, tools.MatchDecision{Kind: tools.MatchDecisionNoMatch}, nil
 	default:

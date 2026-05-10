@@ -640,3 +640,444 @@ func TestValidateWorkflowBlockingVsWarning(t *testing.T) {
 		t.Fatalf("expected a warning-level formSchema reference error, got errors: %+v", errs)
 	}
 }
+
+func TestValidateWorkflowRejectsInvalidGatewayConditionContracts(t *testing.T) {
+	t.Run("compound condition requires supported logic and children", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"gw","type":"exclusive","data":{"label":"分支"}},
+				{"id":"p1","type":"process","data":{"label":"处理A","participants":[{"type":"requester"}]}},
+				{"id":"p2","type":"process","data":{"label":"处理B","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"gw","data":{}},
+				{"id":"e2","source":"gw","target":"p1","data":{"condition":{"logic":"xor","conditions":[]}}},
+				{"id":"e3","source":"gw","target":"p2","data":{"default":true}},
+				{"id":"e4","source":"p1","target":"end","data":{"outcome":"approved"}},
+				{"id":"e4r","source":"p1","target":"end","data":{"outcome":"rejected"}},
+				{"id":"e5","source":"p2","target":"end","data":{"outcome":"approved"}},
+				{"id":"e5r","source":"p2","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+
+		errs := ValidateWorkflow(workflowJSON)
+		var badLogic, missingChildren bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, `logic 值 "xor" 不合法`) {
+				badLogic = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "复合条件（logic=xor）缺少子条件") {
+				missingChildren = true
+			}
+		}
+		if !badLogic || !missingChildren {
+			t.Fatalf("expected invalid compound condition errors, got %+v", errs)
+		}
+	})
+
+	t.Run("leaf condition requires field and operator even inside nested logic", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"gw","type":"exclusive","data":{"label":"分支"}},
+				{"id":"p1","type":"process","data":{"label":"处理A","participants":[{"type":"requester"}]}},
+				{"id":"p2","type":"process","data":{"label":"处理B","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"gw","data":{}},
+				{"id":"e2","source":"gw","target":"p1","data":{"condition":{
+					"logic":"and",
+					"conditions":[
+						{"field":"form.urgency","operator":"equals","value":"high"},
+						{"field":"","operator":"","value":"vpn"}
+					]
+				}}},
+				{"id":"e3","source":"gw","target":"p2","data":{"default":true}},
+				{"id":"e4","source":"p1","target":"end","data":{"outcome":"approved"}},
+				{"id":"e4r","source":"p1","target":"end","data":{"outcome":"rejected"}},
+				{"id":"e5","source":"p2","target":"end","data":{"outcome":"approved"}},
+				{"id":"e5r","source":"p2","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+
+		errs := ValidateWorkflow(workflowJSON)
+		var missingField, missingOperator bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "边 e2 的条件缺少 field") {
+				missingField = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "边 e2 的条件缺少 operator") {
+				missingOperator = true
+			}
+		}
+		if !missingField || !missingOperator {
+			t.Fatalf("expected missing field/operator errors, got %+v", errs)
+		}
+	})
+}
+
+func TestValidateWorkflowRejectsStructuralGatewayAndTopologyViolations(t *testing.T) {
+	t.Run("invalid node type and missing start are blocking", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"mystery","type":"quantum","data":{"label":"未知节点"}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"mystery","target":"end","data":{}}
+			]
+		}`)
+
+		errs := ValidateWorkflow(workflowJSON)
+		var badType, missingStart bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, `类型 "quantum" 不合法`) {
+				badType = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "工作流必须包含一个开始节点") {
+				missingStart = true
+			}
+		}
+		if !badType || !missingStart {
+			t.Fatalf("expected invalid node type and missing start errors, got %+v", errs)
+		}
+	})
+
+	t.Run("multiple starts and end with outgoing edge are rejected", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start1","type":"start","data":{"label":"开始1"}},
+				{"id":"start2","type":"start","data":{"label":"开始2"}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start1","target":"end","data":{}},
+				{"id":"e2","source":"start2","target":"end","data":{}},
+				{"id":"e3","source":"end","target":"start1","data":{}}
+			]
+		}`)
+
+		errs := ValidateWorkflow(workflowJSON)
+		var multiStart, endOutgoing bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "工作流只能包含一个开始节点") {
+				multiStart = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "结束节点 end 不应有出边") {
+				endOutgoing = true
+			}
+		}
+		if !multiStart || !endOutgoing {
+			t.Fatalf("expected multiple start and end-outgoing errors, got %+v", errs)
+		}
+	})
+
+	t.Run("exclusive gateway requires enough conditioned branches", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"gw","type":"exclusive","data":{"label":"分支"}},
+				{"id":"p1","type":"process","data":{"label":"处理A","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"gw","data":{}},
+				{"id":"e2","source":"gw","target":"p1","data":{}},
+				{"id":"e3","source":"p1","target":"end","data":{"outcome":"approved"}},
+				{"id":"e3r","source":"p1","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+
+		errs := ValidateWorkflow(workflowJSON)
+		var needTwoEdges, missingCondition bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "排他网关节点 gw 至少需要两条出边") {
+				needTwoEdges = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "出边 e2 缺少条件配置") {
+				missingCondition = true
+			}
+		}
+		if !needTwoEdges && !missingCondition {
+			t.Fatalf("expected exclusive gateway contract errors, got %+v", errs)
+		}
+	})
+
+	t.Run("parallel gateway requires direction and sufficient branches", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"pg","type":"parallel","data":{"label":"并行网关"}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"pg","data":{}},
+				{"id":"e2","source":"pg","target":"end","data":{}}
+			]
+		}`)
+
+		errs := ValidateWorkflow(workflowJSON)
+		var missingDirection bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "必须配置 gateway_direction") {
+				missingDirection = true
+				break
+			}
+		}
+		if !missingDirection {
+			t.Fatalf("expected missing gateway_direction error, got %+v", errs)
+		}
+	})
+}
+
+func TestValidateWorkflowRejectsBrokenTopologyAndProcessOutcomeContracts(t *testing.T) {
+	t.Run("start node must have single outgoing edge and no incoming edge", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"mid","type":"process","data":{"label":"处理","participants":[{"type":"requester"}]}},
+				{"id":"other","type":"process","data":{"label":"其他","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"mid","data":{}},
+				{"id":"e2","source":"start","target":"other","data":{}},
+				{"id":"e3","source":"mid","target":"start","data":{"outcome":"approved"}},
+				{"id":"e4","source":"mid","target":"end","data":{"outcome":"rejected"}},
+				{"id":"e5","source":"other","target":"end","data":{"outcome":"approved"}},
+				{"id":"e6","source":"other","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var wrongOutDegree, hasIncoming bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "开始节点必须有且仅有一条出边") {
+				wrongOutDegree = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "开始节点不应有入边") {
+				hasIncoming = true
+			}
+		}
+		if !wrongOutDegree || !hasIncoming {
+			t.Fatalf("expected start topology errors, got %+v", errs)
+		}
+	})
+
+	t.Run("edge references and isolated nodes are rejected", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"isolated","type":"process","data":{"label":"孤立","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"ghost","data":{}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var badTarget, isolated bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "引用了不存在的目标节点 ghost") {
+				badTarget = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "节点 isolated 没有入边，无法到达") {
+				isolated = true
+			}
+		}
+		if !badTarget || !isolated {
+			t.Fatalf("expected edge reference and isolated node errors, got %+v", errs)
+		}
+	})
+
+	t.Run("process nodes require approved and rejected outcome edges", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"process","type":"process","data":{"label":"处理","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"process","data":{}},
+				{"id":"e2","source":"process","target":"end","data":{"outcome":"approved"}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var missingRejected bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, `缺少 outcome="rejected" 的出边`) {
+				missingRejected = true
+				break
+			}
+		}
+		if !missingRejected {
+			t.Fatalf("expected missing rejected outcome error, got %+v", errs)
+		}
+	})
+
+	t.Run("workflow without end node is rejected", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"process","type":"process","data":{"label":"处理","participants":[{"type":"requester"}]}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"process","data":{}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var missingEnd bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "工作流必须包含至少一个结束节点") {
+				missingEnd = true
+				break
+			}
+		}
+		if !missingEnd {
+			t.Fatalf("expected missing end error, got %+v", errs)
+		}
+	})
+}
+
+func TestValidateWorkflowRejectsParallelBoundaryAndSubprocessContracts(t *testing.T) {
+	t.Run("inclusive fork requires conditions on non-default branches", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"gw","type":"inclusive","data":{"label":"包含分支","gateway_direction":"fork"}},
+				{"id":"p1","type":"process","data":{"label":"处理A","participants":[{"type":"requester"}]}},
+				{"id":"p2","type":"process","data":{"label":"处理B","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"gw","data":{}},
+				{"id":"e2","source":"gw","target":"p1","data":{}},
+				{"id":"e3","source":"gw","target":"p2","data":{"default":true}},
+				{"id":"e4","source":"p1","target":"end","data":{"outcome":"approved"}},
+				{"id":"e4r","source":"p1","target":"end","data":{"outcome":"rejected"}},
+				{"id":"e5","source":"p2","target":"end","data":{"outcome":"approved"}},
+				{"id":"e5r","source":"p2","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var found bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "包含网关 fork 节点 gw 的出边 e2 缺少条件配置") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected inclusive fork condition error, got %+v", errs)
+		}
+	})
+
+	t.Run("parallel join requires at least two incoming edges and exactly one outgoing edge", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"fork","type":"parallel","data":{"label":"并行开始","gateway_direction":"fork"}},
+				{"id":"p1","type":"process","data":{"label":"处理A","participants":[{"type":"requester"}]}},
+				{"id":"join","type":"parallel","data":{"label":"并行汇聚","gateway_direction":"join"}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"fork","data":{}},
+				{"id":"e2","source":"fork","target":"p1","data":{}},
+				{"id":"e3","source":"fork","target":"join","data":{}},
+				{"id":"e4","source":"p1","target":"join","data":{"outcome":"approved"}},
+				{"id":"e4r","source":"p1","target":"join","data":{"outcome":"rejected"}},
+				{"id":"e5","source":"join","target":"end","data":{}},
+				{"id":"e6","source":"join","target":"p1","data":{}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var badJoinOut bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "并行网关 join 节点 join 必须有且仅有一条出边") {
+				badJoinOut = true
+				break
+			}
+		}
+		if !badJoinOut {
+			t.Fatalf("expected parallel join outgoing edge error, got %+v", errs)
+		}
+	})
+
+	t.Run("boundary nodes enforce host and edge contracts", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"action","type":"action","data":{"label":"动作","action_id":1}},
+				{"id":"bt","type":"b_timer","data":{"label":"超时","attached_to":"action"}},
+				{"id":"be","type":"b_error","data":{"label":"异常","attached_to":"start"}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"action","data":{}},
+				{"id":"e2","source":"action","target":"end","data":{"outcome":"success"}},
+				{"id":"e3","source":"bt","target":"end","data":{}},
+				{"id":"e4","source":"be","target":"end","data":{}},
+				{"id":"e5","source":"start","target":"bt","data":{}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var timerHost, timerDuration, timerIncoming, errorHost bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "边界定时器 bt 只能附着在人工节点上") {
+				timerHost = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "边界定时器 bt 必须配置 duration") {
+				timerDuration = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "边界定时器 bt 不应有入边") {
+				timerIncoming = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "边界错误事件 be 只能附着在 action 节点上") {
+				errorHost = true
+			}
+		}
+		if !timerHost || !timerDuration || !timerIncoming || !errorHost {
+			t.Fatalf("expected boundary validation errors, got %+v", errs)
+		}
+	})
+
+	t.Run("subprocess rejects nested subprocess and malformed definitions", func(t *testing.T) {
+		workflowJSON := json.RawMessage(`{
+			"nodes": [
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"sub","type":"subprocess","data":{"label":"子流程","subprocess_def":{
+					"nodes":[
+						{"id":"sub_start","type":"start","data":{"label":"子开始"}},
+						{"id":"nested","type":"subprocess","data":{"label":"嵌套子流程","subprocess_def":{"bad":true}}},
+						{"id":"sub_end","type":"end","data":{"label":"子结束"}}
+					],
+					"edges":[
+						{"id":"se1","source":"sub_start","target":"nested","data":{}},
+						{"id":"se2","source":"nested","target":"sub_end","data":{}}
+					]
+				}}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges": [
+				{"id":"e1","source":"start","target":"sub","data":{}},
+				{"id":"e2","source":"sub","target":"end","data":{}}
+			]
+		}`)
+		errs := ValidateWorkflow(workflowJSON)
+		var nestedBlocked, missingStart bool
+		for _, err := range errs {
+			if !err.IsWarning() && strings.Contains(err.Message, "当前版本不支持嵌套子流程") {
+				nestedBlocked = true
+			}
+			if !err.IsWarning() && strings.Contains(err.Message, "工作流必须包含一个开始节点") {
+				missingStart = true
+			}
+		}
+		if !nestedBlocked || !missingStart {
+			t.Fatalf("expected subprocess validation errors, got %+v", errs)
+		}
+	})
+}

@@ -26,6 +26,8 @@ import (
 var (
 	ErrServiceDefNotFound     = errors.New("service definition not found")
 	ErrServiceCodeExists      = errors.New("service code already exists")
+	ErrInvalidServiceName     = errors.New("invalid service name")
+	ErrInvalidServiceCode     = errors.New("invalid service code")
 	ErrWorkflowValidation     = errors.New("workflow validation failed")
 	ErrServiceEngineMismatch  = errors.New("service engine field mismatch")
 	ErrAgentNotAvailable      = errors.New("agent not available")
@@ -73,6 +75,14 @@ func NewServiceDefService(i do.Injector) (*ServiceDefService, error) {
 }
 
 func (s *ServiceDefService) Create(svc *ServiceDefinition) (*ServiceDefinition, error) {
+	svc.Name = strings.TrimSpace(svc.Name)
+	svc.Code = strings.TrimSpace(svc.Code)
+	if svc.Name == "" {
+		return nil, ErrInvalidServiceName
+	}
+	if svc.Code == "" {
+		return nil, ErrInvalidServiceCode
+	}
 	if _, err := s.repo.FindByCode(svc.Code); err == nil {
 		return nil, ErrServiceCodeExists
 	}
@@ -123,7 +133,19 @@ func (s *ServiceDefService) Update(id uint, updates map[string]any) (*ServiceDef
 		}
 		return nil, err
 	}
+	if name, ok := updates["name"].(string); ok {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, ErrInvalidServiceName
+		}
+		updates["name"] = name
+	}
 	if code, ok := updates["code"].(string); ok && code != existing.Code {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			return nil, ErrInvalidServiceCode
+		}
+		updates["code"] = code
 		if _, err := s.repo.FindByCode(code); err == nil {
 			return nil, ErrServiceCodeExists
 		}
@@ -494,7 +516,7 @@ func workflowHasExtractableHints(def *engine.WorkflowDef) bool {
 			return true
 		}
 	}
-	return len(def.Edges) > 0
+	return false
 }
 
 func (s *ServiceDefService) checkWorkflowActionRisk(serviceID uint, def *engine.WorkflowDef) *ServiceHealthItem {
@@ -1054,6 +1076,10 @@ func (s *ServiceDefService) validateEngineFields(engineType string, workflowJSON
 		if agentID != nil && *agentID != 0 {
 			return ErrServiceEngineMismatch
 		}
+	case "smart", "manual":
+		return nil
+	default:
+		return ErrServiceEngineMismatch
 	}
 	return nil
 }

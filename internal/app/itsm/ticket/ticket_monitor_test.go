@@ -413,6 +413,75 @@ func TestTicketMonitorDetectsNonCurrentParallelActivityFailures(t *testing.T) {
 	}
 }
 
+func TestTicketMonitorFilterHelpersAndSLARiskContract(t *testing.T) {
+	now := time.Now()
+
+	slaRiskTicket := &Ticket{
+		Status:    TicketStatusWaitingHuman,
+		SLAStatus: SLAStatusBreachedResolve,
+	}
+	if !monitorHasSLARisk(slaRiskTicket, now) {
+		t.Fatal("expected breached SLA ticket to be marked as SLA risk")
+	}
+
+	nonSLATicket := &Ticket{
+		Status: TicketStatusCompleted,
+	}
+	if monitorHasSLARisk(nonSLATicket, now) {
+		t.Fatal("expected completed ticket without SLA evidence to not be marked as SLA risk")
+	}
+
+	item := &TicketMonitorItem{
+		RiskLevel: "blocked",
+		MonitorReasons: []TicketMonitorReason{
+			{MetricCode: "sla_risk_total"},
+			{MetricCode: "ai_incident_total"},
+		},
+	}
+	activeSmart := &Ticket{
+		Status:     TicketStatusWaitingHuman,
+		EngineType: "smart",
+	}
+	completedToday := &Ticket{
+		Status:     TicketStatusCompleted,
+		EngineType: "classic",
+		FinishedAt: &now,
+	}
+
+	if !monitorRiskMatches("stuck", "blocked") || !monitorRiskMatches("stuck", "risk") {
+		t.Fatal("expected stuck filter to include blocked and risk levels")
+	}
+	if monitorRiskMatches("blocked", "risk") {
+		t.Fatal("expected blocked filter to exclude risk level")
+	}
+
+	if !monitorMetricMatches("blocked_total", activeSmart, item, now) {
+		t.Fatal("expected blocked metric to match blocked active ticket")
+	}
+	item.RiskLevel = "risk"
+	if !monitorMetricMatches("risk_total", activeSmart, item, now) {
+		t.Fatal("expected risk metric to match risk active ticket")
+	}
+	if !monitorMetricMatches("sla_risk_total", activeSmart, item, now) {
+		t.Fatal("expected SLA risk metric to match item with sla_risk_total reason")
+	}
+	if !monitorMetricMatches("ai_incident_total", activeSmart, item, now) {
+		t.Fatal("expected AI incident metric to match item with ai_incident_total reason")
+	}
+	if !monitorMetricMatches("smart_active_total", activeSmart, item, now) {
+		t.Fatal("expected smart active metric to match active smart ticket")
+	}
+	if monitorMetricMatches("classic_active_total", activeSmart, item, now) {
+		t.Fatal("expected classic active metric to exclude smart ticket")
+	}
+	if !monitorMetricMatches("completed_today_total", completedToday, &TicketMonitorItem{}, now) {
+		t.Fatal("expected completed today metric to match ticket finished today")
+	}
+	if !monitorMetricMatches("unknown_metric", activeSmart, item, now) {
+		t.Fatal("expected unknown metric filter to behave as pass-through")
+	}
+}
+
 func TestTicketMonitorResolvableAssignmentsUseActiveOrgUsers(t *testing.T) {
 	db := newTestDB(t)
 	service, priority, requester := seedTicketMonitorBase(t, db)

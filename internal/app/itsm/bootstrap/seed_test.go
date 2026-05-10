@@ -2,8 +2,10 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
 	itsmtools "metis/internal/app/itsm/tools"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,6 +33,157 @@ func TestSeedCatalogs_CreatesExpectedRootsAndChildren(t *testing.T) {
 	}
 	if roots != 6 {
 		t.Fatalf("expected 6 roots, got %d", roots)
+	}
+}
+
+func TestSeedPriorities_RestoresSoftDeletedAndRepairsDriftedDefaults(t *testing.T) {
+	db := newTestDB(t)
+
+	softDeleted := Priority{
+		Name:        "旧紧急",
+		Code:        "P0",
+		Value:       99,
+		Color:       "#000000",
+		Description: "旧数据",
+		IsActive:    false,
+	}
+	if err := db.Create(&softDeleted).Error; err != nil {
+		t.Fatalf("create soft-deleted priority seed: %v", err)
+	}
+	if err := db.Delete(&softDeleted).Error; err != nil {
+		t.Fatalf("soft delete priority seed: %v", err)
+	}
+
+	drifted := Priority{
+		Name:        "漂移中优先级",
+		Code:        "P2",
+		Value:       33,
+		Color:       "#123456",
+		Description: "错误描述",
+		IsActive:    false,
+	}
+	if err := db.Create(&drifted).Error; err != nil {
+		t.Fatalf("create drifted priority seed: %v", err)
+	}
+
+	if err := seedPriorities(db); err != nil {
+		t.Fatalf("seed priorities: %v", err)
+	}
+
+	var p0 Priority
+	if err := db.Unscoped().Where("code = ?", "P0").First(&p0).Error; err != nil {
+		t.Fatalf("load restored P0: %v", err)
+	}
+	if p0.DeletedAt.Valid || p0.Name != "紧急" || p0.Value != 1 || p0.Color != "#FF0000" || !p0.IsActive {
+		t.Fatalf("expected restored canonical P0, got %+v", p0)
+	}
+
+	var p2 Priority
+	if err := db.Where("code = ?", "P2").First(&p2).Error; err != nil {
+		t.Fatalf("load repaired P2: %v", err)
+	}
+	if p2.Name != "中" || p2.Value != 3 || p2.Color != "#FFAA00" || p2.Description != "中等优先级" || !p2.IsActive {
+		t.Fatalf("expected repaired canonical P2, got %+v", p2)
+	}
+}
+
+func TestSeedSLATemplates_RestoresSoftDeletedAndRepairsDriftedDefaults(t *testing.T) {
+	db := newTestDB(t)
+
+	softDeleted := SLATemplate{
+		Name:              "旧标准",
+		Code:              "standard",
+		Description:       "旧模板",
+		ResponseMinutes:   999,
+		ResolutionMinutes: 9999,
+		IsActive:          false,
+	}
+	if err := db.Create(&softDeleted).Error; err != nil {
+		t.Fatalf("create soft-deleted sla seed: %v", err)
+	}
+	if err := db.Delete(&softDeleted).Error; err != nil {
+		t.Fatalf("soft delete sla seed: %v", err)
+	}
+
+	drifted := SLATemplate{
+		Name:              "漂移模板",
+		Code:              "urgent",
+		Description:       "错误配置",
+		ResponseMinutes:   123,
+		ResolutionMinutes: 456,
+		IsActive:          false,
+	}
+	if err := db.Create(&drifted).Error; err != nil {
+		t.Fatalf("create drifted sla seed: %v", err)
+	}
+
+	if err := seedSLATemplates(db); err != nil {
+		t.Fatalf("seed SLA templates: %v", err)
+	}
+
+	var standard SLATemplate
+	if err := db.Unscoped().Where("code = ?", "standard").First(&standard).Error; err != nil {
+		t.Fatalf("load restored standard sla: %v", err)
+	}
+	if standard.DeletedAt.Valid || standard.Name != "标准" || standard.ResponseMinutes != 240 || standard.ResolutionMinutes != 1440 || !standard.IsActive {
+		t.Fatalf("expected restored canonical standard SLA, got %+v", standard)
+	}
+
+	var urgent SLATemplate
+	if err := db.Where("code = ?", "urgent").First(&urgent).Error; err != nil {
+		t.Fatalf("load repaired urgent sla: %v", err)
+	}
+	if urgent.Name != "紧急" || urgent.ResponseMinutes != 30 || urgent.ResolutionMinutes != 240 || urgent.Description != "紧急 SLA，响应 30 分钟，解决 4 小时" || !urgent.IsActive {
+		t.Fatalf("expected repaired canonical urgent SLA, got %+v", urgent)
+	}
+}
+
+func TestSeedPriorityAndSLATemplateSeeds_CreateMissingAndStayIdempotent(t *testing.T) {
+	db := newTestDB(t)
+
+	if err := seedPriorities(db); err != nil {
+		t.Fatalf("seed priorities first run: %v", err)
+	}
+	if err := seedSLATemplates(db); err != nil {
+		t.Fatalf("seed sla templates first run: %v", err)
+	}
+	if err := seedPriorities(db); err != nil {
+		t.Fatalf("seed priorities second run: %v", err)
+	}
+	if err := seedSLATemplates(db); err != nil {
+		t.Fatalf("seed sla templates second run: %v", err)
+	}
+
+	var priorityCount int64
+	if err := db.Model(&Priority{}).Count(&priorityCount).Error; err != nil {
+		t.Fatalf("count priorities: %v", err)
+	}
+	if priorityCount != 5 {
+		t.Fatalf("expected 5 seeded priorities, got %d", priorityCount)
+	}
+
+	var slaCount int64
+	if err := db.Model(&SLATemplate{}).Count(&slaCount).Error; err != nil {
+		t.Fatalf("count sla templates: %v", err)
+	}
+	if slaCount != 5 {
+		t.Fatalf("expected 5 seeded sla templates, got %d", slaCount)
+	}
+
+	var p3 Priority
+	if err := db.Where("code = ?", "P3").First(&p3).Error; err != nil {
+		t.Fatalf("load P3: %v", err)
+	}
+	if p3.Name != "低" || p3.Value != 4 || p3.Color != "#00AA00" || !p3.IsActive {
+		t.Fatalf("unexpected seeded P3: %+v", p3)
+	}
+
+	var infraChange SLATemplate
+	if err := db.Where("code = ?", "infra-change").First(&infraChange).Error; err != nil {
+		t.Fatalf("load infra-change SLA: %v", err)
+	}
+	if infraChange.Name != "基础设施变更" || infraChange.ResponseMinutes != 60 || infraChange.ResolutionMinutes != 480 || !infraChange.IsActive {
+		t.Fatalf("unexpected seeded infra-change SLA: %+v", infraChange)
 	}
 }
 
@@ -84,6 +237,90 @@ func TestMigrateServiceRuntimeVersions_BackfillsServicesAndLegacyTickets(t *test
 	}
 	if updated.ServiceVersionID == nil || *updated.ServiceVersionID != versions[0].ID {
 		t.Fatalf("expected legacy ticket backfilled with version %d, got %v", versions[0].ID, updated.ServiceVersionID)
+	}
+}
+
+func TestMigrateServiceRuntimeVersions_ReusesExistingVersionAndPreservesBoundTickets(t *testing.T) {
+	db := newTestDB(t)
+
+	catalog := ServiceCatalog{Name: "Runtime Root", Code: "runtime-root-preserve", IsActive: true}
+	if err := db.Create(&catalog).Error; err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+	service := ServiceDefinition{
+		Name:              "Runtime Service Preserve",
+		Code:              "runtime-service-preserve",
+		CatalogID:         catalog.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "spec",
+		IsActive:          true,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	existingVersion, err := definition.GetOrCreateServiceRuntimeVersion(db, service.ID)
+	if err != nil {
+		t.Fatalf("create existing runtime version: %v", err)
+	}
+
+	legacyTicket := Ticket{
+		Code:        "TICK-RUNTIME-BACKFILL",
+		Title:       "legacy runtime backfill",
+		ServiceID:   service.ID,
+		EngineType:  "smart",
+		Status:      TicketStatusDecisioning,
+		PriorityID:  1,
+		RequesterID: 1,
+	}
+	if err := db.Create(&legacyTicket).Error; err != nil {
+		t.Fatalf("create legacy ticket: %v", err)
+	}
+
+	alreadyBoundID := uint(999)
+	boundTicket := Ticket{
+		Code:             "TICK-RUNTIME-BOUND",
+		Title:            "bound runtime ticket",
+		ServiceID:        service.ID,
+		ServiceVersionID: &alreadyBoundID,
+		EngineType:       "smart",
+		Status:           TicketStatusDecisioning,
+		PriorityID:       1,
+		RequesterID:      1,
+	}
+	if err := db.Create(&boundTicket).Error; err != nil {
+		t.Fatalf("create bound ticket: %v", err)
+	}
+
+	if err := migrateServiceRuntimeVersions(db); err != nil {
+		t.Fatalf("migrateServiceRuntimeVersions: %v", err)
+	}
+
+	var versions []ServiceDefinitionVersion
+	if err := db.Where("service_id = ?", service.ID).Order("id ASC").Find(&versions).Error; err != nil {
+		t.Fatalf("list service versions: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("expected existing runtime version to be reused, got %+v", versions)
+	}
+	if versions[0].ID != existingVersion.ID {
+		t.Fatalf("expected runtime version %d to be reused, got %d", existingVersion.ID, versions[0].ID)
+	}
+
+	var refreshedLegacy Ticket
+	if err := db.First(&refreshedLegacy, legacyTicket.ID).Error; err != nil {
+		t.Fatalf("reload legacy ticket: %v", err)
+	}
+	if refreshedLegacy.ServiceVersionID == nil || *refreshedLegacy.ServiceVersionID != existingVersion.ID {
+		t.Fatalf("expected legacy ticket backfilled to existing version %d, got %v", existingVersion.ID, refreshedLegacy.ServiceVersionID)
+	}
+
+	var refreshedBound Ticket
+	if err := db.First(&refreshedBound, boundTicket.ID).Error; err != nil {
+		t.Fatalf("reload bound ticket: %v", err)
+	}
+	if refreshedBound.ServiceVersionID == nil || *refreshedBound.ServiceVersionID != alreadyBoundID {
+		t.Fatalf("expected existing service_version_id %d to remain untouched, got %v", alreadyBoundID, refreshedBound.ServiceVersionID)
 	}
 }
 
@@ -490,6 +727,262 @@ func TestSeedServiceDefinitions_DBBackupMigratesLegacyActionCodes(t *testing.T) 
 	}
 }
 
+func TestSeedServiceDefinitions_RestoresSoftDeletedBuiltinServiceInPlace(t *testing.T) {
+	db := newTestDB(t)
+
+	if err := seedCatalogs(db); err != nil {
+		t.Fatalf("seed catalogs: %v", err)
+	}
+	if err := seedSLATemplates(db); err != nil {
+		t.Fatalf("seed SLA templates: %v", err)
+	}
+
+	var catalog ServiceCatalog
+	if err := db.Where("code = ?", "infra-network:network").First(&catalog).Error; err != nil {
+		t.Fatalf("find catalog: %v", err)
+	}
+	var sla SLATemplate
+	if err := db.Where("code = ?", "urgent").First(&sla).Error; err != nil {
+		t.Fatalf("find drift sla: %v", err)
+	}
+
+	service := ServiceDefinition{
+		Name:              "旧 VPN 服务",
+		Code:              "vpn-access-request",
+		Description:       "旧描述",
+		CatalogID:         catalog.ID,
+		EngineType:        "classic",
+		SLAID:             &sla.ID,
+		CollaborationSpec: "旧协作规范",
+		IsActive:          false,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create drifted service: %v", err)
+	}
+	originalID := service.ID
+	if err := db.Delete(&service).Error; err != nil {
+		t.Fatalf("soft delete service: %v", err)
+	}
+
+	if err := seedServiceDefinitions(db); err != nil {
+		t.Fatalf("seed service definitions: %v", err)
+	}
+
+	var restored ServiceDefinition
+	if err := db.Unscoped().Where("code = ?", "vpn-access-request").First(&restored).Error; err != nil {
+		t.Fatalf("reload restored service: %v", err)
+	}
+	if restored.ID != originalID {
+		t.Fatalf("expected restored service to reuse id %d, got %d", originalID, restored.ID)
+	}
+	if restored.DeletedAt.Valid || !restored.IsActive {
+		t.Fatalf("expected restored service to be active and undeleted, got %+v", restored)
+	}
+	if restored.Name != "VPN 开通申请" || restored.EngineType != "smart" {
+		t.Fatalf("expected canonical service identity, got %+v", restored)
+	}
+	if !strings.Contains(restored.CollaborationSpec, "访问原因包括线上支持") {
+		t.Fatalf("expected canonical collaboration spec, got %q", restored.CollaborationSpec)
+	}
+}
+
+func TestSeedServiceDefinitions_RestoresAndRepairsCanonicalActionsInPlace(t *testing.T) {
+	db := newTestDB(t)
+
+	if err := seedCatalogs(db); err != nil {
+		t.Fatalf("seed catalogs: %v", err)
+	}
+	if err := seedSLATemplates(db); err != nil {
+		t.Fatalf("seed SLA templates: %v", err)
+	}
+
+	var catalog ServiceCatalog
+	if err := db.Where("code = ?", "application-platform:database").First(&catalog).Error; err != nil {
+		t.Fatalf("find catalog: %v", err)
+	}
+	service := ServiceDefinition{
+		Name:              "生产数据库备份白名单临时放行申请",
+		Code:              "db-backup-whitelist-action-flow",
+		CatalogID:         catalog.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "漂移协作规范",
+		IsActive:          false,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	driftedApply := ServiceAction{
+		Name:       "错误放行",
+		Code:       "db_backup_whitelist_apply",
+		Description:"错误描述",
+		ActionType: "script",
+		ConfigJSON: JSONField(`{"url":"/wrong","method":"GET"}`),
+		ServiceID:  service.ID,
+		IsActive:   false,
+	}
+	if err := db.Create(&driftedApply).Error; err != nil {
+		t.Fatalf("create drifted apply action: %v", err)
+	}
+
+	softDeletedPrecheck := ServiceAction{
+		Name:       "错误预检",
+		Code:       "db_backup_whitelist_precheck",
+		Description:"错误预检描述",
+		ActionType: "script",
+		ConfigJSON: JSONField(`{"url":"/stale","method":"GET"}`),
+		ServiceID:  service.ID,
+		IsActive:   false,
+	}
+	if err := db.Create(&softDeletedPrecheck).Error; err != nil {
+		t.Fatalf("create soft-deleted precheck action: %v", err)
+	}
+	precheckID := softDeletedPrecheck.ID
+	if err := db.Delete(&softDeletedPrecheck).Error; err != nil {
+		t.Fatalf("soft delete precheck action: %v", err)
+	}
+
+	if err := seedServiceDefinitions(db); err != nil {
+		t.Fatalf("seed service definitions: %v", err)
+	}
+
+	var precheck ServiceAction
+	if err := db.Unscoped().Where("service_id = ? AND code = ?", service.ID, "db_backup_whitelist_precheck").First(&precheck).Error; err != nil {
+		t.Fatalf("reload precheck action: %v", err)
+	}
+	if precheck.ID != precheckID || precheck.DeletedAt.Valid || !precheck.IsActive {
+		t.Fatalf("expected precheck action restored in place, got %+v", precheck)
+	}
+	if precheck.ActionType != "http" || !strings.Contains(string(precheck.ConfigJSON), "/precheck") {
+		t.Fatalf("expected canonical precheck config, got %+v", precheck)
+	}
+
+	var apply ServiceAction
+	if err := db.Where("service_id = ? AND code = ?", service.ID, "db_backup_whitelist_apply").First(&apply).Error; err != nil {
+		t.Fatalf("reload apply action: %v", err)
+	}
+	if !apply.IsActive || apply.ActionType != "http" || apply.Name != "执行备份白名单放行" || !strings.Contains(string(apply.ConfigJSON), "/apply") {
+		t.Fatalf("expected apply action repaired to canonical seed, got %+v", apply)
+	}
+
+	var count int64
+	if err := db.Unscoped().Model(&ServiceAction{}).Where("service_id = ? AND code IN ?", service.ID, []string{"db_backup_whitelist_precheck", "db_backup_whitelist_apply"}).Count(&count).Error; err != nil {
+		t.Fatalf("count canonical actions: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected exactly two canonical actions, got %d", count)
+	}
+
+	var updated ServiceDefinition
+	if err := db.First(&updated, service.ID).Error; err != nil {
+		t.Fatalf("reload service: %v", err)
+	}
+	workflow := string(updated.WorkflowJSON)
+	if !strings.Contains(workflow, `"action_id":`+strconv.FormatUint(uint64(precheck.ID), 10)) || !strings.Contains(workflow, `"action_id":`+strconv.FormatUint(uint64(apply.ID), 10)) {
+		t.Fatalf("expected workflow to bind restored canonical action ids, got %s", workflow)
+	}
+}
+
+func TestSeedDBBackupWhitelistWorkflow_SkipsWhenActionsAreIncomplete(t *testing.T) {
+	db := newTestDB(t)
+
+	service := ServiceDefinition{
+		Name:       "DB Backup Workflow",
+		Code:       "db-backup-seed-skip",
+		EngineType: "smart",
+		IsActive:   true,
+		WorkflowJSON: JSONField(`{"nodes":[{"id":"legacy"}],"edges":[]}`),
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	if err := db.Create(&ServiceAction{
+		Name:       "仅有预检",
+		Code:       "db_backup_whitelist_precheck",
+		ActionType: "http",
+		ServiceID:  service.ID,
+		IsActive:   true,
+	}).Error; err != nil {
+		t.Fatalf("create precheck action: %v", err)
+	}
+
+	seedDBBackupWhitelistWorkflow(db, service.ID)
+
+	var updated ServiceDefinition
+	if err := db.First(&updated, service.ID).Error; err != nil {
+		t.Fatalf("reload service: %v", err)
+	}
+	if string(updated.WorkflowJSON) != `{"nodes":[{"id":"legacy"}],"edges":[]}` {
+		t.Fatalf("expected workflow json to remain unchanged when actions missing, got %s", updated.WorkflowJSON)
+	}
+}
+
+func TestSeedDBBackupWhitelistWorkflow_UsesActiveCanonicalActionIDs(t *testing.T) {
+	db := newTestDB(t)
+
+	service := ServiceDefinition{
+		Name:       "DB Backup Workflow",
+		Code:       "db-backup-seed-apply",
+		EngineType: "smart",
+		IsActive:   true,
+		WorkflowJSON: JSONField(`{"nodes":[{"id":"legacy"}],"edges":[]}`),
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	precheck := ServiceAction{
+		Name:       "预检",
+		Code:       "db_backup_whitelist_precheck",
+		ActionType: "http",
+		ServiceID:  service.ID,
+		IsActive:   true,
+	}
+	if err := db.Create(&precheck).Error; err != nil {
+		t.Fatalf("create precheck action: %v", err)
+	}
+	apply := ServiceAction{
+		Name:       "放行",
+		Code:       "db_backup_whitelist_apply",
+		ActionType: "http",
+		ServiceID:  service.ID,
+		IsActive:   true,
+	}
+	if err := db.Create(&apply).Error; err != nil {
+		t.Fatalf("create apply action: %v", err)
+	}
+	legacyAlias := ServiceAction{
+		Name:       "旧放行别名",
+		Code:       "backup_whitelist_apply",
+		ActionType: "http",
+		ServiceID:  service.ID,
+		IsActive:   true,
+	}
+	if err := db.Create(&legacyAlias).Error; err != nil {
+		t.Fatalf("create legacy alias action: %v", err)
+	}
+
+	seedDBBackupWhitelistWorkflow(db, service.ID)
+
+	var updated ServiceDefinition
+	if err := db.First(&updated, service.ID).Error; err != nil {
+		t.Fatalf("reload service: %v", err)
+	}
+	workflow := string(updated.WorkflowJSON)
+	if !strings.Contains(workflow, `"db_precheck_action"`) || !strings.Contains(workflow, `"db_apply_action"`) {
+		t.Fatalf("expected canonical db backup action nodes, got %s", workflow)
+	}
+	if !strings.Contains(workflow, `"action_id":`+strconv.FormatUint(uint64(precheck.ID), 10)) {
+		t.Fatalf("expected workflow to include precheck action id %d, got %s", precheck.ID, workflow)
+	}
+	if !strings.Contains(workflow, `"action_id":`+strconv.FormatUint(uint64(apply.ID), 10)) {
+		t.Fatalf("expected workflow to include apply action id %d, got %s", apply.ID, workflow)
+	}
+	if strings.Contains(workflow, `"action_id":`+strconv.FormatUint(uint64(legacyAlias.ID), 10)) {
+		t.Fatalf("expected legacy alias action id %d to be ignored, got %s", legacyAlias.ID, workflow)
+	}
+}
+
 func TestSeedServiceDefinitions_VPNUsesNaturalSpecAndPreservesStructuredContract(t *testing.T) {
 	db := newTestDB(t)
 
@@ -632,6 +1125,80 @@ func TestSeedCatalogs_RecreatesSoftDeletedCatalog(t *testing.T) {
 	}
 }
 
+func TestSeedCatalogs_RestoresSoftDeletedRootAndChildInPlace(t *testing.T) {
+	db := newTestDB(t)
+
+	if err := seedCatalogs(db); err != nil {
+		t.Fatalf("seed catalogs: %v", err)
+	}
+
+	var root ServiceCatalog
+	if err := db.Where("code = ?", "application-platform").First(&root).Error; err != nil {
+		t.Fatalf("find root catalog: %v", err)
+	}
+	rootID := root.ID
+	if err := db.Model(&root).Updates(map[string]any{
+		"name":        "旧应用平台",
+		"description": "legacy root",
+		"icon":        "LegacyRoot",
+		"sort_order":  999,
+		"is_active":   false,
+	}).Error; err != nil {
+		t.Fatalf("drift root catalog: %v", err)
+	}
+	if err := db.Delete(&root).Error; err != nil {
+		t.Fatalf("soft delete root catalog: %v", err)
+	}
+
+	var child ServiceCatalog
+	if err := db.Where("code = ?", "application-platform:database").First(&child).Error; err != nil {
+		t.Fatalf("find child catalog: %v", err)
+	}
+	childID := child.ID
+	if err := db.Model(&child).Updates(map[string]any{
+		"name":        "旧数据库支持",
+		"description": "legacy child",
+		"icon":        "LegacyChild",
+		"sort_order":  777,
+		"parent_id":   nil,
+		"is_active":   false,
+	}).Error; err != nil {
+		t.Fatalf("drift child catalog: %v", err)
+	}
+	if err := db.Delete(&child).Error; err != nil {
+		t.Fatalf("soft delete child catalog: %v", err)
+	}
+
+	if err := seedCatalogs(db); err != nil {
+		t.Fatalf("seed catalogs rerun: %v", err)
+	}
+
+	var restoredRoot ServiceCatalog
+	if err := db.Where("code = ?", "application-platform").First(&restoredRoot).Error; err != nil {
+		t.Fatalf("find restored root catalog: %v", err)
+	}
+	if restoredRoot.ID != rootID {
+		t.Fatalf("expected root restored in place, got original=%d restored=%d", rootID, restoredRoot.ID)
+	}
+	if restoredRoot.Name != "应用与平台支持" || restoredRoot.Icon != "Container" || restoredRoot.SortOrder != 40 || !restoredRoot.IsActive || restoredRoot.ParentID != nil {
+		t.Fatalf("unexpected restored root catalog: %+v", restoredRoot)
+	}
+
+	var restoredChild ServiceCatalog
+	if err := db.Where("code = ?", "application-platform:database").First(&restoredChild).Error; err != nil {
+		t.Fatalf("find restored child catalog: %v", err)
+	}
+	if restoredChild.ID != childID {
+		t.Fatalf("expected child restored in place, got original=%d restored=%d", childID, restoredChild.ID)
+	}
+	if restoredChild.ParentID == nil || *restoredChild.ParentID != restoredRoot.ID {
+		t.Fatalf("expected child parent %d, got %v", restoredRoot.ID, restoredChild.ParentID)
+	}
+	if restoredChild.Name != "数据库支持" || restoredChild.Icon != "Database" || restoredChild.SortOrder != 3 || !restoredChild.IsActive {
+		t.Fatalf("unexpected restored child catalog: %+v", restoredChild)
+	}
+}
+
 func TestSeedMenus_RestoresSoftDeletedApprovalPendingMenu(t *testing.T) {
 	db := newTestDB(t)
 
@@ -683,5 +1250,268 @@ func TestSeedMenus_RestoresSoftDeletedApprovalPendingMenu(t *testing.T) {
 	}
 	if totalCount != 1 {
 		t.Fatalf("expected one approval pending menu row including soft-deleted records, got %d", totalCount)
+	}
+}
+
+func TestSeedMenus_MigratesLegacyDirectoriesAndCatalogMenu(t *testing.T) {
+	db := newTestDB(t)
+
+	legacyTicketDir := model.Menu{
+		Name:       "工单管理",
+		Type:       model.MenuTypeDirectory,
+		Permission: "itsm:ticket",
+		Sort:       1,
+	}
+	if err := db.Create(&legacyTicketDir).Error; err != nil {
+		t.Fatalf("create legacy ticket dir: %v", err)
+	}
+	legacyChild := model.Menu{
+		ParentID:   &legacyTicketDir.ID,
+		Name:       "旧子菜单",
+		Type:       model.MenuTypeMenu,
+		Path:       "/itsm/legacy-child",
+		Permission: "itsm:ticket:legacy-child",
+		Sort:       0,
+	}
+	if err := db.Create(&legacyChild).Error; err != nil {
+		t.Fatalf("create legacy child menu: %v", err)
+	}
+	oldCatalogMenu := model.Menu{
+		Name:       "旧服务目录",
+		Type:       model.MenuTypeMenu,
+		Path:       "/itsm/catalogs",
+		Permission: "itsm:catalog:list",
+		Sort:       9,
+	}
+	if err := db.Create(&oldCatalogMenu).Error; err != nil {
+		t.Fatalf("create old catalog menu: %v", err)
+	}
+	oldCatalogButton := model.Menu{
+		ParentID:   &oldCatalogMenu.ID,
+		Name:       "旧分类按钮",
+		Type:       model.MenuTypeButton,
+		Permission: "itsm:catalog:legacy-button",
+		Sort:       0,
+	}
+	if err := db.Create(&oldCatalogButton).Error; err != nil {
+		t.Fatalf("create old catalog button: %v", err)
+	}
+	oldServiceMenu := model.Menu{
+		Name:       "服务定义",
+		Type:       model.MenuTypeMenu,
+		Path:       "/legacy/services",
+		Permission: "itsm:service:list",
+		Sort:       99,
+	}
+	if err := db.Create(&oldServiceMenu).Error; err != nil {
+		t.Fatalf("create old service menu: %v", err)
+	}
+
+	if err := seedMenus(db); err != nil {
+		t.Fatalf("seed menus: %v", err)
+	}
+
+	var itsmDir model.Menu
+	if err := db.Where("permission = ?", "itsm").First(&itsmDir).Error; err != nil {
+		t.Fatalf("find itsm dir: %v", err)
+	}
+
+	var movedChild model.Menu
+	if err := db.Where("permission = ?", "itsm:ticket:legacy-child").First(&movedChild).Error; err != nil {
+		t.Fatalf("find moved child menu: %v", err)
+	}
+	if movedChild.ParentID == nil || *movedChild.ParentID != itsmDir.ID {
+		t.Fatalf("expected moved child parent %d, got %v", itsmDir.ID, movedChild.ParentID)
+	}
+
+	var ticketDir model.Menu
+	if err := db.Unscoped().Where("permission = ?", "itsm:ticket").First(&ticketDir).Error; err != nil {
+		t.Fatalf("find legacy ticket dir: %v", err)
+	}
+	if !ticketDir.DeletedAt.Valid {
+		t.Fatalf("expected legacy ticket dir to be soft deleted")
+	}
+
+	var deletedCatalog model.Menu
+	if err := db.Unscoped().Where("permission = ?", "itsm:catalog:list").First(&deletedCatalog).Error; err != nil {
+		t.Fatalf("find old catalog menu: %v", err)
+	}
+	if !deletedCatalog.DeletedAt.Valid {
+		t.Fatalf("expected old catalog menu to be soft deleted")
+	}
+
+	var deletedCatalogButton model.Menu
+	if err := db.Unscoped().Where("permission = ?", "itsm:catalog:legacy-button").First(&deletedCatalogButton).Error; err != nil {
+		t.Fatalf("find old catalog button: %v", err)
+	}
+	if !deletedCatalogButton.DeletedAt.Valid {
+		t.Fatalf("expected old catalog button to be soft deleted")
+	}
+
+	var serviceMenu model.Menu
+	if err := db.Where("permission = ?", "itsm:service:list").First(&serviceMenu).Error; err != nil {
+		t.Fatalf("find service menu: %v", err)
+	}
+	if serviceMenu.Name != "服务目录" {
+		t.Fatalf("expected service menu renamed to 服务目录, got %s", serviceMenu.Name)
+	}
+}
+
+func TestSeedMenus_RestoresAndRepairsButtonsInPlace(t *testing.T) {
+	db := newTestDB(t)
+
+	if err := seedMenus(db); err != nil {
+		t.Fatalf("seed menus first run: %v", err)
+	}
+
+	var serviceMenu model.Menu
+	if err := db.Where("permission = ?", "itsm:service:list").First(&serviceMenu).Error; err != nil {
+		t.Fatalf("find service menu: %v", err)
+	}
+
+	var createButton model.Menu
+	if err := db.Where("permission = ?", "itsm:catalog:create").First(&createButton).Error; err != nil {
+		t.Fatalf("find create catalog button: %v", err)
+	}
+	createButtonID := createButton.ID
+	if err := db.Delete(&createButton).Error; err != nil {
+		t.Fatalf("soft delete create catalog button: %v", err)
+	}
+
+	var updateButton model.Menu
+	if err := db.Where("permission = ?", "itsm:catalog:update").First(&updateButton).Error; err != nil {
+		t.Fatalf("find update catalog button: %v", err)
+	}
+	if err := db.Model(&model.Menu{}).Where("id = ?", updateButton.ID).Updates(map[string]any{
+		"name":      "错误名称",
+		"type":      model.MenuTypeMenu,
+		"sort":      999,
+		"parent_id": nil,
+	}).Error; err != nil {
+		t.Fatalf("drift update catalog button: %v", err)
+	}
+
+	if err := seedMenus(db); err != nil {
+		t.Fatalf("seed menus second run: %v", err)
+	}
+
+	var restoredCreate model.Menu
+	if err := db.Where("permission = ?", "itsm:catalog:create").First(&restoredCreate).Error; err != nil {
+		t.Fatalf("find restored create catalog button: %v", err)
+	}
+	if restoredCreate.ID != createButtonID {
+		t.Fatalf("expected create catalog button restored in place, got original=%d restored=%d", createButtonID, restoredCreate.ID)
+	}
+	if restoredCreate.ParentID == nil || *restoredCreate.ParentID != serviceMenu.ID {
+		t.Fatalf("expected restored create button parent %d, got %v", serviceMenu.ID, restoredCreate.ParentID)
+	}
+	if restoredCreate.Name != "新增分类" || restoredCreate.Type != model.MenuTypeButton || restoredCreate.Sort != 3 {
+		t.Fatalf("unexpected restored create button shape: %+v", restoredCreate)
+	}
+
+	var repairedUpdate model.Menu
+	if err := db.Where("permission = ?", "itsm:catalog:update").First(&repairedUpdate).Error; err != nil {
+		t.Fatalf("find repaired update catalog button: %v", err)
+	}
+	if repairedUpdate.ParentID == nil || *repairedUpdate.ParentID != serviceMenu.ID {
+		t.Fatalf("expected repaired update button parent %d, got %v", serviceMenu.ID, repairedUpdate.ParentID)
+	}
+	if repairedUpdate.Name != "编辑分类" || repairedUpdate.Type != model.MenuTypeButton || repairedUpdate.Sort != 4 {
+		t.Fatalf("unexpected repaired update button shape: %+v", repairedUpdate)
+	}
+
+	var totalCount int64
+	if err := db.Unscoped().Model(&model.Menu{}).Where("permission = ?", "itsm:catalog:create").Count(&totalCount).Error; err != nil {
+		t.Fatalf("count create catalog button rows: %v", err)
+	}
+	if totalCount != 1 {
+		t.Fatalf("expected one create catalog button row including soft-deleted records, got %d", totalCount)
+	}
+}
+
+func TestSeedMenus_RestoresServiceMenuAndRemovesObsoleteMenus(t *testing.T) {
+	db := newTestDB(t)
+
+	wrongParent := model.Menu{
+		Name:       "错误父目录",
+		Type:       model.MenuTypeDirectory,
+		Permission: "itsm:wrong-parent",
+	}
+	if err := db.Create(&wrongParent).Error; err != nil {
+		t.Fatalf("create wrong parent menu: %v", err)
+	}
+
+	serviceMenu := model.Menu{
+		ParentID:   &wrongParent.ID,
+		Name:       "旧服务定义",
+		Type:       model.MenuTypeDirectory,
+		Path:       "/legacy/services",
+		Icon:       "Legacy",
+		Permission: "itsm:service:list",
+		Sort:       99,
+	}
+	if err := db.Create(&serviceMenu).Error; err != nil {
+		t.Fatalf("create drifted service menu: %v", err)
+	}
+	serviceMenuID := serviceMenu.ID
+	if err := db.Delete(&serviceMenu).Error; err != nil {
+		t.Fatalf("soft delete drifted service menu: %v", err)
+	}
+
+	obsoleteMenus := []model.Menu{
+		{Name: "旧历史", Type: model.MenuTypeMenu, Permission: "itsm:ticket:history"},
+		{Name: "旧待办目录", Type: model.MenuTypeDirectory, Permission: "itsm:ticket:todo"},
+		{Name: "旧审批目录", Type: model.MenuTypeDirectory, Permission: "itsm:ticket:approvals"},
+		{Name: "表单管理", Type: model.MenuTypeMenu, Permission: "itsm:form:list"},
+	}
+	for _, menu := range obsoleteMenus {
+		menu := menu
+		if err := db.Create(&menu).Error; err != nil {
+			t.Fatalf("create obsolete menu %s: %v", menu.Permission, err)
+		}
+		if menu.Permission == "itsm:form:list" {
+			btn := model.Menu{
+				ParentID:   &menu.ID,
+				Name:       "旧表单按钮",
+				Type:       model.MenuTypeButton,
+				Permission: "itsm:form:legacy-button",
+			}
+			if err := db.Create(&btn).Error; err != nil {
+				t.Fatalf("create obsolete form button: %v", err)
+			}
+		}
+	}
+
+	if err := seedMenus(db); err != nil {
+		t.Fatalf("seed menus: %v", err)
+	}
+
+	var itsmDir model.Menu
+	if err := db.Where("permission = ?", "itsm").First(&itsmDir).Error; err != nil {
+		t.Fatalf("find itsm dir: %v", err)
+	}
+
+	var restoredService model.Menu
+	if err := db.Where("permission = ?", "itsm:service:list").First(&restoredService).Error; err != nil {
+		t.Fatalf("find restored service menu: %v", err)
+	}
+	if restoredService.ID != serviceMenuID {
+		t.Fatalf("expected restored service menu in place, got original=%d restored=%d", serviceMenuID, restoredService.ID)
+	}
+	if restoredService.ParentID == nil || *restoredService.ParentID != itsmDir.ID {
+		t.Fatalf("expected restored service menu parent %d, got %v", itsmDir.ID, restoredService.ParentID)
+	}
+	if restoredService.Name != "服务目录" || restoredService.Type != model.MenuTypeMenu || restoredService.Path != "/itsm/services" || restoredService.Icon != "Cog" || restoredService.Sort != 4 {
+		t.Fatalf("unexpected restored service menu: %+v", restoredService)
+	}
+
+	for _, permission := range []string{"itsm:ticket:history", "itsm:ticket:todo", "itsm:ticket:approvals", "itsm:form:list", "itsm:form:legacy-button"} {
+		var menu model.Menu
+		if err := db.Unscoped().Where("permission = ?", permission).First(&menu).Error; err != nil {
+			t.Fatalf("find obsolete menu %s: %v", permission, err)
+		}
+		if !menu.DeletedAt.Valid {
+			t.Fatalf("expected obsolete menu %s to be soft deleted", permission)
+		}
 	}
 }

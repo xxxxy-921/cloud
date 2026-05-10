@@ -1,7 +1,11 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	appcore "metis/internal/app"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -196,17 +200,488 @@ func TestBuildInitialSeedIncludesRejectedActivityPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildInitialSeedIncludesApprovedNextStepAnchor(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_tickets (
+		id integer primary key,
+		code text,
+		title text,
+		description text,
+		status text,
+		outcome text,
+		source text,
+		priority_id integer,
+		form_data text
+	)`).Error; err != nil {
+		t.Fatalf("create tickets: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+		t.Fatalf("create priorities: %v", err)
+	}
+	if err := db.AutoMigrate(&activityModel{}); err != nil {
+		t.Fatalf("migrate activities: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+		t.Fatalf("insert priority: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_tickets (id, code, title, description, status, outcome, source, priority_id) VALUES (43, 'TICK-43', 'VPN', '线上支持', 'approved_decisioning', '', 'agent', 1)`).Error; err != nil {
+		t.Fatalf("insert ticket: %v", err)
+	}
+	completed := activityModel{
+		ID:                10,
+		TicketID:          43,
+		Name:              "网络管理员处理",
+		ActivityType:      NodeProcess,
+		NodeID:            "network_process",
+		Status:            ActivityCompleted,
+		TransitionOutcome: TicketOutcomeApproved,
+		DecisionReasoning: "条件满足继续推进",
+	}
+	if err := db.Create(&completed).Error; err != nil {
+		t.Fatalf("create completed activity: %v", err)
+	}
+
+	completedActivityID := uint(10)
+	engine := &SmartEngine{}
+	_, userMsg, err := engine.buildInitialSeed(db, 43, &serviceModel{
+		ID:                7,
+		Name:              "VPN 开通申请",
+		Description:       "VPN service",
+		CollaborationSpec: "处理完成后继续推进。",
+		WorkflowJSON:      vpnWorkflowContextFixture,
+	}, "direct_first", &completedActivityID, "activity_completed")
+	if err != nil {
+		t.Fatalf("build initial seed: %v", err)
+	}
+	for _, needle := range []string{
+		`"approved_next_step"`,
+		`"target_node_id": "end"`,
+		`"target_node_type": "end"`,
+		`应遵循此路径继续推进，不应偏离`,
+	} {
+		if !strings.Contains(userMsg, needle) {
+			t.Fatalf("expected approved seed to contain %s, got %s", needle, userMsg)
+		}
+	}
+}
+
+func TestBuildInitialSeedGracefullyDegradesWithoutWorkflowOrPriority(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_tickets (
+		id integer primary key,
+		code text,
+		title text,
+		description text,
+		status text,
+		outcome text,
+		source text,
+		priority_id integer,
+		form_data text
+	)`).Error; err != nil {
+		t.Fatalf("create tickets: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+		t.Fatalf("create priorities: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_tickets (id, code, title, description, status, outcome, source, priority_id, form_data) VALUES (44, 'TICK-44', 'VPN', '简化上下文', 'decisioning', '', 'portal', 999, '{bad-json}')`).Error; err != nil {
+		t.Fatalf("insert ticket: %v", err)
+	}
+
+	engine := &SmartEngine{}
+	_, userMsg, err := engine.buildInitialSeed(db, 44, &serviceModel{
+		ID:                8,
+		Name:              "轻量智能服务",
+		Description:       "no workflow",
+		CollaborationSpec: "按协作规范推进。",
+	}, "  ", nil, TriggerReasonInitialDecision)
+	if err != nil {
+		t.Fatalf("build initial seed: %v", err)
+	}
+	for _, needle := range []string{
+		`"trigger_reason": "initial_decision"`,
+		`"decision_mode": "direct_first"`,
+		`"priority": ""`,
+		`"status": "decisioning"`,
+	} {
+		if !strings.Contains(userMsg, needle) {
+			t.Fatalf("expected degraded seed to contain %s, got %s", needle, userMsg)
+		}
+	}
+	for _, forbidden := range []string{`"workflow_context"`, `"approved_next_step"`, `"rejected_activity_policy"`} {
+		if strings.Contains(userMsg, forbidden) {
+			t.Fatalf("did not expect %s in degraded seed, got %s", forbidden, userMsg)
+		}
+	}
+}
+
+type capturingDecisionExecutor struct {
+	resp     *appcore.AIDecisionResponse
+	err      error
+	calls    int
+	lastReq  appcore.AIDecisionRequest
+}
+
+func (e *capturingDecisionExecutor) Execute(_ context.Context, _ uint, req appcore.AIDecisionRequest) (*appcore.AIDecisionResponse, error) {
+	e.calls++
+	e.lastReq = req
+	if e.err != nil {
+		return nil, e.err
+	}
+	return e.resp, nil
+}
+
+type toolExercisingDecisionExecutor struct {
+	calls          int
+	toolResult     json.RawMessage
+	toolErr        error
+	lastReq        appcore.AIDecisionRequest
+}
+
+func (e *toolExercisingDecisionExecutor) Execute(_ context.Context, _ uint, req appcore.AIDecisionRequest) (*appcore.AIDecisionResponse, error) {
+	e.calls++
+	e.lastReq = req
+	if req.ToolHandler == nil {
+		return nil, errors.New("missing tool handler")
+	}
+	e.toolResult, e.toolErr = req.ToolHandler("decision.unknown_tool", json.RawMessage(`{}`))
+	return &appcore.AIDecisionResponse{
+		Content: `{"next_step_type":"complete","confidence":0.99,"reasoning":"未知工具已被安全收口"}`,
+	}, nil
+}
+
+type knowledgeSearchExercisingDecisionExecutor struct {
+	calls          int
+	toolResult     json.RawMessage
+	toolErr        error
+	lastReq        appcore.AIDecisionRequest
+}
+
+func (e *knowledgeSearchExercisingDecisionExecutor) Execute(_ context.Context, _ uint, req appcore.AIDecisionRequest) (*appcore.AIDecisionResponse, error) {
+	e.calls++
+	e.lastReq = req
+	if req.ToolHandler == nil {
+		return nil, errors.New("missing tool handler")
+	}
+	e.toolResult, e.toolErr = req.ToolHandler("decision.knowledge_search", json.RawMessage(`{"query":"vpn 预检","limit":2}`))
+	return &appcore.AIDecisionResponse{
+		Content: `{"next_step_type":"complete","confidence":0.93,"reasoning":"知识搜索已提供上下文"}`,
+	}, nil
+}
+
+func TestAgenticDecisionGuardAndToolContextContracts(t *testing.T) {
+	t.Run("missing decision agent id is rejected before executor call", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		engine := NewSmartEngine(&capturingDecisionExecutor{}, nil, nil, nil, nil, decisionAgentConfigProvider{agentID: 0})
+
+		_, err := engine.agenticDecision(context.Background(), db, 1, nil, &serviceModel{Name: "智能服务"}, TriggerReasonInitialDecision)
+		if err == nil || !strings.Contains(err.Error(), "流程决策岗未上岗") {
+			t.Fatalf("expected missing decision agent error, got %v", err)
+		}
+	})
+
+	t.Run("malformed knowledge base ids do not block executor request", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+			t.Fatalf("create priorities: %v", err)
+		}
+		if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+			t.Fatalf("insert priority: %v", err)
+		}
+		ticket := ticketModel{
+			Code:       "TICK-AGENTIC-1",
+			Title:      "VPN",
+			Status:     TicketStatusDecisioning,
+			PriorityID: 1,
+			EngineType: "smart",
+		}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		if err := db.Exec(`UPDATE itsm_tickets SET description = ?, source = ? WHERE id = ?`, "线上支持", "agent", ticket.ID).Error; err != nil {
+			t.Fatalf("update ticket payload columns: %v", err)
+		}
+
+		executor := &capturingDecisionExecutor{
+			resp: &appcore.AIDecisionResponse{
+				Content: `{"next_step_type":"complete","confidence":0.99,"reasoning":"资料齐备"}`,
+			},
+		}
+		engine := NewSmartEngine(executor, nil, nil, nil, nil, decisionAgentConfigProvider{agentID: 21})
+
+		plan, err := engine.agenticDecision(context.Background(), db, ticket.ID, nil, &serviceModel{
+			ID:               8,
+			Name:             "智能服务",
+			Description:      "svc",
+			KnowledgeBaseIDs: `not-json`,
+		}, TriggerReasonInitialDecision)
+		if err != nil {
+			t.Fatalf("agenticDecision: %v", err)
+		}
+		if executor.calls != 1 {
+			t.Fatalf("expected one executor call, got %d", executor.calls)
+		}
+		if plan.NextStepType != "complete" || plan.Confidence != 0.99 {
+			t.Fatalf("unexpected parsed plan: %+v", plan)
+		}
+		if len(executor.lastReq.Tools) == 0 || executor.lastReq.ToolHandler == nil {
+			t.Fatalf("expected tools to be attached to executor request, got %+v", executor.lastReq)
+		}
+		if executor.lastReq.Metadata["ticketID"] != ticket.ID {
+			t.Fatalf("expected metadata ticketID=%d, got %+v", ticket.ID, executor.lastReq.Metadata)
+		}
+		if !strings.Contains(executor.lastReq.UserMessage, `"decision_cycle"`) {
+			t.Fatalf("expected user seed in executor request, got %s", executor.lastReq.UserMessage)
+		}
+	})
+
+	t.Run("valid knowledge base ids flow into knowledge search tool context", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+			t.Fatalf("create priorities: %v", err)
+		}
+		if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+			t.Fatalf("insert priority: %v", err)
+		}
+		ticket := ticketModel{
+			Code:       "TICK-AGENTIC-KB",
+			Title:      "VPN",
+			Status:     TicketStatusDecisioning,
+			PriorityID: 1,
+			EngineType: "smart",
+		}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		if err := db.Exec(`UPDATE itsm_tickets SET description = ?, source = ? WHERE id = ?`, "线上支持", "agent", ticket.ID).Error; err != nil {
+			t.Fatalf("update ticket payload columns: %v", err)
+		}
+
+		searcher := &fakeKnowledgeSearcher{}
+		executor := &knowledgeSearchExercisingDecisionExecutor{}
+		engine := NewSmartEngine(executor, searcher, nil, nil, nil, decisionAgentConfigProvider{agentID: 26})
+
+		plan, err := engine.agenticDecision(context.Background(), db, ticket.ID, nil, &serviceModel{
+			ID:               13,
+			Name:             "智能服务",
+			Description:      "svc",
+			KnowledgeBaseIDs: `[11,22]`,
+		}, TriggerReasonInitialDecision)
+		if err != nil {
+			t.Fatalf("agenticDecision: %v", err)
+		}
+		if executor.calls != 1 {
+			t.Fatalf("expected one executor call, got %d", executor.calls)
+		}
+		if executor.toolErr != nil {
+			t.Fatalf("expected knowledge search tool to succeed, got %v", executor.toolErr)
+		}
+		if plan.NextStepType != "complete" || plan.Confidence != 0.93 {
+			t.Fatalf("unexpected parsed plan: %+v", plan)
+		}
+		if !reflect.DeepEqual(searcher.kbIDs, []uint{11, 22}) || searcher.query != "vpn 预检" || searcher.limit != 2 {
+			t.Fatalf("expected parsed knowledge base ids to reach searcher, got kbIDs=%v query=%q limit=%d", searcher.kbIDs, searcher.query, searcher.limit)
+		}
+		if !strings.Contains(string(executor.toolResult), "VPN 规范") {
+			t.Fatalf("expected tool result payload to include knowledge result, got %s", executor.toolResult)
+		}
+	})
+
+	t.Run("executor failure bubbles out to caller", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+			t.Fatalf("create priorities: %v", err)
+		}
+		if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+			t.Fatalf("insert priority: %v", err)
+		}
+		ticket := ticketModel{Code: "TICK-AGENTIC-2", Title: "VPN", Status: TicketStatusDecisioning, PriorityID: 1, EngineType: "smart"}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		if err := db.Exec(`UPDATE itsm_tickets SET description = ?, source = ? WHERE id = ?`, "线上支持", "agent", ticket.ID).Error; err != nil {
+			t.Fatalf("update ticket payload columns: %v", err)
+		}
+
+		executor := &capturingDecisionExecutor{err: errors.New("llm unavailable")}
+		engine := NewSmartEngine(executor, nil, nil, nil, nil, decisionAgentConfigProvider{agentID: 22})
+
+		_, err := engine.agenticDecision(context.Background(), db, ticket.ID, nil, &serviceModel{ID: 9, Name: "智能服务"}, TriggerReasonInitialDecision)
+		if err == nil || !strings.Contains(err.Error(), "llm unavailable") {
+			t.Fatalf("expected executor failure to bubble, got %v", err)
+		}
+		if executor.calls != 1 {
+			t.Fatalf("expected one executor call, got %d", executor.calls)
+		}
+	})
+
+	t.Run("missing ticket surfaces build initial seed error before executor call", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		executor := &capturingDecisionExecutor{
+			resp: &appcore.AIDecisionResponse{
+				Content: `{"next_step_type":"complete","confidence":0.99}`,
+			},
+		}
+		engine := NewSmartEngine(executor, nil, nil, nil, nil, decisionAgentConfigProvider{agentID: 24})
+
+		_, err := engine.agenticDecision(context.Background(), db, 9999, nil, &serviceModel{ID: 11, Name: "智能服务"}, TriggerReasonInitialDecision)
+		if err == nil || !strings.Contains(err.Error(), "build initial seed") || !strings.Contains(err.Error(), "ticket not found") {
+			t.Fatalf("expected build initial seed ticket-not-found error, got %v", err)
+		}
+		if executor.calls != 0 {
+			t.Fatalf("expected executor to be skipped when seed build fails, got %d calls", executor.calls)
+		}
+	})
+
+	t.Run("unknown tool is folded into business tool error payload", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+			t.Fatalf("create priorities: %v", err)
+		}
+		if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+			t.Fatalf("insert priority: %v", err)
+		}
+		ticket := ticketModel{Code: "TICK-AGENTIC-3", Title: "VPN", Status: TicketStatusDecisioning, PriorityID: 1, EngineType: "smart"}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		if err := db.Exec(`UPDATE itsm_tickets SET description = ?, source = ? WHERE id = ?`, "线上支持", "agent", ticket.ID).Error; err != nil {
+			t.Fatalf("update ticket payload columns: %v", err)
+		}
+
+		executor := &toolExercisingDecisionExecutor{}
+		engine := NewSmartEngine(executor, nil, nil, nil, nil, decisionAgentConfigProvider{agentID: 23})
+
+		plan, err := engine.agenticDecision(context.Background(), db, ticket.ID, nil, &serviceModel{ID: 10, Name: "智能服务"}, TriggerReasonInitialDecision)
+		if err != nil {
+			t.Fatalf("agenticDecision: %v", err)
+		}
+		if plan.NextStepType != "complete" {
+			t.Fatalf("unexpected parsed plan after tool exercise: %+v", plan)
+		}
+		if executor.toolErr != nil {
+			t.Fatalf("expected unknown tool to return business payload instead of error, got %v", executor.toolErr)
+		}
+		if !strings.Contains(string(executor.toolResult), "未知工具") {
+			t.Fatalf("expected unknown tool payload to mention unknown tool, got %s", executor.toolResult)
+		}
+	})
+
+	t.Run("invalid model output bubbles parse error", func(t *testing.T) {
+		db := newSmartRunCycleDB(t)
+		if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+			t.Fatalf("create priorities: %v", err)
+		}
+		if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+			t.Fatalf("insert priority: %v", err)
+		}
+		ticket := ticketModel{Code: "TICK-AGENTIC-4", Title: "VPN", Status: TicketStatusDecisioning, PriorityID: 1, EngineType: "smart"}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		if err := db.Exec(`UPDATE itsm_tickets SET description = ?, source = ? WHERE id = ?`, "线上支持", "agent", ticket.ID).Error; err != nil {
+			t.Fatalf("update ticket payload columns: %v", err)
+		}
+
+		executor := &capturingDecisionExecutor{
+			resp: &appcore.AIDecisionResponse{Content: `not-json-at-all`},
+		}
+		engine := NewSmartEngine(executor, nil, nil, nil, nil, decisionAgentConfigProvider{agentID: 25})
+
+		_, err := engine.agenticDecision(context.Background(), db, ticket.ID, nil, &serviceModel{ID: 12, Name: "智能服务"}, TriggerReasonInitialDecision)
+		if err == nil || !strings.Contains(err.Error(), "JSON 解析失败") {
+			t.Fatalf("expected parse error from malformed model output, got %v", err)
+		}
+		if executor.calls != 1 {
+			t.Fatalf("expected one executor call, got %d", executor.calls)
+		}
+	})
+}
+
+func TestBuildInitialSeedIgnoresStaleCompletedActivityButKeepsBranchInsights(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_tickets (
+		id integer primary key,
+		code text,
+		title text,
+		description text,
+		status text,
+		outcome text,
+		source text,
+		priority_id integer,
+		form_data text
+	)`).Error; err != nil {
+		t.Fatalf("create tickets: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE itsm_priorities (id integer primary key, name text)`).Error; err != nil {
+		t.Fatalf("create priorities: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_priorities (id, name) VALUES (1, '普通')`).Error; err != nil {
+		t.Fatalf("insert priority: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO itsm_tickets (id, code, title, description, status, outcome, source, priority_id, form_data) VALUES (45, 'TICK-45', 'VPN', '安全合规访问', 'decisioning', '', 'agent', 1, '{"request_kind":"security_compliance"}')`).Error; err != nil {
+		t.Fatalf("insert ticket: %v", err)
+	}
+
+	completedActivityID := uint(999)
+	engine := &SmartEngine{}
+	_, userMsg, err := engine.buildInitialSeed(db, 45, &serviceModel{
+		ID:                9,
+		Name:              "VPN 开通申请",
+		Description:       "VPN service",
+		CollaborationSpec: "处理任务完成后直接结束流程。",
+		WorkflowJSON:      branchContractWorkflowFixture,
+	}, "direct_first", &completedActivityID, TriggerReasonActivityDone)
+	if err != nil {
+		t.Fatalf("build initial seed: %v", err)
+	}
+	for _, needle := range []string{
+		`"trigger_reason": "activity_completed"`,
+		`"selected_branch"`,
+		`"branch_node_id": "security_process"`,
+		`"allowed_next_branch_nodes"`,
+	} {
+		if !strings.Contains(userMsg, needle) {
+			t.Fatalf("expected stale-completed seed to retain branch insight %s, got %s", needle, userMsg)
+		}
+	}
+	for _, forbidden := range []string{`"completed_activity"`, `"approved_next_step"`, `"rejected_activity_policy"`} {
+		if strings.Contains(userMsg, forbidden) {
+			t.Fatalf("did not expect %s when completed activity lookup misses, got %s", forbidden, userMsg)
+		}
+	}
+}
+
 type fakeDecisionDataProvider struct {
-	ticket       *DecisionTicketData
-	history      []activityModel
-	activityByID map[uint]activityModel
-	assignments  map[uint][]ActivityAssignmentInfo
-	current      []CurrentActivityInfo
-	executed     []ExecutedActionInfo
-	totalActions int64
-	assignment   *CurrentAssignmentInfo
-	groups       []ParallelGroupInfo
-	pendingNames []string
+	ticket                *DecisionTicketData
+	history               []activityModel
+	activityByID          map[uint]activityModel
+	assignments           map[uint][]ActivityAssignmentInfo
+	current               []CurrentActivityInfo
+	executed              []ExecutedActionInfo
+	totalActions          int64
+	assignment            *CurrentAssignmentInfo
+	groups                []ParallelGroupInfo
+	pendingNames          []string
+	users                 map[uint]*UserBasicInfo
+	userErrors            map[uint]error
+	pendingCounts         map[uint]int64
+	similarHistory        []TicketHistoryRow
+	completedTicketCount  int64
+	ticketActivityCounts  map[uint]int64
+	slaData               *SLATicketData
+	serviceActions        []ServiceActionRow
+	serviceActionByID     map[uint]*ServiceActionRow
+	resolveUserIDs        []uint
+	resolveErr            error
 }
 
 func (f fakeDecisionDataProvider) GetTicketContext(uint) (*DecisionTicketData, error) {
@@ -240,32 +715,47 @@ func (f fakeDecisionDataProvider) GetParallelGroups(uint) ([]ParallelGroupInfo, 
 func (f fakeDecisionDataProvider) GetPendingActivityNames(uint, string) ([]string, error) {
 	return f.pendingNames, nil
 }
-func (f fakeDecisionDataProvider) GetUserBasicInfo(uint) (*UserBasicInfo, error) {
+func (f fakeDecisionDataProvider) GetUserBasicInfo(userID uint) (*UserBasicInfo, error) {
+	if err, ok := f.userErrors[userID]; ok {
+		return nil, err
+	}
+	if user, ok := f.users[userID]; ok {
+		return user, nil
+	}
 	return &UserBasicInfo{ID: 1, Username: "admin", IsActive: true}, nil
 }
-func (f fakeDecisionDataProvider) CountUserPendingActivities(uint) (int64, error) {
+func (f fakeDecisionDataProvider) CountUserPendingActivities(userID uint) (int64, error) {
+	if count, ok := f.pendingCounts[userID]; ok {
+		return count, nil
+	}
 	return 0, nil
 }
 func (f fakeDecisionDataProvider) GetSimilarHistory(uint, uint, int) ([]TicketHistoryRow, error) {
-	return nil, nil
+	return f.similarHistory, nil
 }
 func (f fakeDecisionDataProvider) CountCompletedTickets(uint) (int64, error) {
-	return 0, nil
+	return f.completedTicketCount, nil
 }
-func (f fakeDecisionDataProvider) CountTicketActivities(uint) (int64, error) {
+func (f fakeDecisionDataProvider) CountTicketActivities(ticketID uint) (int64, error) {
+	if count, ok := f.ticketActivityCounts[ticketID]; ok {
+		return count, nil
+	}
 	return 0, nil
 }
 func (f fakeDecisionDataProvider) GetSLAData(uint) (*SLATicketData, error) {
-	return nil, nil
+	return f.slaData, nil
 }
 func (f fakeDecisionDataProvider) ListActiveServiceActions(uint, uint) ([]ServiceActionRow, error) {
-	return nil, nil
+	return f.serviceActions, nil
 }
-func (f fakeDecisionDataProvider) GetServiceAction(uint, uint, uint) (*ServiceActionRow, error) {
-	return nil, nil
+func (f fakeDecisionDataProvider) GetServiceAction(_ uint, actionID uint, _ uint) (*ServiceActionRow, error) {
+	if action, ok := f.serviceActionByID[actionID]; ok {
+		return action, nil
+	}
+	return nil, gorm.ErrRecordNotFound
 }
 func (f fakeDecisionDataProvider) ResolveForTool(*ParticipantResolver, uint, json.RawMessage) ([]uint, error) {
-	return nil, nil
+	return f.resolveUserIDs, f.resolveErr
 }
 
 func TestDecisionTicketContextReturnsStableDecisionAnchors(t *testing.T) {
@@ -594,6 +1084,161 @@ func TestValidateDecisionPlanRejectsDuplicateCompletedHumanActivity(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "重复创建已完成的人工活动") {
 		t.Fatalf("expected duplicate human activity validation error, got %v", err)
 	}
+}
+
+func TestValidateDecisionPlanGuardContracts(t *testing.T) {
+	setup := func(t *testing.T) (*gorm.DB, ticketModel) {
+		t.Helper()
+		db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		if err := db.AutoMigrate(&ticketModel{}, &activityModel{}, &assignmentModel{}, &serviceActionModel{}); err != nil {
+			t.Fatalf("migrate db: %v", err)
+		}
+		if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean, deleted_at datetime)`).Error; err != nil {
+			t.Fatalf("create users: %v", err)
+		}
+		if err := db.Exec(`INSERT INTO users (id, is_active) VALUES (1, true), (2, false)`).Error; err != nil {
+			t.Fatalf("insert users: %v", err)
+		}
+		ticket := ticketModel{Status: TicketStatusDecisioning, EngineType: "smart", ServiceID: 1}
+		if err := db.Create(&ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		return db, ticket
+	}
+
+	eng := &SmartEngine{}
+
+	t.Run("nil plan rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, nil, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "decision plan is nil") {
+			t.Fatalf("expected nil plan error, got %v", err)
+		}
+	})
+
+	t.Run("invalid next step type rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: "bogus_step",
+			Confidence:   0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "next_step_type") {
+			t.Fatalf("expected invalid next_step_type error, got %v", err)
+		}
+	})
+
+	t.Run("complete plan cannot include activities", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: "complete",
+			Activities: []DecisionActivity{{
+				Type: NodeProcess,
+			}},
+			Confidence: 0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "complete 决策不能包含活动") {
+			t.Fatalf("expected complete-with-activities error, got %v", err)
+		}
+	})
+
+	t.Run("non complete plan requires activity", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: NodeProcess,
+			Confidence:   0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "必须包含至少一个活动") {
+			t.Fatalf("expected empty-activities error, got %v", err)
+		}
+	})
+
+	t.Run("confidence out of range rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: NodeProcess,
+			Activities: []DecisionActivity{{
+				Type:          NodeProcess,
+				ParticipantID: uintPtrIf(1),
+			}},
+			Confidence: 1.2,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "confidence") {
+			t.Fatalf("expected bad confidence error, got %v", err)
+		}
+	})
+
+	t.Run("missing participant user rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: NodeProcess,
+			Activities: []DecisionActivity{{
+				Type:          NodeProcess,
+				ParticipantID: uintPtrIf(99),
+			}},
+			Confidence: 0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "用户不存在") {
+			t.Fatalf("expected missing user error, got %v", err)
+		}
+	})
+
+	t.Run("inactive participant user rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: NodeProcess,
+			Activities: []DecisionActivity{{
+				Type:          NodeProcess,
+				ParticipantID: uintPtrIf(2),
+			}},
+			Confidence: 0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "用户未激活") {
+			t.Fatalf("expected inactive user error, got %v", err)
+		}
+	})
+
+	t.Run("human activity without resolvable participant rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: NodeProcess,
+			Activities: []DecisionActivity{{
+				Type: NodeProcess,
+			}},
+			Confidence: 0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "缺少可解析的处理人") {
+			t.Fatalf("expected missing participant resolution error, got %v", err)
+		}
+	})
+
+	t.Run("inactive action rejected", func(t *testing.T) {
+		db, ticket := setup(t)
+		if err := db.Create(&serviceActionModel{
+			ID:         7,
+			ServiceID:  1,
+			Name:       "禁用动作",
+			Code:       "disabled_action",
+			ActionType: "http",
+			ConfigJSON: `{"url":"https://example.com"}`,
+			IsActive:   false,
+		}).Error; err != nil {
+			t.Fatalf("create disabled action: %v", err)
+		}
+		err := eng.validateDecisionPlan(db, ticket.ID, &DecisionPlan{
+			NextStepType: NodeAction,
+			Activities: []DecisionActivity{{
+				Type:     NodeAction,
+				ActionID: uintPtrIf(7),
+			}},
+			Confidence: 0.3,
+		}, &serviceModel{ID: 1}, nil)
+		if err == nil || !strings.Contains(err.Error(), "不在服务可用动作列表中") {
+			t.Fatalf("expected inactive action error, got %v", err)
+		}
+	})
 }
 
 func TestValidateDecisionPlanNormalizesVPNRouteFromCollaborationSpec(t *testing.T) {
@@ -953,6 +1598,67 @@ func TestValidateDecisionPlanAllowsRequesterSupplementWhenSpecExplicit(t *testin
 	}, &activity.ID)
 	if err != nil {
 		t.Fatalf("expected requester supplement to be allowed when spec is explicit, got %v", err)
+	}
+}
+
+func TestValidateDecisionPlanAllowsExplicitRecoveryIntentForSameRejectedParticipant(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&ticketModel{}, &activityModel{}, &assignmentModel{}); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, is_active boolean, deleted_at datetime)`).Error; err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, is_active) VALUES (1, true)`).Error; err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	ticket := ticketModel{Status: "in_progress", EngineType: "smart"}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	activity := activityModel{
+		TicketID:          ticket.ID,
+		Name:              "网络管理员处理",
+		ActivityType:      NodeProcess,
+		Status:            ActivityCompleted,
+		TransitionOutcome: "rejected",
+		DecisionReasoning: "需补充新的抓包证据",
+	}
+	if err := db.Create(&activity).Error; err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+	if err := db.Create(&assignmentModel{
+		TicketID:        ticket.ID,
+		ActivityID:      activity.ID,
+		ParticipantType: "user",
+		UserID:          uintPtrIf(1),
+		AssigneeID:      uintPtrIf(1),
+		Status:          "completed",
+	}).Error; err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+
+	eng := &SmartEngine{}
+	plan := &DecisionPlan{
+		NextStepType:  NodeProcess,
+		ExecutionMode: "single",
+		Activities: []DecisionActivity{{
+			Type:          NodeProcess,
+			ParticipantID: uintPtrIf(1),
+			Instructions:  "基于新抓包证据重新评估并升级处理",
+		}},
+		Confidence: 0.95,
+	}
+	err = eng.validateDecisionPlan(db, ticket.ID, plan, &serviceModel{
+		ID:                1,
+		CollaborationSpec: "处理人驳回后可基于补充的新证据继续恢复处理。",
+	}, &activity.ID)
+	if err != nil {
+		t.Fatalf("expected explicit recovery intent to be allowed, got %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"metis/internal/app/license/domain"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/do/v2"
@@ -87,6 +88,10 @@ func (h *ProductHandler) Create(c *gin.Context) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
+		if errors.Is(err, ErrInvalidProductName) || errors.Is(err, ErrInvalidProductCode) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, licensecrypto.ErrNoEncryptionKey) {
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
 			return
@@ -101,14 +106,26 @@ func (h *ProductHandler) Create(c *gin.Context) {
 }
 
 func (h *ProductHandler) List(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	params := ProductListParams{
 		Keyword:  c.Query("keyword"),
-		Status:   c.Query("status"),
+		Status:   normalizeProductListStatus(c.Query("status")),
 		Page:     page,
 		PageSize: pageSize,
+	}
+	if !isValidProductListStatus(params.Status) {
+		handler.Fail(c, http.StatusBadRequest, "invalid status")
+		return
 	}
 
 	items, total, err := h.productSvc.ListProducts(params)
@@ -130,6 +147,23 @@ func (h *ProductHandler) List(c *gin.Context) {
 		"page":     page,
 		"pageSize": pageSize,
 	})
+}
+
+func isValidProductListStatus(status string) bool {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "", "all", domain.StatusUnpublished, domain.StatusPublished, domain.StatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeProductListStatus(status string) string {
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "all" {
+		return ""
+	}
+	return status
 }
 
 func (h *ProductHandler) Get(c *gin.Context) {
@@ -176,6 +210,10 @@ func (h *ProductHandler) Update(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, ErrProductNotFound) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, ErrInvalidProductName) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
@@ -394,7 +432,7 @@ func (h *PlanHandler) Create(c *gin.Context) {
 
 	plan, err := h.planSvc.CreatePlan(productID, req.Name, req.ConstraintValues, req.SortOrder)
 	if err != nil {
-		if errors.Is(err, ErrProductNotFound) || errors.Is(err, ErrPlanNameExists) || errors.Is(err, ErrInvalidConstraintValues) {
+		if errors.Is(err, ErrProductNotFound) || errors.Is(err, ErrPlanNameExists) || errors.Is(err, ErrInvalidPlanName) || errors.Is(err, ErrInvalidConstraintValues) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -430,7 +468,7 @@ func (h *PlanHandler) Update(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, ErrPlanNameExists) || errors.Is(err, ErrInvalidConstraintValues) {
+		if errors.Is(err, ErrPlanNameExists) || errors.Is(err, ErrInvalidPlanName) || errors.Is(err, ErrInvalidConstraintValues) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}

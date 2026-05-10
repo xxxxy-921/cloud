@@ -41,6 +41,10 @@ var (
 	ErrCatalogSubmissionClassic  = errors.New("服务目录提单仅支持经典服务，请通过服务台提交智能服务")
 	ErrInvalidRecoveryAction     = errors.New("invalid recovery action")
 	ErrRecoveryActionTooFrequent = errors.New("recovery action is too frequent")
+	ErrRetryAIOnlyForSmart       = errors.New("retry-ai is only available for smart engine tickets")
+	ErrHandoffHumanOnlyForSmart  = errors.New("handoff-human is only available for smart engine tickets")
+	ErrRecoveryOperatorRequired  = errors.New("operator is required")
+	ErrInvalidActivityType       = errors.New("invalid activity type")
 	errSubmissionAlreadyExists   = errors.New("service desk submission already exists")
 )
 
@@ -94,6 +98,11 @@ func (s *TicketService) Create(input CreateTicketInput, requesterID uint) (*Tick
 	ticket, svc, err := s.prepareTicket(input, requesterID)
 	if err != nil {
 		return nil, err
+	}
+	if ticket.EngineType == "smart" {
+		if err := s.ensureSmartDecisionDispatchReady(); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
@@ -304,10 +313,18 @@ func (s *TicketService) CreateFromAgent(ctx context.Context, req tools.AgentTick
 }
 
 func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicketInput, req tools.AgentTicketRequest) (*Ticket, error) {
+	req.FieldsHash = strings.TrimSpace(req.FieldsHash)
+	req.RequestHash = strings.TrimSpace(req.RequestHash)
+
 	if req.DraftVersion <= 0 || strings.TrimSpace(req.FieldsHash) == "" {
 		ticket, svc, err := s.prepareTicket(input, req.UserID)
 		if err != nil {
 			return nil, err
+		}
+		if ticket.EngineType == "smart" {
+			if err := s.ensureSmartDecisionDispatchReady(); err != nil {
+				return nil, err
+			}
 		}
 		if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
 			return s.createTicketLifecycleInTx(ctx, tx, ticket, svc, req.UserID)
@@ -330,6 +347,11 @@ func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicke
 	if err != nil {
 		return nil, err
 	}
+	if ticket.EngineType == "smart" {
+		if err := s.ensureSmartDecisionDispatchReady(); err != nil {
+			return nil, err
+		}
+	}
 
 	var created *Ticket
 	err = s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
@@ -340,24 +362,40 @@ func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicke
 		if result.Error != nil {
 			return result.Error
 		}
+		var submission *ServiceDeskSubmission
 		if result.RowsAffected > 0 {
-			return errSubmissionAlreadyExists
+			switch existing.Status {
+			case "submitting", "submitted":
+				return errSubmissionAlreadyExists
+			default:
+				if err := tx.Model(&existing).Updates(map[string]any{
+					"ticket_id":     0,
+					"status":        "submitting",
+					"submitted_by":  req.UserID,
+					"submitted_at":  time.Now(),
+				}).Error; err != nil {
+					return err
+				}
+				submission = &existing
+			}
 		}
 
-		submission := &ServiceDeskSubmission{
-			SessionID:    req.SessionID,
-			DraftVersion: req.DraftVersion,
-			FieldsHash:   req.FieldsHash,
-			RequestHash:  req.RequestHash,
-			Status:       "submitting",
-			SubmittedBy:  req.UserID,
-			SubmittedAt:  time.Now(),
-		}
-		if err := tx.Create(submission).Error; err != nil {
-			if isUniqueConstraintError(err) {
-				return errSubmissionAlreadyExists
+		if submission == nil {
+			submission = &ServiceDeskSubmission{
+				SessionID:    req.SessionID,
+				DraftVersion: req.DraftVersion,
+				FieldsHash:   req.FieldsHash,
+				RequestHash:  req.RequestHash,
+				Status:       "submitting",
+				SubmittedBy:  req.UserID,
+				SubmittedAt:  time.Now(),
 			}
-			return err
+			if err := tx.Create(submission).Error; err != nil {
+				if isUniqueConstraintError(err) {
+					return errSubmissionAlreadyExists
+				}
+				return err
+			}
 		}
 
 		if err := s.createTicketLifecycleInTx(ctx, tx, ticket, svc, req.UserID); err != nil {
@@ -407,6 +445,13 @@ func (s *TicketService) createAgentTicket(ctx context.Context, input CreateTicke
 		}
 	}
 	return s.ticketRepo.FindByID(created.ID)
+}
+
+func (s *TicketService) ensureSmartDecisionDispatchReady() error {
+	if s.smartEngine == nil {
+		return errors.New("smart engine is not configured")
+	}
+	return s.smartEngine.CanDispatchDecisionTask()
 }
 
 func serviceVersionIDPointer(id uint) *uint {
@@ -520,6 +565,9 @@ func (s *TicketService) Signal(ticketID uint, activityID uint, outcome string, d
 	// Verify the activity is a wait node and is pending
 	var activity TicketActivity
 	if err := s.ticketRepo.DB().First(&activity, activityID).Error; err != nil {
+		return nil, engine.ErrActivityNotFound
+	}
+	if activity.TicketID != ticketID {
 		return nil, engine.ErrActivityNotFound
 	}
 	if activity.ActivityType != engine.NodeWait {
@@ -805,7 +853,7 @@ func (s *TicketService) BuildResponses(items []Ticket, operatorID uint) ([]Ticke
 			s.populateSmartSummary(resp, activities, assignments)
 			var currentActivity *TicketActivity
 			if resp.CurrentActivityID != nil {
-				if activity, ok := activities[*resp.CurrentActivityID]; ok {
+				if activity, ok := activities[*resp.CurrentActivityID]; ok && activity.TicketID == resp.ID {
 					currentActivity = &activity
 				}
 			}
@@ -999,7 +1047,7 @@ func (s *TicketService) loadAssignmentDisplays(activityIDs map[uint]struct{}, op
 	query := db.Table("itsm_ticket_assignments AS a").
 		Joins("LEFT JOIN users AS au ON au.id = a.assignee_id").
 		Joins("LEFT JOIN users AS uu ON uu.id = a.user_id").
-		Where("a.activity_id IN ? AND a.status = ?", ids, AssignmentPending)
+		Where("a.activity_id IN ? AND a.status IN ?", ids, []string{AssignmentPending, AssignmentInProgress})
 
 	if db.Migrator().HasTable("positions") {
 		query = query.Joins("LEFT JOIN positions AS p ON p.id = a.position_id")
@@ -1068,7 +1116,7 @@ func (s *TicketService) populateSmartSummary(resp *TicketResponse, activities ma
 		return
 	}
 	activity, ok := activities[*resp.CurrentActivityID]
-	if !ok {
+	if !ok || activity.TicketID != resp.ID {
 		resp.SmartState = "ai_reasoning"
 		resp.CurrentOwnerType = "ai"
 		resp.CurrentOwnerName = "AI 智能引擎"
@@ -1133,7 +1181,7 @@ func (s *TicketService) assignmentCanAct(activityID uint, operatorID uint, posit
 	}
 	var count int64
 	s.ticketRepo.DB().Model(&TicketAssignment{}).
-		Where("activity_id = ? AND status = ?", activityID, AssignmentPending).
+		Where("activity_id = ? AND status IN ?", activityID, []string{AssignmentPending, AssignmentInProgress}).
 		Where(s.ticketRepo.assignmentOperatorCondition("itsm_ticket_assignments", operatorID, positionIDs, deptIDs)).
 		Count(&count)
 	return count > 0
@@ -1576,6 +1624,51 @@ func (s *TicketService) Assign(id uint, assigneeID uint, operatorID uint) (*Tick
 	}
 
 	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
+		if t.CurrentActivityID != nil {
+			var activeAssignments []TicketAssignment
+			if err := tx.
+				Where("ticket_id = ? AND activity_id = ? AND is_current = ? AND status IN ?",
+					id, *t.CurrentActivityID, true, []string{AssignmentPending, AssignmentInProgress, AssignmentClaimedByOther}).
+				Order("id ASC").
+				Find(&activeAssignments).Error; err != nil {
+				return err
+			}
+			if len(activeAssignments) == 0 {
+				return ErrNoActiveAssignment
+			}
+			primary := activeAssignments[0]
+			if len(activeAssignments) > 1 {
+				cancelIDs := make([]uint, 0, len(activeAssignments)-1)
+				for _, assignment := range activeAssignments[1:] {
+					cancelIDs = append(cancelIDs, assignment.ID)
+				}
+				if err := tx.Model(&TicketAssignment{}).
+					Where("id IN ?", cancelIDs).
+					Updates(map[string]any{
+						"status":      AssignmentCancelled,
+						"is_current":  false,
+						"claimed_at":  nil,
+						"finished_at": time.Now(),
+					}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&TicketAssignment{}).
+				Where("id = ?", primary.ID).
+				Updates(map[string]any{
+					"participant_type": "user",
+					"user_id":          assigneeID,
+					"position_id":      nil,
+					"department_id":    nil,
+					"assignee_id":      assigneeID,
+					"status":           AssignmentPending,
+					"claimed_at":       nil,
+					"is_current":       true,
+				}).Error; err != nil {
+				return err
+			}
+		}
+
 		updates := map[string]any{
 			"assignee_id": assigneeID,
 			"status":      TicketStatusWaitingHuman,
@@ -1648,10 +1741,37 @@ func (s *TicketService) Cancel(id uint, reason string, operatorID uint) (*Ticket
 	// Manual mode: original cancel logic
 	now := time.Now()
 	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
+		var activeActivityIDs []uint
+		if err := tx.Model(&TicketActivity{}).
+			Where("ticket_id = ? AND status IN ?", id, []string{engine.ActivityPending, engine.ActivityInProgress}).
+			Pluck("id", &activeActivityIDs).Error; err != nil {
+			return err
+		}
+		if len(activeActivityIDs) > 0 {
+			if err := tx.Model(&TicketActivity{}).
+				Where("id IN ?", activeActivityIDs).
+				Updates(map[string]any{
+					"status":      engine.ActivityCancelled,
+					"finished_at": now,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&TicketAssignment{}).
+				Where("ticket_id = ? AND activity_id IN ? AND status IN ?",
+					id, activeActivityIDs, []string{AssignmentPending, AssignmentInProgress, AssignmentClaimedByOther}).
+				Updates(map[string]any{
+					"status":     AssignmentCancelled,
+					"is_current": false,
+				}).Error; err != nil {
+				return err
+			}
+		}
 		updates := map[string]any{
 			"status":      TicketStatusCancelled,
 			"outcome":     TicketOutcomeCancelled,
 			"finished_at": now,
+			"assignee_id": nil,
+			"current_activity_id": nil,
 		}
 		if err := s.ticketRepo.UpdateInTx(tx, id, updates); err != nil {
 			return err
@@ -1737,18 +1857,39 @@ func (s *TicketService) OverrideJump(ticketID uint, activityType string, assigne
 	if t.IsTerminal() {
 		return nil, ErrTicketTerminal
 	}
+	activityType = strings.TrimSpace(activityType)
+	if !isValidManualOverrideActivityType(activityType) {
+		return nil, ErrInvalidActivityType
+	}
 
 	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
-		// Cancel current active activities
 		now := time.Now()
-		tx.Model(&TicketActivity{}).
-			Where("ticket_id = ? AND status IN ?", ticketID,
-				[]string{engine.ActivityPending, engine.ActivityInProgress}).
-			Updates(map[string]any{
-				"status":        engine.ActivityCancelled,
-				"finished_at":   now,
-				"overridden_by": operatorID,
-			})
+		var activeActivityIDs []uint
+		if err := tx.Model(&TicketActivity{}).
+			Where("ticket_id = ? AND status IN ?", ticketID, []string{engine.ActivityPending, engine.ActivityInProgress}).
+			Pluck("id", &activeActivityIDs).Error; err != nil {
+			return err
+		}
+		if len(activeActivityIDs) > 0 {
+			if err := tx.Model(&TicketActivity{}).
+				Where("id IN ?", activeActivityIDs).
+				Updates(map[string]any{
+					"status":        engine.ActivityCancelled,
+					"finished_at":   now,
+					"overridden_by": operatorID,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&TicketAssignment{}).
+				Where("ticket_id = ? AND activity_id IN ? AND status IN ?",
+					ticketID, activeActivityIDs, []string{AssignmentPending, AssignmentInProgress, AssignmentClaimedByOther}).
+				Updates(map[string]any{
+					"status":     AssignmentCancelled,
+					"is_current": false,
+				}).Error; err != nil {
+				return err
+			}
+		}
 
 		// Create new activity
 		act := &TicketActivity{
@@ -1767,6 +1908,7 @@ func (s *TicketService) OverrideJump(ticketID uint, activityType string, assigne
 			"current_activity_id": act.ID,
 			"status":              ticketStatusForManualActivity(activityType),
 			"outcome":             "",
+			"assignee_id":         nil,
 		}
 		if assigneeID != nil && *assigneeID > 0 {
 			updates["assignee_id"] = *assigneeID
@@ -1818,11 +1960,17 @@ func (s *TicketService) OverrideReassign(ticketID uint, activityID uint, newAssi
 
 	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
 		// Update assignment
-		tx.Model(&TicketAssignment{}).
+		result := tx.Model(&TicketAssignment{}).
 			Where("ticket_id = ? AND activity_id = ? AND is_current = ?", ticketID, activityID, true).
 			Updates(map[string]any{
 				"assignee_id": newAssigneeID,
 			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNoActiveAssignment
+		}
 
 		// Update ticket assignee
 		if err := tx.Model(&Ticket{}).Where("id = ?", ticketID).Updates(map[string]any{
@@ -1879,10 +2027,10 @@ func (s *TicketService) retryAI(ticketID uint, reason string, operatorID uint, l
 		return nil, ErrTicketTerminal
 	}
 	if t.EngineType != "smart" {
-		return nil, errors.New("retry-ai is only available for smart engine tickets")
+		return nil, ErrRetryAIOnlyForSmart
 	}
 	if operatorID == 0 {
-		return nil, errors.New("operator is required")
+		return nil, ErrRecoveryOperatorRequired
 	}
 
 	if err := s.ticketRepo.DB().Transaction(func(tx *gorm.DB) error {
@@ -1891,12 +2039,39 @@ func (s *TicketService) retryAI(ticketID uint, reason string, operatorID uint, l
 		} else if blocked {
 			return ErrRecoveryActionTooFrequent
 		}
+		now := time.Now()
+		var activeActivityIDs []uint
+		if err := tx.Model(&TicketActivity{}).
+			Where("ticket_id = ? AND status IN ?", ticketID, []string{engine.ActivityPending, engine.ActivityInProgress}).
+			Pluck("id", &activeActivityIDs).Error; err != nil {
+			return err
+		}
+		if len(activeActivityIDs) > 0 {
+			if err := tx.Model(&TicketActivity{}).
+				Where("id IN ?", activeActivityIDs).
+				Updates(map[string]any{
+					"status":      engine.ActivityCancelled,
+					"finished_at": now,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&TicketAssignment{}).
+				Where("ticket_id = ? AND activity_id IN ? AND status IN ?",
+					ticketID, activeActivityIDs, []string{AssignmentPending, AssignmentInProgress, AssignmentClaimedByOther}).
+				Updates(map[string]any{
+					"status":     AssignmentCancelled,
+					"is_current": false,
+				}).Error; err != nil {
+				return err
+			}
+		}
 		// Reset failure count
 		if err := tx.Model(&Ticket{}).Where("id = ?", ticketID).Updates(map[string]any{
 			"ai_failure_count":    0,
 			"status":              TicketStatusDecisioning,
 			"outcome":             "",
 			"current_activity_id": nil,
+			"assignee_id":         nil,
 		}).Error; err != nil {
 			return err
 		}
@@ -1960,10 +2135,10 @@ func (s *TicketService) handoffHuman(ticketID uint, reason string, operatorID ui
 		return nil, ErrTicketTerminal
 	}
 	if t.EngineType != "smart" {
-		return nil, errors.New("handoff-human is only available for smart engine tickets")
+		return nil, ErrHandoffHumanOnlyForSmart
 	}
 	if operatorID == 0 {
-		return nil, errors.New("operator is required")
+		return nil, ErrRecoveryOperatorRequired
 	}
 
 	if blocked, err := s.recentRecoveryActionExists(s.ticketRepo.DB(), ticketID, "recovery_handoff_human", recoveryDedupWindow); err != nil {
@@ -2011,6 +2186,15 @@ func ticketStatusForManualActivity(activityType string) string {
 		return TicketStatusWaitingHuman
 	default:
 		return TicketStatusDecisioning
+	}
+}
+
+func isValidManualOverrideActivityType(activityType string) bool {
+	switch activityType {
+	case engine.NodeApprove, engine.NodeForm, engine.NodeProcess, engine.NodeAction:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -2120,15 +2304,18 @@ func (s *TicketService) Transfer(ticketID, activityID, targetUserID, operatorID 
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		// Find the operator's pending assignment for this ticket activity.
 		var original TicketAssignment
-		if err := tx.Where("ticket_id = ? AND activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status = ?",
-			ticketID, activityID, operatorID, operatorID, AssignmentPending).First(&original).Error; err != nil {
+		if err := tx.Where("ticket_id = ? AND activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status IN ?",
+			ticketID, activityID, operatorID, operatorID, []string{AssignmentPending, AssignmentInProgress}).First(&original).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNoActiveAssignment
 			}
 			return err
 		}
 
-		if err := tx.Model(&original).Update("status", AssignmentTransferred).Error; err != nil {
+		if err := tx.Model(&original).Updates(map[string]any{
+			"status":     AssignmentTransferred,
+			"is_current": false,
+		}).Error; err != nil {
 			return err
 		}
 
@@ -2139,7 +2326,7 @@ func (s *TicketService) Transfer(ticketID, activityID, targetUserID, operatorID 
 			UserID:          &targetUserID,
 			AssigneeID:      &targetUserID,
 			Status:          AssignmentPending,
-			IsCurrent:       original.IsCurrent,
+			IsCurrent:       true,
 			TransferFrom:    &original.ID,
 		}).Error; err != nil {
 			return err
@@ -2182,15 +2369,18 @@ func (s *TicketService) Delegate(ticketID, activityID, targetUserID, operatorID 
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		// Find the operator's pending assignment for this ticket activity.
 		var original TicketAssignment
-		if err := tx.Where("ticket_id = ? AND activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status = ?",
-			ticketID, activityID, operatorID, operatorID, AssignmentPending).First(&original).Error; err != nil {
+		if err := tx.Where("ticket_id = ? AND activity_id = ? AND (user_id = ? OR assignee_id = ?) AND status IN ?",
+			ticketID, activityID, operatorID, operatorID, []string{AssignmentPending, AssignmentInProgress}).First(&original).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNoActiveAssignment
 			}
 			return err
 		}
 
-		if err := tx.Model(&original).Update("status", AssignmentDelegated).Error; err != nil {
+		if err := tx.Model(&original).Updates(map[string]any{
+			"status":     AssignmentDelegated,
+			"is_current": false,
+		}).Error; err != nil {
 			return err
 		}
 

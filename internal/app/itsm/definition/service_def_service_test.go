@@ -8,6 +8,7 @@ import (
 	. "metis/internal/app/itsm/catalog"
 	. "metis/internal/app/itsm/config"
 	. "metis/internal/app/itsm/domain"
+	"metis/internal/app/itsm/engine"
 	orgdomain "metis/internal/app/org/domain"
 	"strings"
 	"testing"
@@ -82,6 +83,87 @@ func TestServiceDefServiceCreate_RejectsMissingCatalog(t *testing.T) {
 	})
 	if !errors.Is(err, ErrCatalogNotFound) {
 		t.Fatalf("expected ErrCatalogNotFound, got %v", err)
+	}
+}
+
+func TestServiceDefServiceCreateAndUpdateRejectBlankBusinessIdentifiers(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+	catSvc := newCatalogServiceForTest(t, db)
+
+	root, err := catSvc.Create("Root", "root-service-blank", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+
+	if _, err := svc.Create(&ServiceDefinition{
+		Name:              "   ",
+		Code:              "vpn-blank-name",
+		CatalogID:         root.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "spec",
+	}); !errors.Is(err, ErrInvalidServiceName) {
+		t.Fatalf("expected blank name error, got %v", err)
+	}
+
+	if _, err := svc.Create(&ServiceDefinition{
+		Name:              "VPN",
+		Code:              "   ",
+		CatalogID:         root.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "spec",
+	}); !errors.Is(err, ErrInvalidServiceCode) {
+		t.Fatalf("expected blank code error, got %v", err)
+	}
+
+	created, err := svc.Create(&ServiceDefinition{
+		Name:              "  VPN Access  ",
+		Code:              "  vpn-access  ",
+		CatalogID:         root.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "spec",
+	})
+	if err != nil {
+		t.Fatalf("create trimmed service: %v", err)
+	}
+	if created.Name != "VPN Access" || created.Code != "vpn-access" {
+		t.Fatalf("expected trimmed persisted service, got %+v", created)
+	}
+
+	if _, err := svc.Update(created.ID, map[string]any{"name": "   "}); !errors.Is(err, ErrInvalidServiceName) {
+		t.Fatalf("expected update blank name error, got %v", err)
+	}
+	if _, err := svc.Update(created.ID, map[string]any{"code": "   "}); !errors.Is(err, ErrInvalidServiceCode) {
+		t.Fatalf("expected update blank code error, got %v", err)
+	}
+}
+
+func TestServiceDefServiceRejectsUnknownEngineTypeButAllowsManual(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	svc := newServiceDefServiceForTest(t, db)
+
+	root, err := catSvc.Create("Root", "root-engine-guard", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+
+	if _, err := svc.Create(&ServiceDefinition{
+		Name:       "Manual Intake",
+		Code:       "manual-intake-service",
+		CatalogID:  root.ID,
+		EngineType: "manual",
+	}); err != nil {
+		t.Fatalf("create manual service: %v", err)
+	}
+
+	if _, err := svc.Create(&ServiceDefinition{
+		Name:       "Weird Intake",
+		Code:       "weird-intake-service",
+		CatalogID:  root.ID,
+		EngineType: "weird",
+	}); !errors.Is(err, ErrServiceEngineMismatch) {
+		t.Fatalf("create unknown engine error = %v, want %v", err, ErrServiceEngineMismatch)
 	}
 }
 
@@ -168,6 +250,154 @@ func TestServiceDefServiceCreate_AllowsWorkflowJSONOnSmartService(t *testing.T) 
 	}
 }
 
+func TestServiceDefPublishHealthHelperContracts(t *testing.T) {
+	t.Run("describe workflow participant prefers concrete identifiers", func(t *testing.T) {
+		if got := describeWorkflowParticipant(engine.Participant{Type: "user", Value: "  alice  "}); got != "user(alice)" {
+			t.Fatalf("user participant description = %q", got)
+		}
+		if got := describeWorkflowParticipant(engine.Participant{Type: "position_department", PositionCode: " ops_admin ", DepartmentCode: " net "}); got != "position_department(ops_admin@net)" {
+			t.Fatalf("position_department description = %q", got)
+		}
+		if got := describeWorkflowParticipant(engine.Participant{Type: "unknown"}); got != "unknown" {
+			t.Fatalf("fallback participant description = %q", got)
+		}
+	})
+
+	t.Run("participant conflict evidence requires actual expected and concrete codes", func(t *testing.T) {
+		if hasConcreteParticipantConflictEvidence("当前配置为审批岗，但缺少具体编码") {
+			t.Fatal("expected vague text without concrete codes to be ignored")
+		}
+		if !hasConcreteParticipantConflictEvidence("当前配置为 position_code=ops_admin，但协作规范要求应为 department_code=network_admin") {
+			t.Fatal("expected concrete actual/expected participant conflict evidence to be detected")
+		}
+	})
+
+	t.Run("optional SLA parser accepts only supported numeric shapes", func(t *testing.T) {
+		if parsed, err := parseOptionalSLAID(nil); err != nil || parsed != nil {
+			t.Fatalf("nil SLA parse = (%v, %v), want (nil, nil)", parsed, err)
+		}
+		existing := uint(7)
+		if parsed, err := parseOptionalSLAID(existing); err != nil || parsed == nil || *parsed != 7 {
+			t.Fatalf("uint SLA parse = (%v, %v), want 7", parsed, err)
+		}
+		if parsed, err := parseOptionalSLAID(9); err != nil || parsed == nil || *parsed != 9 {
+			t.Fatalf("int SLA parse = (%v, %v), want 9", parsed, err)
+		}
+		if _, err := parseOptionalSLAID(-1); !errors.Is(err, ErrSLATemplateUnavailable) {
+			t.Fatalf("negative SLA parse error = %v, want %v", err, ErrSLATemplateUnavailable)
+		}
+		if _, err := parseOptionalSLAID("9"); !errors.Is(err, ErrSLATemplateUnavailable) {
+			t.Fatalf("string SLA parse error = %v, want %v", err, ErrSLATemplateUnavailable)
+		}
+	})
+
+	t.Run("health location validation requires matching workflow or action references", func(t *testing.T) {
+		ctx := publishHealthValidationContext{
+			workflowNodeIDs:   map[string]struct{}{"node-1": {}},
+			workflowEdgeIDs:   map[string]struct{}{"edge-1": {}},
+			actionRefs:        map[string]struct{}{"12": {}, "notify_ops": {}},
+			hasActionEvidence: true,
+		}
+
+		validNode := ServiceHealthLocation{Kind: "workflow_node", Path: "service.workflowJson.nodes[0]", RefID: "node-1"}
+		if !isValidHealthLocation(validNode, ctx) {
+			t.Fatalf("expected workflow node location to be valid: %+v", validNode)
+		}
+		invalidNode := ServiceHealthLocation{Kind: "workflow_node", Path: "service.workflowJson.nodes[0]", RefID: "missing"}
+		if isValidHealthLocation(invalidNode, ctx) {
+			t.Fatalf("expected unknown workflow node ref to be invalid: %+v", invalidNode)
+		}
+
+		validAction := ServiceHealthLocation{Kind: "action", Path: "actions[0].prompt", RefID: "notify_ops"}
+		if !isValidHealthLocation(validAction, ctx) {
+			t.Fatalf("expected action location to be valid: %+v", validAction)
+		}
+		invalidAction := ServiceHealthLocation{Kind: "action", Path: "actions[0].prompt", RefID: "notify_ops"}
+		if isValidHealthLocation(invalidAction, publishHealthValidationContext{actionRefs: ctx.actionRefs}) {
+			t.Fatalf("expected action location without action evidence to be invalid")
+		}
+
+		if !isValidHealthLocation(ServiceHealthLocation{Kind: "runtime_config", Path: "runtime.decisionMode"}, ctx) {
+			t.Fatal("expected runtime config path to be valid")
+		}
+		if isValidHealthLocation(ServiceHealthLocation{Kind: "runtime_config", Path: "service.runtime"}, ctx) {
+			t.Fatal("expected runtime config path outside runtime.* to be invalid")
+		}
+	})
+}
+
+func TestServiceDefServiceDeleteRemovesServiceAndRejectsMissing(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+	catSvc := newCatalogServiceForTest(t, db)
+
+	root, err := catSvc.Create("Root", "root-delete-service", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	service, err := svc.Create(&ServiceDefinition{Name: "VPN", Code: "vpn-delete-service", CatalogID: root.ID, EngineType: "classic"})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	if err := svc.Delete(service.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := svc.Get(service.ID); !errors.Is(err, ErrServiceDefNotFound) {
+		t.Fatalf("expected deleted service to be missing, got %v", err)
+	}
+	if err := svc.Delete(service.ID); !errors.Is(err, ErrServiceDefNotFound) {
+		t.Fatalf("expected second delete to return ErrServiceDefNotFound, got %v", err)
+	}
+}
+
+func TestServiceDefPublishHealthReferencePathContracts(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+
+	t.Run("direct first without workflow warns about ai fallback", func(t *testing.T) {
+		service := &ServiceDefinition{Code: "smart-no-workflow"}
+		issue := svc.checkReferencePathRisk(service, "direct_first")
+		if issue == nil || issue.Key != "reference_path" || issue.Status != "warn" || !strings.Contains(issue.Message, "未生成参考路径") {
+			t.Fatalf("expected direct_first empty workflow warning, got %+v", issue)
+		}
+	})
+
+	t.Run("non direct mode without workflow does not warn", func(t *testing.T) {
+		service := &ServiceDefinition{Code: "smart-no-workflow"}
+		if issue := svc.checkReferencePathRisk(service, "clarify_first"); issue != nil {
+			t.Fatalf("expected no warning outside direct_first, got %+v", issue)
+		}
+	})
+
+	t.Run("start end only workflow warns about non-extractable hints", func(t *testing.T) {
+		service := &ServiceDefinition{
+			Code:       "smart-empty-hints",
+			WorkflowJSON: JSONField(`{
+				"nodes":[
+					{"id":"start","type":"start","data":{"label":"开始"}},
+					{"id":"end","type":"end","data":{"label":"结束"}}
+				],
+				"edges":[
+					{"id":"e1","source":"start","target":"end","data":{}}
+				]
+			}`),
+		}
+		issue := svc.checkReferencePathRisk(service, "direct_first")
+		if issue == nil || issue.Key != "reference_path" || issue.Status != "warn" || !strings.Contains(issue.Message, "无法提取有效运行提示") {
+			t.Fatalf("expected extractable hints warning, got %+v", issue)
+		}
+	})
+
+	t.Run("malformed workflow fails fast", func(t *testing.T) {
+		service := &ServiceDefinition{Code: "smart-bad-workflow", WorkflowJSON: JSONField(`{"nodes":[{"id":"start","type":"start","data":{"label":"开始"}}]}`)}
+		issue := svc.checkReferencePathRisk(service, "direct_first")
+		if issue == nil || issue.Key != "reference_path" || issue.Status != "fail" || !strings.Contains(issue.Message, "参考路径结构错误") {
+			t.Fatalf("expected malformed workflow failure, got %+v", issue)
+		}
+	})
+}
+
 func TestServiceRuntimeVersionSnapshotsSLAAndEscalationRules(t *testing.T) {
 	db := newTestDB(t)
 	catSvc := newCatalogServiceForTest(t, db)
@@ -237,8 +467,101 @@ func TestServiceRuntimeVersionSnapshotsSLAAndEscalationRules(t *testing.T) {
 	if err := db.First(&reloaded, version.ID).Error; err != nil {
 		t.Fatalf("reload runtime version: %v", err)
 	}
-	if strings.Contains(string(reloaded.SLATemplateJSON), "99") || strings.Contains(string(reloaded.EscalationRulesJSON), "reassign") {
-		t.Fatalf("runtime version SLA snapshot drifted after live mutation: sla=%s rules=%s", reloaded.SLATemplateJSON, reloaded.EscalationRulesJSON)
+	var reloadedSLASnapshot SLATemplateResponse
+	if err := json.Unmarshal(reloaded.SLATemplateJSON, &reloadedSLASnapshot); err != nil {
+		t.Fatalf("decode reloaded sla snapshot: %v", err)
+	}
+	if reloadedSLASnapshot.ResponseMinutes != 5 || reloadedSLASnapshot.ResolutionMinutes != 60 {
+		t.Fatalf("runtime version SLA snapshot drifted after live mutation: %+v", reloadedSLASnapshot)
+	}
+	var reloadedRuleSnapshots []EscalationRuleResponse
+	if err := json.Unmarshal(reloaded.EscalationRulesJSON, &reloadedRuleSnapshots); err != nil {
+		t.Fatalf("decode reloaded rule snapshots: %v", err)
+	}
+	if len(reloadedRuleSnapshots) != 1 || reloadedRuleSnapshots[0].WaitMinutes != 0 || reloadedRuleSnapshots[0].ActionType != "notify" {
+		t.Fatalf("runtime version escalation snapshots drifted after live mutation: %+v", reloadedRuleSnapshots)
+	}
+}
+
+func TestServiceRuntimeVersionReusesExistingSnapshotWhenContentUnchanged(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	root, err := catSvc.Create("Root", "root-runtime-reuse", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+	service := ServiceDefinition{Name: "VPN", Code: "vpn-runtime-reuse", CatalogID: root.ID, EngineType: "smart", IsActive: true}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	first, err := GetOrCreateServiceRuntimeVersion(db, service.ID)
+	if err != nil {
+		t.Fatalf("first runtime version: %v", err)
+	}
+	second, err := GetOrCreateServiceRuntimeVersion(db, service.ID)
+	if err != nil {
+		t.Fatalf("second runtime version: %v", err)
+	}
+	if second.ID != first.ID || second.Version != first.Version || second.ContentHash != first.ContentHash {
+		t.Fatalf("expected unchanged runtime snapshot to be reused, first=%+v second=%+v", first, second)
+	}
+
+	var count int64
+	if err := db.Model(&ServiceDefinitionVersion{}).Where("service_id = ?", service.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count runtime versions: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one runtime version for unchanged content, got %d", count)
+	}
+}
+
+func TestServiceRuntimeVersionCreatesNewSnapshotWhenActionsChange(t *testing.T) {
+	db := newTestDB(t)
+	catSvc := newCatalogServiceForTest(t, db)
+	root, err := catSvc.Create("Root", "root-runtime-action-change", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+	service := ServiceDefinition{Name: "VPN", Code: "vpn-runtime-action-change", CatalogID: root.ID, EngineType: "smart", IsActive: true}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	first, err := GetOrCreateServiceRuntimeVersion(db, service.ID)
+	if err != nil {
+		t.Fatalf("first runtime version: %v", err)
+	}
+	if len(first.ActionsJSON) == 0 || string(first.ActionsJSON) != "[]" {
+		t.Fatalf("expected empty action snapshot, got %s", first.ActionsJSON)
+	}
+
+	action := ServiceAction{
+		Name:       "SendWebhook",
+		Code:       "send-webhook",
+		ActionType: "http",
+		ConfigJSON: JSONField(`{"url":"https://example.com/hook"}`),
+		ServiceID:  service.ID,
+		IsActive:   true,
+	}
+	if err := db.Create(&action).Error; err != nil {
+		t.Fatalf("create service action: %v", err)
+	}
+
+	second, err := GetOrCreateServiceRuntimeVersion(db, service.ID)
+	if err != nil {
+		t.Fatalf("second runtime version: %v", err)
+	}
+	if second.ID == first.ID || second.Version != first.Version+1 || second.ContentHash == first.ContentHash {
+		t.Fatalf("expected action change to create a new runtime snapshot, first=%+v second=%+v", first, second)
+	}
+
+	var actionSnapshots []ServiceActionResponse
+	if err := json.Unmarshal(second.ActionsJSON, &actionSnapshots); err != nil {
+		t.Fatalf("decode action snapshots: %v", err)
+	}
+	if len(actionSnapshots) != 1 || actionSnapshots[0].Code != action.Code || actionSnapshots[0].ActionType != action.ActionType {
+		t.Fatalf("unexpected action snapshots: %+v", actionSnapshots)
 	}
 }
 
@@ -434,6 +757,109 @@ func TestServiceDefServiceRefreshPublishHealthCheck_LLMFailureFallsBackToBasePas
 	}
 	if len(check.Items) != 0 || serviceHealthHasItem(check, "health_engine", "fail") {
 		t.Fatalf("expected no service-level health_engine failure, got %+v", check.Items)
+	}
+}
+
+func TestServiceDefServiceRefreshPublishHealthCheckIfPresent_NoSnapshotNoop(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+	catSvc := newCatalogServiceForTest(t, db)
+
+	root, _ := catSvc.Create("Root", "root", "", "", nil, 10)
+	service, err := svc.Create(&ServiceDefinition{
+		Name:       "Classic",
+		Code:       "classic-health-noop",
+		CatalogID:  root.ID,
+		EngineType: "classic",
+		WorkflowJSON: JSONField(`{
+			"nodes":[
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"approve","type":"process","data":{"label":"审批","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges":[
+				{"id":"e1","source":"start","target":"approve","data":{}},
+				{"id":"e2","source":"approve","target":"end","data":{"outcome":"approved"}},
+				{"id":"e3","source":"approve","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	if err := svc.RefreshPublishHealthCheckIfPresent(service.ID); err != nil {
+		t.Fatalf("refresh if present should no-op without snapshot: %v", err)
+	}
+
+	reloaded, err := svc.Get(service.ID)
+	if err != nil {
+		t.Fatalf("reload service: %v", err)
+	}
+	if reloaded.PublishHealthCheckedAt != nil || strings.TrimSpace(string(reloaded.PublishHealthItems)) != "" {
+		t.Fatalf("expected no saved publish health snapshot, got checked_at=%v items=%s", reloaded.PublishHealthCheckedAt, string(reloaded.PublishHealthItems))
+	}
+}
+
+func TestServiceDefServiceRefreshPublishHealthCheckIfPresent_RecomputesExistingSnapshot(t *testing.T) {
+	db := newTestDB(t)
+	svc := newServiceDefServiceForTest(t, db)
+	catSvc := newCatalogServiceForTest(t, db)
+
+	root, _ := catSvc.Create("Root", "root", "", "", nil, 10)
+	service, err := svc.Create(&ServiceDefinition{
+		Name:       "Classic",
+		Code:       "classic-health-refresh",
+		CatalogID:  root.ID,
+		EngineType: "classic",
+		WorkflowJSON: JSONField(`{
+			"nodes":[
+				{"id":"start","type":"start","data":{"label":"开始"}},
+				{"id":"approve","type":"process","data":{"label":"审批","participants":[{"type":"requester"}]}},
+				{"id":"end","type":"end","data":{"label":"结束"}}
+			],
+			"edges":[
+				{"id":"e1","source":"start","target":"approve","data":{}},
+				{"id":"e2","source":"approve","target":"end","data":{"outcome":"approved"}},
+				{"id":"e3","source":"approve","target":"end","data":{"outcome":"rejected"}}
+			]
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+
+	check, err := svc.RefreshPublishHealthCheck(service.ID)
+	if err != nil {
+		t.Fatalf("refresh initial health check: %v", err)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("expected initial pass snapshot, got %+v", check)
+	}
+
+	if err := db.Model(&ServiceDefinition{}).
+		Where("id = ?", service.ID).
+		Update("workflow_json", JSONField(``)).Error; err != nil {
+		t.Fatalf("corrupt workflow json: %v", err)
+	}
+
+	if err := svc.RefreshPublishHealthCheckIfPresent(service.ID); err != nil {
+		t.Fatalf("refresh if present: %v", err)
+	}
+
+	reloaded, err := svc.Get(service.ID)
+	if err != nil {
+		t.Fatalf("reload service: %v", err)
+	}
+	resp := reloaded.ToResponse()
+	if resp.PublishHealthCheck == nil {
+		t.Fatal("expected recomputed publish health snapshot")
+	}
+	if resp.PublishHealthCheck.Status != "fail" {
+		t.Fatalf("expected fail snapshot after workflow removed, got %+v", resp.PublishHealthCheck)
+	}
+	if !serviceHealthHasItem(resp.PublishHealthCheck, "workflow", "fail") {
+		t.Fatalf("expected workflow failure after refresh, got %+v", resp.PublishHealthCheck.Items)
 	}
 }
 
