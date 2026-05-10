@@ -1106,6 +1106,8 @@ func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID
 	}
 	if len(userIDs) == 0 {
 		slog.Warn("position assignment: no users found", "positionCode", positionCode, "departmentCode", departmentCode)
+		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_resolution_pending",
+			fmt.Sprintf("岗位参与人 %s@%s 当前没有可用处理人，等待 IT 管理员补充人员配置", positionCode, departmentCode), "")
 		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_fallback_warning",
 			fmt.Sprintf("岗位参与人 %s@%s 当前没有可用处理人，工单未 fallback 到其他岗位，等待 IT 管理员补充人员配置", positionCode, departmentCode), "")
 	}

@@ -28,14 +28,32 @@ const serverAccessDialogPrompt = `你是 IT 服务台的 Agentic 助手，负责
 - 缺目标服务器时，必须追问目标服务器，不能假设。
 - 缺访问时段时，必须追问具体访问窗口。
 - 开始时间早于当前时间，或结束早于开始时间且无法合理解释时，不能直接提单，必须要求修正。
+- 只要需要判断访问时间是否已经过期、是否晚于当前时间，必须先调用 general.current_time；即使用户给的是绝对时间，也不能跳过这个工具。
 - 若同一轮诉求混合了不同处理路径（例如运维排障 + 防火墙策略），不能替用户单选，必须澄清当前要办理哪一路。
 - 若一次申请多个服务器，保留完整服务器列表；不要静默丢失任何服务器。
 - 如果用户后续补充推翻了前文意图，以最新澄清后的诉求为准。
 - 对“异常访问证据保全、取证、异常访问核查”等语义，要倾向安全路线，并在回复中说明依据。
 
+draft_prepare 契约：
+- 调用 itsm.draft_prepare 时，必须同时传入 summary 和 form_data；禁止空 form_data。
+- form_data 必须使用以下字段 key：request_kind、target_host、access_account、source_ip、access_window、access_reason。
+- target_host 必须完整保留所有服务器；多台服务器时写成包含全部主机名的字符串，不能丢失任何一台。
+- access_window 必须写成明确的绝对时间窗口字符串；用户给绝对时间时直接保留，用户给相对时间时先用 general.current_time 解析后再写入。
+- access_reason 必须保留用户的真实原因，不要留空。
+
+request_kind 归一化：
+- “排查应用进程异常/应用异常排查/应用诊断” => application_diagnosis
+- “运维排障/主机排查/登录排查” => ops_troubleshooting 或 host_inspection（按最贴切语义二选一，但只能单选一个）
+- “防火墙策略调整” => firewall_change
+- “网络诊断” => network_diagnostic
+- “异常访问证据保全/安全取证/异常访问核查” => security_investigation
+- 如果同一轮同时命中 application_diagnosis 与 firewall_change 等不同路由，先澄清“当前要办理哪一路”，不能直接 draft_prepare。
+
 输出要求：
 - 若不能提交，就明确说明还缺什么或哪里不合法。
 - 若已经准备草稿，可用自然语言总结给用户确认，但不要编造不存在的字段。
+- 如果因为跨路由而需要澄清，回复里必须明确说出“访问类型/当前要办理哪一路/需要确认具体选择”这类澄清语义，而不是只做泛泛总结。
+- 如果根据“异常访问证据保全/取证/异常访问核查”等语义归到了安全路线，回复里必须明确出现“安全”或“取证”或“证据”中的至少一个词，说明归因依据。
 - 每一轮都必须给用户明确中文回复，禁止空回复。
 `
 
@@ -352,6 +370,9 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 			existingResults := append([]toolResultRecord{}, bc.dialogState.toolResults...)
 			existingContent := bc.dialogState.finalContent
 			if err := executeChatFallback(messages); err != nil {
+				bc.dialogState.toolCalls = existingCalls
+				bc.dialogState.toolResults = existingResults
+				bc.dialogState.finalContent = existingContent
 				return err
 			}
 			bc.dialogState.toolCalls = append(existingCalls, bc.dialogState.toolCalls...)
@@ -394,6 +415,17 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 				return fmt.Errorf("server access dialog force-itsm fallback error: %w", err)
 			}
 		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_match") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "你已经完成服务匹配。现在必须继续调用 itsm.service_load 加载该服务定义；加载后如果诉求跨越不同访问类型，就明确让用户选择当前要办理哪一路，不要重复 service_match。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog force-service-load fallback error: %w", err)
+			}
+		}
 		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
 			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") &&
 			!hasToolCall(bc.dialogState.toolCalls, "general.current_time") {
@@ -414,6 +446,16 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 			})
 			if err := appendChatFallback(followupMessages); err != nil {
 				return fmt.Errorf("server access dialog post-time fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") && strings.TrimSpace(bc.dialogState.finalContent) == "" {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "你已经完成草稿准备。现在不要再调用工具，只需向用户给出一段简洁中文回复，说明草稿已准备好并概括关键申请信息。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil && strings.TrimSpace(bc.dialogState.finalContent) == "" {
+				// 这一步只是补充用户可读回复，不能反向污染已经成功的工具链结果。
+				_ = err
 			}
 		}
 		return nil
