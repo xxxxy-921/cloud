@@ -240,3 +240,128 @@ func TestNotificationServiceDeleteAnnouncement_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotificationNotFound, got %v", err)
 	}
 }
+
+func TestNotificationServiceSendAndListForUser(t *testing.T) {
+	db := newTestDBForNotification(t)
+	svc := newNotificationServiceForTest(t, db)
+	user := seedUserForNotification(t, db, "alice")
+	other := seedUserForNotification(t, db, "bob")
+
+	if _, err := svc.Send("system", "monitor", "Broadcast", "all users", model.NotificationTargetAll, nil, nil); err != nil {
+		t.Fatalf("send broadcast: %v", err)
+	}
+	if _, err := svc.Send("system", "monitor", "Private", "alice only", model.NotificationTargetUser, &user.ID, nil); err != nil {
+		t.Fatalf("send private: %v", err)
+	}
+	if _, err := svc.Send("system", "monitor", "Other", "bob only", model.NotificationTargetUser, &other.ID, nil); err != nil {
+		t.Fatalf("send other: %v", err)
+	}
+
+	items, total, err := svc.ListForUser(user.ID, repository.ListParams{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListForUser: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total 2, got %d", total)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 notifications, got %d", len(items))
+	}
+}
+
+func TestNotificationServiceSend_PersistsTargetAndCreator(t *testing.T) {
+	db := newTestDBForNotification(t)
+	svc := newNotificationServiceForTest(t, db)
+	user := seedUserForNotification(t, db, "alice")
+	creator := seedUserForNotification(t, db, "admin")
+
+	created, err := svc.Send("notice", "system", "Private", "hello", model.NotificationTargetUser, &user.ID, &creator.ID)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if created.TargetID == nil || *created.TargetID != user.ID {
+		t.Fatalf("expected target user id %d, got %+v", user.ID, created.TargetID)
+	}
+	if created.CreatedBy == nil || *created.CreatedBy != creator.ID {
+		t.Fatalf("expected creator id %d, got %+v", creator.ID, created.CreatedBy)
+	}
+
+	stored, err := svc.notifRepo.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+	if stored.TargetType != model.NotificationTargetUser || stored.TargetID == nil || *stored.TargetID != user.ID {
+		t.Fatalf("expected stored target info, got %+v", stored)
+	}
+	if stored.CreatedBy == nil || *stored.CreatedBy != creator.ID {
+		t.Fatalf("expected stored creator info, got %+v", stored)
+	}
+}
+
+func TestNotificationServiceUnreadAndMarkReadFlow(t *testing.T) {
+	db := newTestDBForNotification(t)
+	svc := newNotificationServiceForTest(t, db)
+	user := seedUserForNotification(t, db, "alice")
+
+	first, err := svc.Send("system", "monitor", "First", "content", model.NotificationTargetAll, nil, nil)
+	if err != nil {
+		t.Fatalf("send first: %v", err)
+	}
+	second, err := svc.Send("system", "monitor", "Second", "content", model.NotificationTargetUser, &user.ID, nil)
+	if err != nil {
+		t.Fatalf("send second: %v", err)
+	}
+
+	count, err := svc.GetUnreadCount(user.ID)
+	if err != nil {
+		t.Fatalf("GetUnreadCount: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected unread count 2, got %d", count)
+	}
+
+	if err := svc.MarkAsRead(first.ID, user.ID); err != nil {
+		t.Fatalf("MarkAsRead: %v", err)
+	}
+	if err := svc.MarkAsRead(first.ID, user.ID); err != nil {
+		t.Fatalf("MarkAsRead second time: %v", err)
+	}
+
+	count, err = svc.GetUnreadCount(user.ID)
+	if err != nil {
+		t.Fatalf("GetUnreadCount after mark: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected unread count 1 after mark, got %d", count)
+	}
+
+	if err := svc.MarkAllAsRead(user.ID); err != nil {
+		t.Fatalf("MarkAllAsRead: %v", err)
+	}
+	if err := svc.MarkAllAsRead(user.ID); err != nil {
+		t.Fatalf("MarkAllAsRead second time: %v", err)
+	}
+
+	count, err = svc.GetUnreadCount(user.ID)
+	if err != nil {
+		t.Fatalf("GetUnreadCount after mark all: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected unread count 0, got %d", count)
+	}
+
+	items, total, err := svc.ListForUser(user.ID, repository.ListParams{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListForUser after read: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total 2, got %d", total)
+	}
+	readStates := map[uint]bool{}
+	for _, item := range items {
+		readStates[item.ID] = item.IsRead
+	}
+	if !readStates[first.ID] || !readStates[second.ID] {
+		t.Fatalf("expected both notifications to be read, got %+v", readStates)
+	}
+}

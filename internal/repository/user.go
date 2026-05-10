@@ -104,7 +104,7 @@ func (r *UserRepo) Create(user *model.User) error {
 }
 
 func (r *UserRepo) Update(user *model.User) error {
-	return r.db.Save(user).Error
+	return r.db.Omit("Role", "Manager").Save(user).Error
 }
 
 func (r *UserRepo) Delete(id uint) error {

@@ -52,6 +52,27 @@ func newMenuServiceForTest(t *testing.T, db *gorm.DB) *MenuService {
 	}
 }
 
+func TestNewMenu_ConstructsService(t *testing.T) {
+	db := newTestDBForMenu(t)
+	injector := do.New()
+	do.ProvideValue(injector, &database.DB{DB: db})
+	enforcer, err := casbinpkg.NewEnforcerWithDB(db)
+	if err != nil {
+		t.Fatalf("create casbin enforcer: %v", err)
+	}
+	do.ProvideValue(injector, enforcer)
+	do.Provide(injector, repository.NewMenu)
+	do.Provide(injector, NewCasbin)
+
+	svc, err := NewMenu(injector)
+	if err != nil {
+		t.Fatalf("NewMenu returned error: %v", err)
+	}
+	if svc.menuRepo == nil || svc.casbinSvc == nil {
+		t.Fatalf("expected dependencies wired, got %+v", svc)
+	}
+}
+
 func seedMenu(t *testing.T, db *gorm.DB, menu *model.Menu) *model.Menu {
 	t.Helper()
 	if err := db.Create(menu).Error; err != nil {
@@ -116,6 +137,21 @@ func TestMenuServiceGetUserTree_AdminGetsFullTree(t *testing.T) {
 	}
 	if len(tree[0].Children) != 1 {
 		t.Fatalf("expected 1 child for admin, got %d", len(tree[0].Children))
+	}
+}
+
+func TestMenuServiceGetUserTree_EmptyRolePermissions(t *testing.T) {
+	db := newTestDBForMenu(t)
+	svc := newMenuServiceForTest(t, db)
+	dir := seedMenu(t, db, &model.Menu{Name: "System", Type: model.MenuTypeDirectory, Permission: "test:empty:dir", Sort: 1})
+	seedMenu(t, db, &model.Menu{Name: "Users", Type: model.MenuTypeMenu, ParentID: &dir.ID, Path: "/users", Permission: "system:user:list", Sort: 1})
+
+	tree, err := svc.GetUserTree("guest")
+	if err != nil {
+		t.Fatalf("get user tree: %v", err)
+	}
+	if len(tree) != 0 {
+		t.Fatalf("expected empty tree for role without permissions, got %v", tree)
 	}
 }
 
@@ -230,6 +266,14 @@ func TestMenuServiceGetUserPermissions_ReturnsPermissions(t *testing.T) {
 	}
 }
 
+func TestMenuServiceGetUserPermissions_Empty(t *testing.T) {
+	db := newTestDBForMenu(t)
+	svc := newMenuServiceForTest(t, db)
+	if perms := svc.GetUserPermissions("guest"); len(perms) != 0 {
+		t.Fatalf("expected no permissions, got %v", perms)
+	}
+}
+
 // 4. CRUD
 
 func TestMenuServiceCreate_Success(t *testing.T) {
@@ -312,6 +356,51 @@ func TestMenuServiceUpdate_Parent(t *testing.T) {
 	}
 	if updated.ParentID == nil || *updated.ParentID != newParent.ID {
 		t.Fatalf("expected parentID %d, got %v", newParent.ID, updated.ParentID)
+	}
+}
+
+func TestMenuServiceUpdate_CoversRemainingFieldsAndClearParent(t *testing.T) {
+	db := newTestDBForMenu(t)
+	svc := newMenuServiceForTest(t, db)
+	parent := seedMenu(t, db, &model.Menu{Name: "Parent", Type: model.MenuTypeDirectory, Permission: "test:update:parent", Sort: 1})
+	menu := seedMenu(t, db, &model.Menu{
+		Name:       "Child",
+		Type:       model.MenuTypeMenu,
+		ParentID:   &parent.ID,
+		Path:       "/child",
+		Icon:       "OldIcon",
+		Permission: "test:update:child",
+		Sort:       1,
+	})
+
+	updated, err := svc.Update(menu.ID, map[string]any{
+		"type":       string(model.MenuTypeButton),
+		"path":       "/child/button",
+		"icon":       "NewIcon",
+		"permission": "system:user:create",
+		"isHidden":   true,
+		"parentId":   nil,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Type != model.MenuTypeButton {
+		t.Fatalf("expected type button, got %s", updated.Type)
+	}
+	if updated.Path != "/child/button" {
+		t.Fatalf("expected updated path, got %s", updated.Path)
+	}
+	if updated.Icon != "NewIcon" {
+		t.Fatalf("expected updated icon, got %s", updated.Icon)
+	}
+	if updated.Permission != "system:user:create" {
+		t.Fatalf("expected updated permission, got %s", updated.Permission)
+	}
+	if !updated.IsHidden {
+		t.Fatal("expected menu to be hidden")
+	}
+	if updated.ParentID != nil {
+		t.Fatalf("expected parent to be cleared, got %v", updated.ParentID)
 	}
 }
 

@@ -83,7 +83,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 
 	user, err := h.userSvc.Create(req.Username, req.Password, req.Email, req.Phone, req.RoleID)
 	if err != nil {
-		if errors.Is(err, service.ErrUsernameExists) {
+		if errors.Is(err, service.ErrUsernameExists) || errors.Is(err, service.ErrPasswordViolation) {
 			Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -178,6 +178,8 @@ func (h *UserHandler) Update(c *gin.Context) {
 			Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, service.ErrCannotSelf):
 			Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrCircularManagerChain):
+			Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			Fail(c, http.StatusInternalServerError, err.Error())
 		}
@@ -236,6 +238,10 @@ func (h *UserHandler) ResetPassword(c *gin.Context) {
 	if err := h.userSvc.ResetPassword(id, req.Password); err != nil {
 		if errors.Is(err, service.ErrUserNotFound) {
 			Fail(c, http.StatusNotFound, "user not found")
+			return
+		}
+		if errors.Is(err, service.ErrPasswordViolation) {
+			Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		Fail(c, http.StatusInternalServerError, err.Error())

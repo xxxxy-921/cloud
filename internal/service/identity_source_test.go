@@ -128,6 +128,18 @@ func TestIdentitySourceServiceCreate_DomainConflict(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceServiceCreate_InvalidConfigs(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	if err := svc.Create(&model.IdentitySource{Name: "Broken OIDC", Type: "oidc"}, json.RawMessage(`{"issuerUrl":`)); err == nil {
+		t.Fatal("expected invalid OIDC config to fail")
+	}
+	if err := svc.Create(&model.IdentitySource{Name: "Broken LDAP", Type: "ldap"}, json.RawMessage(`{"serverUrl":`)); err == nil {
+		t.Fatal("expected invalid LDAP config to fail")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Update
 // ---------------------------------------------------------------------------
@@ -214,6 +226,79 @@ func TestIdentitySourceServiceUpdate_NotFound(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceServiceUpdate_DomainConflictAndInvalidConfig(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	seedIdentitySourceService(t, db, "Existing", "oidc", `{}`, "example.com", true)
+	target := seedIdentitySourceService(t, db, "Target", "oidc", `{"issuerUrl":"https://old.example.com","clientId":"id"}`, "other.com", true)
+
+	if _, err := svc.Update(target.ID, &model.IdentitySource{Name: "Target", Domains: "example.com"}, json.RawMessage(`{"issuerUrl":"https://new.example.com","clientId":"id"}`)); !errors.Is(err, repository.ErrDomainConflict) {
+		t.Fatalf("expected ErrDomainConflict, got %v", err)
+	}
+
+	if _, err := svc.Update(target.ID, &model.IdentitySource{Name: "Target"}, json.RawMessage(`{"issuerUrl":`)); err == nil {
+		t.Fatal("expected invalid OIDC update config to fail")
+	}
+}
+
+func TestIdentitySourceServiceUpdate_ReEncryptsSecrets(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	oidc := seedIdentitySourceService(t, db, "Okta", "oidc", `{"issuerUrl":"https://example.com","clientId":"id","clientSecret":"old-encrypted"}`, "", true)
+	if _, err := svc.Update(oidc.ID, &model.IdentitySource{Name: "Okta"}, json.RawMessage(`{"issuerUrl":"https://example.com","clientId":"id","clientSecret":"new-secret"}`)); err != nil {
+		t.Fatalf("update oidc: %v", err)
+	}
+	var storedOIDC model.IdentitySource
+	if err := db.First(&storedOIDC, oidc.ID).Error; err != nil {
+		t.Fatalf("reload oidc: %v", err)
+	}
+	var oidcCfg model.OIDCConfig
+	if err := json.Unmarshal([]byte(storedOIDC.Config), &oidcCfg); err != nil {
+		t.Fatalf("unmarshal oidc config: %v", err)
+	}
+	if oidcCfg.ClientSecret == "" || oidcCfg.ClientSecret == "new-secret" || oidcCfg.ClientSecret == "old-encrypted" {
+		t.Fatalf("expected oidc secret to be re-encrypted, got %q", oidcCfg.ClientSecret)
+	}
+
+	ldapSource := seedIdentitySourceService(t, db, "AD", "ldap", `{"serverUrl":"ldap://localhost","bindPassword":"old-encrypted"}`, "", true)
+	if _, err := svc.Update(ldapSource.ID, &model.IdentitySource{Name: "AD"}, json.RawMessage(`{"serverUrl":"ldap://localhost","bindPassword":"new-password"}`)); err != nil {
+		t.Fatalf("update ldap: %v", err)
+	}
+	var storedLDAP model.IdentitySource
+	if err := db.First(&storedLDAP, ldapSource.ID).Error; err != nil {
+		t.Fatalf("reload ldap: %v", err)
+	}
+	var ldapCfg model.LDAPConfig
+	if err := json.Unmarshal([]byte(storedLDAP.Config), &ldapCfg); err != nil {
+		t.Fatalf("unmarshal ldap config: %v", err)
+	}
+	if ldapCfg.BindPassword == "" || ldapCfg.BindPassword == "new-password" || ldapCfg.BindPassword == "old-encrypted" {
+		t.Fatalf("expected ldap password to be re-encrypted, got %q", ldapCfg.BindPassword)
+	}
+	if ldapCfg.AttributeMapping == nil || ldapCfg.AttributeMapping["username"] == "" {
+		t.Fatalf("expected default attribute mapping to be restored, got %+v", ldapCfg.AttributeMapping)
+	}
+}
+
+func TestIdentitySourceServiceList_ReturnsResponses(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	seedIdentitySourceService(t, db, "Okta", "oidc", `{}`, "example.com", true)
+	seedIdentitySourceService(t, db, "AD", "ldap", `{}`, "", false)
+
+	items, err := svc.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].Name == "" || items[1].Name == "" {
+		t.Fatalf("expected response fields populated, got %+v", items)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Delete / Toggle
 // ---------------------------------------------------------------------------
@@ -267,6 +352,107 @@ func TestIdentitySourceServiceToggle_NotFound(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceServiceGetDecryptedConfig_OIDC(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	src := &model.IdentitySource{Name: "Okta", Type: "oidc"}
+	if err := svc.Create(src, json.RawMessage(`{"issuerUrl":"https://example.com","clientId":"id","clientSecret":"super-secret"}`)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	stored, cfgAny, err := svc.GetDecryptedConfig(src.ID)
+	if err != nil {
+		t.Fatalf("GetDecryptedConfig: %v", err)
+	}
+	cfg, ok := cfgAny.(*model.OIDCConfig)
+	if !ok {
+		t.Fatalf("expected OIDC config, got %T", cfgAny)
+	}
+	if stored.ID != src.ID {
+		t.Fatalf("expected source id %d, got %d", src.ID, stored.ID)
+	}
+	if cfg.ClientSecret != "super-secret" {
+		t.Fatalf("expected decrypted secret, got %q", cfg.ClientSecret)
+	}
+}
+
+func TestIdentitySourceServiceGetDecryptedConfig_LDAP(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	src := &model.IdentitySource{Name: "AD", Type: "ldap"}
+	if err := svc.Create(src, json.RawMessage(`{"serverUrl":"ldap://localhost","bindPassword":"secret","searchBase":"dc=example,dc=com"}`)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, cfgAny, err := svc.GetDecryptedConfig(src.ID)
+	if err != nil {
+		t.Fatalf("GetDecryptedConfig: %v", err)
+	}
+	cfg, ok := cfgAny.(*model.LDAPConfig)
+	if !ok {
+		t.Fatalf("expected LDAP config, got %T", cfgAny)
+	}
+	if cfg.BindPassword != "secret" {
+		t.Fatalf("expected decrypted password, got %q", cfg.BindPassword)
+	}
+}
+
+func TestIdentitySourceServiceGetDecryptedConfig_NotFound(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	_, _, err := svc.GetDecryptedConfig(9999)
+	if !errors.Is(err, ErrSourceNotFound) {
+		t.Fatalf("expected ErrSourceNotFound, got %v", err)
+	}
+}
+
+func TestIdentitySourceServiceGetDecryptedConfig_DecryptFailure(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	src := seedIdentitySourceService(t, db, "Okta", "oidc", `{"issuerUrl":"https://example.com","clientId":"id","clientSecret":"not-encrypted"}`, "", true)
+
+	_, _, err := svc.GetDecryptedConfig(src.ID)
+	if err == nil || err.Error() == "" {
+		t.Fatal("expected decrypt error")
+	}
+}
+
+func TestIdentitySourceServiceGetDecryptedConfig_DefaultTypeAndInvalidJSON(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	custom := seedIdentitySourceService(t, db, "Custom", "saml", `{"raw":true}`, "", true)
+	source, cfgAny, err := svc.GetDecryptedConfig(custom.ID)
+	if err != nil {
+		t.Fatalf("GetDecryptedConfig custom: %v", err)
+	}
+	if source.ID != custom.ID || cfgAny != nil {
+		t.Fatalf("expected nil config for default type, got source=%+v cfg=%T", source, cfgAny)
+	}
+
+	broken := seedIdentitySourceService(t, db, "Broken", "ldap", `{"serverUrl":`, "", true)
+	if _, _, err := svc.GetDecryptedConfig(broken.ID); err == nil {
+		t.Fatal("expected invalid config json to fail")
+	}
+}
+
+func TestIdentitySourceServiceFindByDomain(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	seeded := seedIdentitySourceService(t, db, "Okta", "oidc", `{}`, "example.com", true)
+
+	found, err := svc.FindByDomain("example.com")
+	if err != nil {
+		t.Fatalf("FindByDomain: %v", err)
+	}
+	if found.ID != seeded.ID {
+		t.Fatalf("expected source ID %d, got %d", seeded.ID, found.ID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestConnection
 // ---------------------------------------------------------------------------
@@ -295,6 +481,23 @@ func TestIdentitySourceServiceTestConnection_OIDCFailure(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceServiceTestConnection_OIDCValidationBranches(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	invalid := seedIdentitySourceService(t, db, "Broken", "oidc", `{"issuerUrl":`, "", true)
+	ok, msg := svc.TestConnection(invalid.ID)
+	if ok || msg == "" || msg[:20] != "invalid OIDC config:" {
+		t.Fatalf("expected invalid OIDC config error, got ok=%v msg=%q", ok, msg)
+	}
+
+	emptyIssuer := seedIdentitySourceService(t, db, "Empty", "oidc", `{"issuerUrl":""}`, "", true)
+	ok, msg = svc.TestConnection(emptyIssuer.ID)
+	if ok || msg != "issuer URL is empty" {
+		t.Fatalf("expected empty issuer error, got ok=%v msg=%q", ok, msg)
+	}
+}
+
 func TestIdentitySourceServiceTestConnection_LDAPSuccess(t *testing.T) {
 	db := newTestDBForIdentitySourceService(t)
 	svc := newIdentitySourceServiceForTest(t, db)
@@ -307,6 +510,23 @@ func TestIdentitySourceServiceTestConnection_LDAPSuccess(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceServiceTestConnection_LDAPValidationBranches(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	invalid := seedIdentitySourceService(t, db, "Broken", "ldap", `{"serverUrl":`, "", true)
+	ok, msg := svc.TestConnection(invalid.ID)
+	if ok || msg == "" || msg[:20] != "invalid LDAP config:" {
+		t.Fatalf("expected invalid LDAP config error, got ok=%v msg=%q", ok, msg)
+	}
+
+	emptyServer := seedIdentitySourceService(t, db, "Empty", "ldap", `{"serverUrl":""}`, "", true)
+	ok, msg = svc.TestConnection(emptyServer.ID)
+	if ok || msg != "server URL is empty" {
+		t.Fatalf("expected empty server error, got ok=%v msg=%q", ok, msg)
+	}
+}
+
 func TestIdentitySourceServiceTestConnection_NotFound(t *testing.T) {
 	db := newTestDBForIdentitySourceService(t)
 	svc := newIdentitySourceServiceForTest(t, db)
@@ -314,6 +534,17 @@ func TestIdentitySourceServiceTestConnection_NotFound(t *testing.T) {
 	ok, msg := svc.TestConnection(9999)
 	if ok || msg != "identity source not found" {
 		t.Fatalf("unexpected result: ok=%v msg=%q", ok, msg)
+	}
+}
+
+func TestIdentitySourceServiceTestConnection_UnsupportedType(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	seeded := seedIdentitySourceService(t, db, "Custom", "saml", `{}`, "", true)
+
+	ok, msg := svc.TestConnection(seeded.ID)
+	if ok || msg != "unsupported type" {
+		t.Fatalf("expected unsupported type, got ok=%v msg=%q", ok, msg)
 	}
 }
 
@@ -372,6 +603,78 @@ func TestIdentitySourceServiceAuthenticateByPassword_AllFail(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceServiceAuthenticateByPassword_FallbackUsername(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	seedIdentitySourceService(t, db, "Broken", "ldap", `{"serverUrl":`, "", true)
+	seedIdentitySourceService(t, db, "Disabled", "ldap", `{"serverUrl":"ldap://disabled"}`, "", false)
+	seeded := seedIdentitySourceService(t, db, "AD", "ldap", `{"serverUrl":"ldap://localhost"}`, "", true)
+
+	svc.LDAPAuthFn = func(cfg *model.LDAPConfig, username, password string) (*identity.LDAPAuthResult, error) {
+		return &identity.LDAPAuthResult{
+			DN:          "cn=user,dc=example,dc=com",
+			Email:       "user@example.com",
+			DisplayName: "User Name",
+		}, nil
+	}
+
+	result, err := svc.AuthenticateByPassword("user", "pass")
+	if err != nil {
+		t.Fatalf("auth: %v", err)
+	}
+	wantUsername := fmt.Sprintf("ldap_%d_%s", seeded.ID, "cn=user,dc=example,dc=com")
+	if result.Username != wantUsername {
+		t.Fatalf("expected fallback username %q, got %q", wantUsername, result.Username)
+	}
+}
+
+func TestIdentitySourceServiceAuthenticateByPassword_SkipsDecryptFailure(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	seedIdentitySourceService(t, db, "Broken", "ldap", `{"serverUrl":"ldap://localhost","bindPassword":"not-encrypted"}`, "", true)
+
+	svc.LDAPAuthFn = func(cfg *model.LDAPConfig, username, password string) (*identity.LDAPAuthResult, error) {
+		t.Fatal("LDAPAuthFn should not be called when bind password decrypt fails")
+		return nil, nil
+	}
+
+	_, err := svc.AuthenticateByPassword("user", "pass")
+	if err == nil || err.Error() != "error.identity.ldap_auth_failed" {
+		t.Fatalf("expected ldap_auth_failed error, got %v", err)
+	}
+}
+
+func TestIdentitySourceServiceEncryptConfigPreserving_DefaultTypePassthrough(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	raw := json.RawMessage(`{"raw":true}`)
+	got, err := svc.encryptConfigPreserving("custom", raw, `{"ignored":true}`)
+	if err != nil {
+		t.Fatalf("encryptConfigPreserving returned error: %v", err)
+	}
+	if got != string(raw) {
+		t.Fatalf("expected passthrough config, got %s", got)
+	}
+}
+
+func TestIdentitySourceServiceGetDecryptedConfig_DefaultTypeReturnsNilConfig(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+	src := seedIdentitySourceService(t, db, "Custom", "custom", `{"raw":true}`, "", true)
+
+	stored, cfgAny, err := svc.GetDecryptedConfig(src.ID)
+	if err != nil {
+		t.Fatalf("GetDecryptedConfig returned error: %v", err)
+	}
+	if stored.ID != src.ID {
+		t.Fatalf("expected source ID %d, got %d", src.ID, stored.ID)
+	}
+	if cfgAny != nil {
+		t.Fatalf("expected nil config for custom type, got %T", cfgAny)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CheckDomain / IsForcedSSO / ExtractDomain
 // ---------------------------------------------------------------------------
@@ -392,6 +695,16 @@ func TestIdentitySourceServiceCheckDomain(t *testing.T) {
 	}
 	if !result.ForceSso {
 		t.Fatal("expected forceSso true")
+	}
+}
+
+func TestIdentitySourceServiceCheckDomain_InvalidEmail(t *testing.T) {
+	db := newTestDBForIdentitySourceService(t)
+	svc := newIdentitySourceServiceForTest(t, db)
+
+	_, err := svc.CheckDomain("invalid")
+	if err == nil || err.Error() != "error.identity.invalid_email" {
+		t.Fatalf("expected invalid_email, got %v", err)
 	}
 }
 
