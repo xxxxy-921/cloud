@@ -52,11 +52,12 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 			maxTurns = 10
 		}
 
-		tools := buildLLMTools(req.Tools)
-		var totalInput, totalOutput int
-		var currentITSMServiceEngine string
+			tools := buildLLMTools(req.Tools)
+			var totalInput, totalOutput int
+			var currentITSMServiceEngine string
+			silentRetryCount := 0
 
-		for turn := 1; turn <= maxTurns; turn++ {
+	for turn := 1; turn <= maxTurns; turn++ {
 			select {
 			case <-ctx.Done():
 				emit(stoppedEvent(ctx.Err(), "LLM stream"))
@@ -87,14 +88,15 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 			}
 			slog.Info("react executor: LLM stream established", "turn", turn, "model", req.AgentConfig.ModelName)
 
-			var assistantContent string
-			var toolCalls []llm.ToolCall
-			var usage llm.Usage
+				var assistantContent string
+				var toolCalls []llm.ToolCall
+				var usage llm.Usage
+				sawAnyEvent := false
 
-			streamDone := false
-			for !streamDone {
-				select {
-				case evt, ok := <-streamCh:
+				streamDone := false
+				for !streamDone {
+					select {
+					case evt, ok := <-streamCh:
 					if !ok {
 						if ctx.Err() != nil {
 							turnCancel()
@@ -109,8 +111,9 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 						}
 						streamDone = true
 						break
-					}
-					switch evt.Type {
+						}
+						sawAnyEvent = true
+						switch evt.Type {
 					case "content_delta":
 						assistantContent += evt.Content
 						emit(Event{Type: EventTypeContentDelta, Text: evt.Content})
@@ -169,6 +172,17 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 
 			totalInput += usage.InputTokens
 			totalOutput += usage.OutputTokens
+
+			if sawAnyEvent && len(toolCalls) == 0 && strings.TrimSpace(assistantContent) == "" {
+				if silentRetryCount == 0 && turn < maxTurns {
+					silentRetryCount++
+					messages = append(messages, llm.Message{
+						Role: llm.RoleUser,
+						Content: "请继续处理，并在这一轮给出一条简短的中文答复；如果需要，也可以调用合适的工具。",
+					})
+					continue
+				}
+			}
 
 			// If no tool calls, we're done
 			if len(toolCalls) == 0 {

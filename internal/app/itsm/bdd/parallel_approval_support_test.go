@@ -9,9 +9,12 @@ import (
 	"fmt"
 	. "metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
+	"strings"
+	"testing"
 	"time"
 
 	ai "metis/internal/app/ai/runtime"
+	"metis/internal/app/itsm/contract"
 	"metis/internal/app/itsm/engine"
 	"metis/internal/llm"
 )
@@ -143,6 +146,146 @@ func generateParallelApprovalWorkflow(cfg llmConfig) (json.RawMessage, error) {
 	return nil, fmt.Errorf("workflow generation failed")
 }
 
+func enforceParallelApprovalWorkflowContract(workflowJSON json.RawMessage) (json.RawMessage, error) {
+	def, err := engine.ParseWorkflowDef(workflowJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse generated workflow: %w", err)
+	}
+
+	required := map[string]bool{
+		"it/network_admin":  false,
+		"it/security_admin": false,
+		"it/ops_admin":      false,
+	}
+
+	for i := range def.Nodes {
+		node := &def.Nodes[i]
+		data, err := engine.ParseNodeData(node.Data)
+		if err != nil {
+			return nil, fmt.Errorf("parse node data %s: %w", node.ID, err)
+		}
+		matched := false
+		for _, participant := range data.Participants {
+			if participant.Type != "position_department" {
+				continue
+			}
+			key := participant.DepartmentCode + "/" + participant.PositionCode
+			if _, ok := required[key]; !ok {
+				continue
+			}
+			required[key] = true
+			matched = true
+		}
+		if !matched {
+			continue
+		}
+		node.Type = engine.NodeApprove
+		normalizedData := map[string]any{}
+		if len(node.Data) > 0 {
+			if err := json.Unmarshal(node.Data, &normalizedData); err != nil {
+				return nil, fmt.Errorf("unmarshal node data %s: %w", node.ID, err)
+			}
+		}
+		normalizedData["nodeType"] = engine.NodeApprove
+		if _, ok := normalizedData["label"]; !ok {
+			normalizedData["label"] = "审批"
+		}
+		encoded, err := json.Marshal(normalizedData)
+		if err != nil {
+			return nil, fmt.Errorf("marshal node data %s: %w", node.ID, err)
+		}
+		node.Data = encoded
+	}
+
+	for participantKey, found := range required {
+		if !found {
+			return nil, fmt.Errorf("generated workflow missing approval node for %s", participantKey)
+		}
+	}
+
+	normalized, err := json.Marshal((*contract.WorkflowDef)(def))
+	if err != nil {
+		return nil, fmt.Errorf("marshal normalized workflow: %w", err)
+	}
+	if errs := engine.ValidateWorkflow(normalized); hasBlockingValidationErrors(errs) {
+		return nil, fmt.Errorf("normalized workflow still invalid: %v", errs)
+	}
+	return normalized, nil
+}
+
+func hasBlockingValidationErrors(errs []engine.ValidationError) bool {
+	for _, err := range errs {
+		if !err.IsWarning() {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEnforceParallelApprovalWorkflowContract(t *testing.T) {
+	raw := json.RawMessage(`{
+		"nodes": [
+			{"id":"start","type":"start","data":{"label":"开始","nodeType":"start"}},
+			{"id":"fork","type":"parallel","data":{"label":"拆分","nodeType":"parallel","gateway_direction":"fork"}},
+			{"id":"net","type":"process","data":{"label":"网络审批","nodeType":"process","participants":[{"type":"position_department","department_code":"it","position_code":"network_admin"}]}},
+			{"id":"sec","type":"approve","data":{"label":"安全审批","nodeType":"approve","participants":[{"type":"position_department","department_code":"it","position_code":"security_admin"}]}},
+			{"id":"join","type":"parallel","data":{"label":"汇聚","nodeType":"parallel","gateway_direction":"join"}},
+			{"id":"ops","type":"process","data":{"label":"运维终审","nodeType":"process","participants":[{"type":"position_department","department_code":"it","position_code":"ops_admin"}]}},
+			{"id":"ok","type":"end","data":{"label":"完成","nodeType":"end"}},
+			{"id":"reject","type":"end","data":{"label":"驳回","nodeType":"end"}}
+		],
+		"edges": [
+			{"id":"e1","source":"start","target":"fork","data":{}},
+			{"id":"e2","source":"fork","target":"net","data":{}},
+			{"id":"e3","source":"fork","target":"sec","data":{}},
+			{"id":"e4","source":"net","target":"join","data":{"outcome":"approved"}},
+			{"id":"e5","source":"net","target":"reject","data":{"outcome":"rejected"}},
+			{"id":"e6","source":"sec","target":"join","data":{"outcome":"approved"}},
+			{"id":"e7","source":"sec","target":"reject","data":{"outcome":"rejected"}},
+			{"id":"e8","source":"join","target":"ops","data":{}},
+			{"id":"e9","source":"ops","target":"ok","data":{"outcome":"approved"}},
+			{"id":"e10","source":"ops","target":"reject","data":{"outcome":"rejected"}}
+		]
+	}`)
+
+	normalized, err := enforceParallelApprovalWorkflowContract(raw)
+	if err != nil {
+		t.Fatalf("enforce contract: %v", err)
+	}
+
+	def, err := engine.ParseWorkflowDef(normalized)
+	if err != nil {
+		t.Fatalf("parse normalized workflow: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, node := range def.Nodes {
+		data, err := engine.ParseNodeData(node.Data)
+		if err != nil {
+			t.Fatalf("parse node data %s: %v", node.ID, err)
+		}
+		for _, participant := range data.Participants {
+			key := participant.DepartmentCode + "/" + participant.PositionCode
+			if key != "it/network_admin" && key != "it/security_admin" && key != "it/ops_admin" {
+				continue
+			}
+			seen[key] = true
+			if node.Type != engine.NodeApprove {
+				t.Fatalf("node %s for %s type=%s, want approve", node.ID, key, node.Type)
+			}
+			if !strings.Contains(string(node.Data), `"nodeType":"approve"`) {
+				t.Fatalf("node %s data missing nodeType=approve: %s", node.ID, string(node.Data))
+			}
+		}
+	}
+
+	for _, key := range []string{"it/network_admin", "it/security_admin", "it/ops_admin"} {
+		if !seen[key] {
+			t.Fatalf("expected approval node for %s", key)
+		}
+	}
+}
+
 // publishParallelApprovalSmartService creates the full service for parallel approval BDD lifecycle tests.
 // Uses LLM to generate workflow JSON from the collaboration spec.
 func publishParallelApprovalSmartService(bc *bddContext) error {
@@ -150,6 +293,10 @@ func publishParallelApprovalSmartService(bc *bddContext) error {
 	workflowJSON, err := generateParallelApprovalWorkflow(bc.llmCfg)
 	if err != nil {
 		return fmt.Errorf("generate parallel approval workflow: %w", err)
+	}
+	workflowJSON, err = enforceParallelApprovalWorkflowContract(workflowJSON)
+	if err != nil {
+		return fmt.Errorf("normalize parallel approval workflow: %w", err)
 	}
 
 	// 2. ServiceCatalog

@@ -933,7 +933,7 @@ func (e *SmartEngine) executeParallelPlan(tx *gorm.DB, ticketID uint, plan *Deci
 			e.createRequesterAssignment(tx, ticketID, act.ID)
 		} else if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
 			e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
-		} else if da.Type == "process" || da.Type == "form" {
+		} else if da.Type == "process" || da.Type == "form" || da.Type == "approve" {
 			e.tryFallbackAssignment(tx, ticketID, act.ID)
 		}
 
@@ -975,7 +975,7 @@ func (e *SmartEngine) executeSinglePlan(tx *gorm.DB, ticketID uint, plan *Decisi
 	planJSON := mustJSON(plan)
 	da := plan.Activities[0]
 	status := ActivityInProgress
-	if da.Type == "form" || da.Type == "process" {
+	if da.Type == "form" || da.Type == "process" || da.Type == "approve" {
 		status = ActivityPending
 	}
 
@@ -1315,6 +1315,10 @@ func (e *SmartEngine) validateDecisionPlan(tx *gorm.DB, ticketID uint, plan *Dec
 			if parseErr == nil {
 				nodeMap, _ := def.BuildMaps()
 				if node, ok := nodeMap[a.NodeID]; ok {
+					if normalizedType, changed := normalizeDecisionActivityType(plan.NextStepType, a.Type, node.Type); changed {
+						plan.Activities[i].Type = normalizedType
+						a.Type = normalizedType
+					}
 					if node.Type != a.Type && !(a.Type == "approve" && node.Type == "process") {
 						slog.Warn("decision plan node_id type mismatch, clearing",
 							"activity_index", i, "node_id", a.NodeID,
@@ -1999,8 +2003,20 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
+func normalizeDecisionActivityType(nextStepType string, activityType string, nodeType string) (string, bool) {
+	if nextStepType == NodeApprove && activityType == NodeProcess {
+		return NodeApprove, true
+	}
+	if nodeType == NodeApprove && activityType == NodeProcess {
+		return NodeApprove, true
+	}
+	return activityType, false
+}
+
 func decisionActivityName(da DecisionActivity) string {
 	switch da.Type {
+	case "approve":
+		return "审批"
 	case "process":
 		return "处理"
 	case "action":
@@ -2443,7 +2459,7 @@ func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceM
 		}
 	}
 
-	allowedSteps := []string{"process", "action", "notify", "form", "complete", "escalate"}
+	allowedSteps := []string{"approve", "process", "action", "notify", "form", "complete", "escalate"}
 	if IsTerminalTicketStatus(ticket.Status) {
 		allowedSteps = []string{}
 	}
@@ -2675,7 +2691,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"  \"execution_mode\": \"single|parallel\",\n" +
 	"  \"activities\": [\n" +
 	"    {\n" +
-	"      \"type\": \"process|action|notify|form\",\n" +
+	"      \"type\": \"approve|process|action|notify|form\",\n" +
 	"      \"participant_type\": \"requester|user|position_department\",\n" +
 	"      \"participant_id\": 42,\n" +
 	"      \"position_code\": \"db_admin\",\n" +
