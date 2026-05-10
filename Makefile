@@ -241,9 +241,13 @@ else
 endif
 
 test-bdd:
+	@test -f .env.test || (echo "Missing .env.test — copy .env.test.example and fill in values" && exit 1)
+	@set -a; . ./.env.test; set +a; \
 	go test ./internal/app/itsm/bdd -run '^TestBDD$$' -v -timeout 10m
 
 test-bdd-domain-all:
+	@test -f .env.test || (echo "Missing .env.test — copy .env.test.example and fill in values" && exit 1)
+	@set -a; . ./.env.test; set +a; \
 	ITSM_BDD_PATHS=features/domain go test ./internal/app/itsm/bdd -run '^TestBDD$$' -v -timeout 10m
 
 test-bdd-vpn:
