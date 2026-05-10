@@ -270,6 +270,10 @@ test-bdd-agentic-deterministic:
 	@set -a; . ./.env.test; set +a; \
 	go test ./internal/app/itsm/bdd -run '^TestBDDAgenticDeterministic$$' -v -timeout 30m
 
+test-bdd-all:
+	@$(MAKE) test-bdd-agentic
+	@$(MAKE) test-bdd-agentic-deterministic
+
 test-bdd-agentic-vpn:
 	@test -f .env.test || (echo "Missing .env.test — copy .env.test.example and fill in values" && exit 1)
 	@set -a; . ./.env.test; set +a; \
@@ -282,7 +286,7 @@ test-bdd-agentic-server-access:
 	ITSM_BDD_PATHS=features/agentic/server_access_branch_decision.feature,features/agentic/server_access_corner_cases.feature \
 	go test ./internal/app/itsm/bdd -run '^TestBDDAgentic$$' -v -timeout 30m
 
-.PHONY: web-full-registry web-build web-install web-dev compose-up compose-down compose-reset dev dev-sqlite stop-all build run release release-license build-license build-sidecar release-sidecar refer-clone seed seed-dev seed-dev-sqlite reset-pg clean push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-tdd test-bdd test-bdd-domain-all test-bdd-vpn test-bdd-api test-bdd-agentic test-bdd-agentic-deterministic test-bdd-agentic-vpn test-bdd-agentic-server-access
+.PHONY: web-full-registry web-build web-install web-dev compose-up compose-down compose-reset dev dev-sqlite stop-all build run release release-license build-license build-sidecar release-sidecar refer-clone seed seed-dev seed-dev-sqlite reset-pg clean push test test-license test-fuzz test-llm test-pretty test-cover test-report test-llm-report test-tdd test-bdd test-bdd-domain-all test-bdd-vpn test-bdd-api test-bdd-agentic test-bdd-agentic-deterministic test-bdd-all test-bdd-agentic-vpn test-bdd-agentic-server-access
 
 # Backward-compat aliases
 license: build-license

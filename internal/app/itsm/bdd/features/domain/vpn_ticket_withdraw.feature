@@ -14,7 +14,7 @@ Feature: VPN 开通申请 — 工单撤回
   Scenario: 无人认领时成功撤回
     When "vpn-requester" 提交 VPN 申请，访问原因为 "network_support"
     And "vpn-requester" 撤回工单，原因为 "不需要了"
-    Then 工单状态为 "cancelled"
+    Then 工单状态为 "withdrawn"
     And 时间线包含撤回记录
 
   Scenario: 已被处理人认领后撤回失败
@@ -22,16 +22,16 @@ Feature: VPN 开通申请 — 工单撤回
     And "network-operator" 认领当前工单
     And "vpn-requester" 撤回工单，原因为 "不需要了"
     Then 操作失败
-    And 工单状态不为 "cancelled"
+    And 工单状态不为 "withdrawn"
 
   Scenario: 非申请人撤回失败
     When "vpn-requester" 提交 VPN 申请，访问原因为 "network_support"
     And "network-operator" 撤回工单，原因为 "误提"
     Then 操作失败
-    And 工单状态不为 "cancelled"
+    And 工单状态不为 "withdrawn"
 
   Scenario: 撤回原因记录在时间线
     When "vpn-requester" 提交 VPN 申请，访问原因为 "network_support"
     And "vpn-requester" 撤回工单，原因为 "项目取消"
-    Then 工单状态为 "cancelled"
+    Then 工单状态为 "withdrawn"
     And 时间线包含 "项目取消"
