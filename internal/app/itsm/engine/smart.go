@@ -1352,7 +1352,11 @@ func (e *SmartEngine) hasResolvableHumanParticipant(tx *gorm.DB, a DecisionActiv
 		return true
 	}
 	if a.ParticipantType == "position_department" && a.PositionCode != "" && a.DepartmentCode != "" {
-		return true
+		var positionID, departmentID uint
+		tx.Table("positions").Where("code = ?", a.PositionCode).Select("id").Scan(&positionID)
+		tx.Table("departments").Where("code = ?", a.DepartmentCode).Select("id").Scan(&departmentID)
+		userIDs, err := resolveUsersByPositionDepartmentInTx(tx, positionID, departmentID)
+		return err == nil && len(userIDs) > 0
 	}
 	if a.ParticipantType == "requester" {
 		return true

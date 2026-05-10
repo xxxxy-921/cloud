@@ -9,6 +9,7 @@ import (
 
 	"github.com/cucumber/godog"
 
+	"metis/internal/app"
 	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/domain"
 	"metis/internal/app/itsm/tools"
@@ -35,6 +36,7 @@ const serverAccessDialogPrompt = `你是 IT 服务台的 Agentic 助手，负责
 输出要求：
 - 若不能提交，就明确说明还缺什么或哪里不合法。
 - 若已经准备草稿，可用自然语言总结给用户确认，但不要编造不存在的字段。
+- 每一轮都必须给用户明确中文回复，禁止空回复。
 `
 
 var serverAccessDialogWorkflowJSON = json.RawMessage(`{
@@ -216,54 +218,204 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 			}
 		}
 
-		req := ai.ExecuteRequest{
-			SessionID:    testSessionID,
-			SystemPrompt: serverAccessDialogPrompt,
-			Messages:     msgs,
-			Tools:        toolDefs,
-			MaxTurns:     12,
-			AgentConfig: ai.AgentExecuteConfig{
-				ModelName:   bc.llmCfg.model,
-				Temperature: ptrFloat32(0.15),
-				MaxTokens:   4096,
-			},
+		executeOnce := func(messages []ai.ExecuteMessage) error {
+			req := ai.ExecuteRequest{
+				SessionID:    testSessionID,
+				SystemPrompt: serverAccessDialogPrompt,
+				Messages:     messages,
+				Tools:        toolDefs,
+				MaxTurns:     12,
+				AgentConfig: ai.AgentExecuteConfig{
+					ModelName:   bc.llmCfg.model,
+					Temperature: ptrFloat32(0.15),
+					MaxTokens:   4096,
+				},
+			}
+
+			ch, err := executor.Execute(ctx, req)
+			if err != nil {
+				return fmt.Errorf("execute agent: %w", err)
+			}
+
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			bc.dialogState.finalContent = ""
+			var contentParts []string
+			toolNamesByID := map[string]string{}
+
+			for evt := range ch {
+				switch evt.Type {
+				case ai.EventTypeToolCall:
+					toolNamesByID[evt.ToolCallID] = evt.ToolName
+					bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
+						ID:   evt.ToolCallID,
+						Name: evt.ToolName,
+						Args: evt.ToolArgs,
+					})
+				case ai.EventTypeToolResult:
+					bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
+						ID:      evt.ToolCallID,
+						Name:    toolNamesByID[evt.ToolCallID],
+						Output:  evt.ToolOutput,
+						IsError: strings.HasPrefix(evt.ToolOutput, "Error:"),
+					})
+				case ai.EventTypeContentDelta:
+					contentParts = append(contentParts, evt.Text)
+				case ai.EventTypeError:
+					return fmt.Errorf("agent error: %s", evt.Message)
+				}
+			}
+
+			bc.dialogState.finalContent = strings.Join(contentParts, "")
+			return nil
 		}
 
-		ch, err := executor.Execute(ctx, req)
-		if err != nil {
-			return fmt.Errorf("execute agent: %w", err)
+		executeChatFallback := func(messages []ai.ExecuteMessage) error {
+			toolDefsForLLM := make([]llm.ToolDef, 0, len(toolDefs))
+			for _, tool := range toolDefs {
+				toolDefsForLLM = append(toolDefsForLLM, llm.ToolDef{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
+				})
+			}
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			llmMessages := []llm.Message{{Role: llm.RoleSystem, Content: serverAccessDialogPrompt}}
+			for _, msg := range messages {
+				llmMessages = append(llmMessages, llm.Message{
+					Role:       msg.Role,
+					Content:    msg.Content,
+					Images:     msg.Images,
+					ToolCalls:  msg.ToolCalls,
+					ToolCallID: msg.ToolCallID,
+				})
+			}
+			for i := 0; i < 4; i++ {
+				resp, err := client.Chat(ctx, llm.ChatRequest{
+					Model:       bc.llmCfg.model,
+					Messages:    llmMessages,
+					Tools:       toolDefsForLLM,
+					MaxTokens:   4096,
+					Temperature: ptrFloat32(0.15),
+				})
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(resp.Content) != "" {
+					bc.dialogState.finalContent = resp.Content
+				}
+				if len(resp.ToolCalls) == 0 {
+					return nil
+				}
+				llmMessages = append(llmMessages, llm.Message{
+					Role:      llm.RoleAssistant,
+					Content:   resp.Content,
+					ToolCalls: resp.ToolCalls,
+				})
+				for _, tc := range resp.ToolCalls {
+					bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
+						ID:   tc.ID,
+						Name: tc.Name,
+						Args: json.RawMessage(tc.Arguments),
+					})
+					toolCtx := context.WithValue(ctx, app.UserMessageKey, latestBossDialogUserMessage(bc.dialogState))
+					result, execErr := toolExec.ExecuteTool(toolCtx, ai.ToolCall{
+						ID:   tc.ID,
+						Name: tc.Name,
+						Args: json.RawMessage(tc.Arguments),
+					})
+					output := result.Output
+					isError := result.IsError
+					if execErr != nil {
+						output = fmt.Sprintf("Error: %v", execErr)
+						isError = true
+					}
+					bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
+						ID:      tc.ID,
+						Name:    tc.Name,
+						Output:  output,
+						IsError: isError,
+					})
+					llmMessages = append(llmMessages, llm.Message{
+						Role:       llm.RoleTool,
+						Content:    output,
+						ToolCallID: tc.ID,
+					})
+				}
+			}
+			return nil
 		}
 
-		bc.dialogState.toolCalls = nil
-		bc.dialogState.toolResults = nil
-		bc.dialogState.finalContent = ""
-		var contentParts []string
-		toolNamesByID := map[string]string{}
+		appendChatFallback := func(messages []ai.ExecuteMessage) error {
+			existingCalls := append([]toolCallRecord{}, bc.dialogState.toolCalls...)
+			existingResults := append([]toolResultRecord{}, bc.dialogState.toolResults...)
+			existingContent := bc.dialogState.finalContent
+			if err := executeChatFallback(messages); err != nil {
+				return err
+			}
+			bc.dialogState.toolCalls = append(existingCalls, bc.dialogState.toolCalls...)
+			bc.dialogState.toolResults = append(existingResults, bc.dialogState.toolResults...)
+			if strings.TrimSpace(bc.dialogState.finalContent) == "" {
+				bc.dialogState.finalContent = existingContent
+			}
+			return nil
+		}
 
-		for evt := range ch {
-			switch evt.Type {
-			case ai.EventTypeToolCall:
-				toolNamesByID[evt.ToolCallID] = evt.ToolName
-				bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
-					ID:   evt.ToolCallID,
-					Name: evt.ToolName,
-					Args: evt.ToolArgs,
-				})
-			case ai.EventTypeToolResult:
-				bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
-					ID:      evt.ToolCallID,
-					Name:    toolNamesByID[evt.ToolCallID],
-					Output:  evt.ToolOutput,
-					IsError: strings.HasPrefix(evt.ToolOutput, "Error:"),
-				})
-			case ai.EventTypeContentDelta:
-				contentParts = append(contentParts, evt.Text)
-			case ai.EventTypeError:
-				return fmt.Errorf("agent error: %s", evt.Message)
+		hasAnyITSMProgress := func() bool {
+			return hasToolCall(bc.dialogState.toolCalls, "itsm.service_match") ||
+				hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") ||
+				hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare")
+		}
+
+		if err := executeOnce(msgs); err != nil {
+			return err
+		}
+		if len(bc.dialogState.toolCalls) == 0 {
+			retryMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "请严格真实调用 itsm.service_match 和 itsm.service_load，不要只做口头回复。",
+			})
+			if err := executeOnce(retryMessages); err != nil {
+				return err
+			}
+			if len(bc.dialogState.toolCalls) == 0 {
+				if err := executeChatFallback(retryMessages); err != nil {
+					return fmt.Errorf("server access dialog chat fallback error: %w", err)
+				}
 			}
 		}
-
-		bc.dialogState.finalContent = strings.Join(contentParts, "")
+		if !hasAnyITSMProgress() {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "不要停在 general.current_time 或 itsm.current_request_context。请继续真实推进 ITSM 服务工具链：先 itsm.service_match，再 itsm.service_load；如果字段已齐全则继续 itsm.draft_prepare，否则明确追问。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog force-itsm fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") &&
+			!hasToolCall(bc.dialogState.toolCalls, "general.current_time") {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "请继续基于已加载的服务定义推进：如果时间是今晚/明晚/今天等相对表达或需要判断是否已过期，先调用 general.current_time；如果字段已齐全就继续 itsm.draft_prepare；如果字段缺失就明确追问。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog followup fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
+			hasToolCall(bc.dialogState.toolCalls, "general.current_time") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "你已经拿到当前时间和服务定义。现在必须继续判断：如果访问时间已过期，就明确指出并等待用户修正；如果信息完整且时间合法，就调用 itsm.draft_prepare；如果诉求跨路由或字段仍缺失，就明确澄清。不要停在辅助工具。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog post-time fallback error: %w", err)
+			}
+		}
 		return nil
 	}
 

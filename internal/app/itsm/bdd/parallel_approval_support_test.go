@@ -58,6 +58,17 @@ const parallelApprovalGenerationContext = `
 // parallelApprovalStaticWorkflowJSON is the reference path used for dialog (non-LLM) tests.
 const parallelApprovalStaticWorkflowJSON = `{"nodes":[{"id":"start","type":"start","position":{"x":400,"y":50},"data":{"label":"开始","nodeType":"start"}},{"id":"intake","type":"form","position":{"x":400,"y":200},"data":{"label":"填写并签申请","nodeType":"form","participants":[{"type":"requester"}],"formSchema":{"fields":[{"key":"title","type":"text","label":"申请标题"},{"key":"target_system","type":"text","label":"目标系统"},{"key":"time_window","type":"date_range","label":"时间窗口"},{"key":"reason","type":"textarea","label":"申请原因"},{"key":"expected_result","type":"textarea","label":"期望结果"}]}}},{"id":"parallel_fork","type":"parallel","position":{"x":400,"y":400},"data":{"label":"并签拆分","nodeType":"parallel","gateway_direction":"fork"}},{"id":"approve_network","type":"approve","position":{"x":180,"y":600},"data":{"label":"网络管理员审批","nodeType":"approve","participants":[{"type":"position_department","department_code":"it","position_code":"network_admin"}]}},{"id":"approve_security","type":"approve","position":{"x":620,"y":600},"data":{"label":"安全管理员审批","nodeType":"approve","participants":[{"type":"position_department","department_code":"it","position_code":"security_admin"}]}},{"id":"parallel_join","type":"parallel","position":{"x":400,"y":800},"data":{"label":"并签汇聚","nodeType":"parallel","gateway_direction":"join"}},{"id":"approve_ops","type":"approve","position":{"x":400,"y":1000},"data":{"label":"运维管理员最终审批","nodeType":"approve","participants":[{"type":"position_department","department_code":"it","position_code":"ops_admin"}]}},{"id":"end_completed","type":"end","position":{"x":400,"y":1200},"data":{"label":"审批完成","nodeType":"end"}},{"id":"end_rejected","type":"end","position":{"x":700,"y":900},"data":{"label":"审批驳回","nodeType":"end"}}],"edges":[{"id":"e1","source":"start","target":"intake"},{"id":"e2","source":"intake","target":"parallel_fork"},{"id":"e3","source":"parallel_fork","target":"approve_network"},{"id":"e4","source":"parallel_fork","target":"approve_security"},{"id":"e5","source":"approve_network","target":"parallel_join","data":{"outcome":"approved"}},{"id":"e6","source":"approve_network","target":"end_rejected","data":{"outcome":"rejected"}},{"id":"e7","source":"approve_security","target":"parallel_join","data":{"outcome":"approved"}},{"id":"e8","source":"approve_security","target":"end_rejected","data":{"outcome":"rejected"}},{"id":"e9","source":"parallel_join","target":"approve_ops"},{"id":"e10","source":"approve_ops","target":"end_completed","data":{"outcome":"approved"}},{"id":"e11","source":"approve_ops","target":"end_rejected","data":{"outcome":"rejected"}}]}`
 
+const parallelApprovalDialogFormSchema = `{
+  "version": 1,
+  "fields": [
+    {"key":"title","type":"text","label":"申请标题","required":true},
+    {"key":"target_system","type":"text","label":"目标系统","required":true},
+    {"key":"time_window","type":"date_range","label":"时间窗口","required":true},
+    {"key":"reason","type":"textarea","label":"申请原因","required":true},
+    {"key":"expected_result","type":"textarea","label":"期望结果","required":true}
+  ]
+}`
+
 // parallelApprovalCasePayload defines test data for a parallel approval BDD scenario.
 type parallelApprovalCasePayload struct {
 	Summary  string
@@ -387,6 +398,7 @@ func publishParallelApprovalDialogService(bc *bddContext) error {
 		Code:              "multi-role-parallel-approval-dialog",
 		CatalogID:         catalog.ID,
 		EngineType:        "smart",
+		IntakeFormSchema:  JSONField(parallelApprovalDialogFormSchema),
 		WorkflowJSON:      JSONField([]byte(parallelApprovalStaticWorkflowJSON)),
 		CollaborationSpec: parallelApprovalCollaborationSpec,
 		IsActive:          true,

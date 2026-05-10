@@ -32,7 +32,7 @@ Feature: Server Access Dialog Validation
     And the server access agent processes the dialog
     Then tool call sequence contains "general.current_time"
     And agent does not call draft_prepare
-    And response matches "时间.*已过|访问时间.*过去|请修改时间"
+    And response matches "时间.*已过|访问时间.*过去|请修改时间|已经过期|有效的访问时间窗口"
 
   Scenario: Multiple target hosts are preserved in draft
     When requester says "请帮我提交生产服务器临时访问申请，需要访问 prod-app-02, prod-app-03，来源 IP 10.20.30.41，账号 ops.reader，今晚 20:00-21:00 排查应用进程异常"

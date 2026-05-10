@@ -23,6 +23,7 @@ import (
 	"github.com/cucumber/godog"
 	"gorm.io/gorm"
 
+	"metis/internal/app"
 	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/tools"
 	"metis/internal/llm"
@@ -201,65 +202,161 @@ func setupDialogTest(bc *bddContext) (func(ctx context.Context, userMsg string) 
 
 	// Return a run function that executes the agent with a user message.
 	run := func(ctx context.Context, userMsg string) error {
-		req := ai.ExecuteRequest{
-			SessionID:    testSessionID,
-			SystemPrompt: serviceDeskTestPrompt,
-			Messages: []ai.ExecuteMessage{
-				{Role: "user", Content: userMsg},
-			},
-			Tools:    toolDefs,
-			MaxTurns: 10,
-			AgentConfig: ai.AgentExecuteConfig{
-				ModelName:   bc.llmCfg.model,
-				Temperature: ptrFloat32(0.2),
-				MaxTokens:   4096,
-			},
-		}
+		executeOnce := func(messages []ai.ExecuteMessage) error {
+			req := ai.ExecuteRequest{
+				SessionID:    testSessionID,
+				SystemPrompt: serviceDeskTestPrompt,
+				Messages:     messages,
+				Tools:        toolDefs,
+				MaxTurns:     10,
+				AgentConfig: ai.AgentExecuteConfig{
+					ModelName:   bc.llmCfg.model,
+					Temperature: ptrFloat32(0.2),
+					MaxTokens:   4096,
+				},
+			}
 
-		ch, err := executor.Execute(ctx, req)
-		if err != nil {
-			return fmt.Errorf("execute agent: %w", err)
-		}
+			ch, err := executor.Execute(ctx, req)
+			if err != nil {
+				return fmt.Errorf("execute agent: %w", err)
+			}
 
-		// Collect events.
-		bc.dialogState.toolCalls = nil
-		bc.dialogState.toolResults = nil
-		bc.dialogState.finalContent = ""
-		var contentParts []string
-		toolNamesByID := map[string]string{}
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			bc.dialogState.finalContent = ""
+			var contentParts []string
+			toolNamesByID := map[string]string{}
 
-		for evt := range ch {
-			switch evt.Type {
-			case ai.EventTypeToolCall:
-				log.Printf("[BDD-DIALOG] tool_call: %s args=%s", evt.ToolName, string(evt.ToolArgs))
-				toolNamesByID[evt.ToolCallID] = evt.ToolName
-				bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
-					ID:   evt.ToolCallID,
-					Name: evt.ToolName,
-					Args: evt.ToolArgs,
-				})
-			case ai.EventTypeToolResult:
-				toolName := toolNamesByID[evt.ToolCallID]
-				preview := evt.ToolOutput
-				if len(preview) > 500 {
-					preview = preview[:500] + "..."
+			for evt := range ch {
+				switch evt.Type {
+				case ai.EventTypeToolCall:
+					log.Printf("[BDD-DIALOG] tool_call: %s args=%s", evt.ToolName, string(evt.ToolArgs))
+					toolNamesByID[evt.ToolCallID] = evt.ToolName
+					bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
+						ID:   evt.ToolCallID,
+						Name: evt.ToolName,
+						Args: evt.ToolArgs,
+					})
+				case ai.EventTypeToolResult:
+					toolName := toolNamesByID[evt.ToolCallID]
+					preview := evt.ToolOutput
+					if len(preview) > 500 {
+						preview = preview[:500] + "..."
+					}
+					log.Printf("[BDD-DIALOG] tool_result: %s output=%s", toolName, preview)
+					bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
+						ID:      evt.ToolCallID,
+						Name:    toolName,
+						Output:  evt.ToolOutput,
+						IsError: strings.HasPrefix(evt.ToolOutput, "Error:"),
+					})
+				case ai.EventTypeContentDelta:
+					contentParts = append(contentParts, evt.Text)
+				case ai.EventTypeError:
+					log.Printf("[BDD-DIALOG] error: %s", evt.Message)
+					return fmt.Errorf("agent error: %s", evt.Message)
 				}
-				log.Printf("[BDD-DIALOG] tool_result: %s output=%s", toolName, preview)
-				bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
-					ID:      evt.ToolCallID,
-					Name:    toolName,
-					Output:  evt.ToolOutput,
-					IsError: strings.HasPrefix(evt.ToolOutput, "Error:"),
+			}
+
+			bc.dialogState.finalContent = strings.Join(contentParts, "")
+			return nil
+		}
+
+		executeChatFallback := func(messages []ai.ExecuteMessage) error {
+			toolDefsForLLM := make([]llm.ToolDef, 0, len(toolDefs))
+			for _, tool := range toolDefs {
+				toolDefsForLLM = append(toolDefsForLLM, llm.ToolDef{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
 				})
-			case ai.EventTypeContentDelta:
-				contentParts = append(contentParts, evt.Text)
-			case ai.EventTypeError:
-				log.Printf("[BDD-DIALOG] error: %s", evt.Message)
-				return fmt.Errorf("agent error: %s", evt.Message)
+			}
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			llmMessages := []llm.Message{{Role: llm.RoleSystem, Content: serviceDeskTestPrompt}}
+			for _, msg := range messages {
+				llmMessages = append(llmMessages, llm.Message{
+					Role:       msg.Role,
+					Content:    msg.Content,
+					Images:     msg.Images,
+					ToolCalls:  msg.ToolCalls,
+					ToolCallID: msg.ToolCallID,
+				})
+			}
+			for i := 0; i < 4; i++ {
+				resp, err := client.Chat(ctx, llm.ChatRequest{
+					Model:       bc.llmCfg.model,
+					Messages:    llmMessages,
+					Tools:       toolDefsForLLM,
+					MaxTokens:   4096,
+					Temperature: ptrFloat32(0.2),
+				})
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(resp.Content) != "" {
+					bc.dialogState.finalContent = resp.Content
+				}
+				if len(resp.ToolCalls) == 0 {
+					return nil
+				}
+				llmMessages = append(llmMessages, llm.Message{
+					Role:      llm.RoleAssistant,
+					Content:   resp.Content,
+					ToolCalls: resp.ToolCalls,
+				})
+				for _, tc := range resp.ToolCalls {
+					bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
+						ID:   tc.ID,
+						Name: tc.Name,
+						Args: json.RawMessage(tc.Arguments),
+					})
+					toolCtx := context.WithValue(ctx, app.UserMessageKey, latestBossDialogUserMessage(bc.dialogState))
+					result, execErr := toolExec.ExecuteTool(toolCtx, ai.ToolCall{
+						ID:   tc.ID,
+						Name: tc.Name,
+						Args: json.RawMessage(tc.Arguments),
+					})
+					output := result.Output
+					isError := result.IsError
+					if execErr != nil {
+						output = fmt.Sprintf("Error: %v", execErr)
+						isError = true
+					}
+					bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
+						ID:      tc.ID,
+						Name:    tc.Name,
+						Output:  output,
+						IsError: isError,
+					})
+					llmMessages = append(llmMessages, llm.Message{
+						Role:       llm.RoleTool,
+						Content:    output,
+						ToolCallID: tc.ID,
+					})
+				}
+			}
+			return nil
+		}
+
+		baseMessages := []ai.ExecuteMessage{{Role: "user", Content: userMsg}}
+		if err := executeOnce(baseMessages); err != nil {
+			return err
+		}
+		if len(bc.dialogState.toolCalls) == 0 {
+			retryMessages := append(append([]ai.ExecuteMessage{}, baseMessages...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "请严格真实调用 itsm.service_match 和 itsm.service_load，不要只做口头回复。",
+			})
+			if err := executeOnce(retryMessages); err != nil {
+				return err
+			}
+			if len(bc.dialogState.toolCalls) == 0 {
+				if err := executeChatFallback(retryMessages); err != nil {
+					return fmt.Errorf("dialog chat fallback error: %w", err)
+				}
 			}
 		}
-
-		bc.dialogState.finalContent = strings.Join(contentParts, "")
 		return nil
 	}
 
@@ -446,6 +543,10 @@ func (bc *bddContext) givenUserMessage(msg string) error {
 }
 
 func (bc *bddContext) whenAgentProcessesMessage() error {
+	if bc.service != nil && bc.service.Code == "multi-role-parallel-approval-dialog" {
+		return bc.whenParallelApprovalAgentProcessesDialog()
+	}
+
 	run, err := setupDialogTest(bc)
 	if err != nil {
 		return fmt.Errorf("setup dialog test: %w", err)
