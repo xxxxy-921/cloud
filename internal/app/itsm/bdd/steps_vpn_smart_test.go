@@ -14,6 +14,7 @@ import (
 	"github.com/cucumber/godog"
 
 	"metis/internal/app/itsm/engine"
+	"metis/internal/app/itsm/tools"
 )
 
 // registerSmartSteps registers all smart engine step definitions.
@@ -95,19 +96,25 @@ func (bc *bddContext) createSmartVPNTicket(username, title string, formData map[
 	if !ok {
 		return fmt.Errorf("user %q not found in context", username)
 	}
+	op := tools.NewOperator(bc.db, nil, nil, nil, nil, nil)
+	detail, err := op.LoadService(bc.service.ID)
+	if err != nil {
+		return fmt.Errorf("load service snapshot: %w", err)
+	}
 
 	formJSON, _ := json.Marshal(formData)
 
 	ticket := &Ticket{
-		Code:         fmt.Sprintf("VPN-S-%d", time.Now().UnixNano()),
-		Title:        title,
-		ServiceID:    bc.service.ID,
-		EngineType:   "smart",
-		Status:       "pending",
-		PriorityID:   bc.priority.ID,
-		RequesterID:  user.ID,
-		FormData:     JSONField(formJSON),
-		WorkflowJSON: workflowJSON,
+		Code:             fmt.Sprintf("VPN-S-%d", time.Now().UnixNano()),
+		Title:            title,
+		ServiceID:        bc.service.ID,
+		ServiceVersionID: uintPtr(detail.ServiceVersionID),
+		EngineType:       "smart",
+		Status:           "pending",
+		PriorityID:       bc.priority.ID,
+		RequesterID:      user.ID,
+		FormData:         JSONField(formJSON),
+		WorkflowJSON:     workflowJSON,
 	}
 	if err := bc.db.Create(ticket).Error; err != nil {
 		return fmt.Errorf("create ticket: %w", err)
@@ -153,6 +160,11 @@ func (bc *bddContext) givenSmartTicketWithConflictingReasons(username string) er
 	if !ok {
 		return fmt.Errorf("user %q not found in context", username)
 	}
+	op := tools.NewOperator(bc.db, nil, nil, nil, nil, nil)
+	detail, err := op.LoadService(bc.service.ID)
+	if err != nil {
+		return fmt.Errorf("load service snapshot: %w", err)
+	}
 
 	formData := map[string]any{
 		"request_kind": []string{"network_access_issue", "security_compliance"},
@@ -163,15 +175,16 @@ func (bc *bddContext) givenSmartTicketWithConflictingReasons(username string) er
 	formJSON, _ := json.Marshal(formData)
 
 	ticket := &Ticket{
-		Code:         fmt.Sprintf("VPN-SC-%d", time.Now().UnixNano()),
-		Title:        "VPN开通申请(智能) - 网络与安全诉求冲突",
-		ServiceID:    bc.service.ID,
-		EngineType:   "smart",
-		Status:       "pending",
-		PriorityID:   bc.priority.ID,
-		RequesterID:  user.ID,
-		FormData:     JSONField(formJSON),
-		WorkflowJSON: bc.service.WorkflowJSON,
+		Code:             fmt.Sprintf("VPN-SC-%d", time.Now().UnixNano()),
+		Title:            "VPN开通申请(智能) - 网络与安全诉求冲突",
+		ServiceID:        bc.service.ID,
+		ServiceVersionID: uintPtr(detail.ServiceVersionID),
+		EngineType:       "smart",
+		Status:           "pending",
+		PriorityID:       bc.priority.ID,
+		RequesterID:      user.ID,
+		FormData:         JSONField(formJSON),
+		WorkflowJSON:     bc.service.WorkflowJSON,
 	}
 	if err := bc.db.Create(ticket).Error; err != nil {
 		return fmt.Errorf("create conflicting ticket: %w", err)
@@ -232,17 +245,23 @@ func (bc *bddContext) givenSmartTicketMissingParticipant(username string) error 
 		"device_usage": "BDD test - missing participant",
 	}
 	formJSON, _ := json.Marshal(formData)
+	op := tools.NewOperator(bc.db, nil, nil, nil, nil, nil)
+	detail, err := op.LoadService(bc.service.ID)
+	if err != nil {
+		return fmt.Errorf("load service snapshot: %w", err)
+	}
 
 	ticket := &Ticket{
-		Code:         fmt.Sprintf("VPN-SM-%d", time.Now().UnixNano()),
-		Title:        "VPN开通申请(智能) - 缺失参与者",
-		ServiceID:    bc.service.ID,
-		EngineType:   "smart",
-		Status:       "pending",
-		PriorityID:   bc.priority.ID,
-		RequesterID:  user.ID,
-		FormData:     JSONField(formJSON),
-		WorkflowJSON: JSONField(missingParticipantWorkflowJSON),
+		Code:             fmt.Sprintf("VPN-SM-%d", time.Now().UnixNano()),
+		Title:            "VPN开通申请(智能) - 缺失参与者",
+		ServiceID:        bc.service.ID,
+		ServiceVersionID: uintPtr(detail.ServiceVersionID),
+		EngineType:       "smart",
+		Status:           "pending",
+		PriorityID:       bc.priority.ID,
+		RequesterID:      user.ID,
+		FormData:         JSONField(formJSON),
+		WorkflowJSON:     JSONField(missingParticipantWorkflowJSON),
 	}
 	if err := bc.db.Create(ticket).Error; err != nil {
 		return fmt.Errorf("create ticket: %w", err)
@@ -369,7 +388,21 @@ func corruptVPNWorkflowRejectedTarget(raw json.RawMessage) (json.RawMessage, err
 		}
 	}
 	if !changed {
-		return nil, fmt.Errorf("workflow_json has no rejected edges to corrupt")
+		for _, node := range wf.Nodes {
+			if node.Type != engine.NodeProcess && node.Type != engine.NodeApprove {
+				continue
+			}
+			wf.Edges = append(wf.Edges, vpnWorkflowEdge{
+				ID:     fmt.Sprintf("edge_%s_rejected_vpn_supplement", node.ID),
+				Source: node.ID,
+				Target: formID,
+				Data:   map[string]any{"outcome": engine.ActivityRejected},
+			})
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, fmt.Errorf("workflow_json has no human nodes to corrupt rejected target")
 	}
 
 	if endID := firstEndNodeID(wf.Nodes); endID != "" {

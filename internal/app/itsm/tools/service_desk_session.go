@@ -224,6 +224,9 @@ func (s *ServiceDeskSession) LoadService(sessionID uint, requestedServiceID uint
 			state.ServiceVersionID = detail.ServiceVersionID
 			state.ServiceVersionHash = detail.ServiceVersionHash
 			state.ConfirmedDraftVersion = 0
+			if err := state.TransitionTo("service_loaded"); err != nil {
+				return nil, err
+			}
 		}
 		state.PrefillFormData = detail.PrefillSuggestions
 		clearPendingNextRequiredTool(state)
@@ -463,9 +466,12 @@ func (s *ServiceDeskSession) CreateTicket(sessionID uint, userID uint, requested
 	if err != nil {
 		return nil, fmt.Errorf("get state: %w", err)
 	}
-	resolvedServiceID, _, err := resolveServiceID(state, requestedServiceID)
+	resolvedServiceID, resolvedFrom, err := resolveServiceID(state, requestedServiceID)
 	if err != nil {
 		return nil, err
+	}
+	if requestedServiceID > 0 && state.LoadedServiceID > 0 && requestedServiceID != state.LoadedServiceID && resolvedFrom == "loaded_service" {
+		return nil, fmt.Errorf("service_id %d 与已加载的服务 %d 不一致，请先调用 service_load", requestedServiceID, state.LoadedServiceID)
 	}
 	if state.LoadedServiceID != resolvedServiceID {
 		return nil, fmt.Errorf("service_id %d 与已加载的服务 %d 不一致，请先调用 service_load", requestedServiceID, state.LoadedServiceID)

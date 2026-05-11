@@ -169,7 +169,7 @@ func (s *CatalogService) ServiceCounts() (*CatalogServiceCounts, error) {
 }
 
 func buildTree(catalogs []ServiceCatalog, parentID *uint) []ServiceCatalogResponse {
-	var result []ServiceCatalogResponse
+	result := make([]ServiceCatalogResponse, 0)
 	for _, c := range catalogs {
 		if ptrEq(c.ParentID, parentID) {
 			resp := c.ToResponse()

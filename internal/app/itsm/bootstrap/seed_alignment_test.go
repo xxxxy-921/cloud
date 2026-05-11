@@ -359,6 +359,93 @@ func TestBuiltInSmartSeedsAlignParticipantsAndInstallAdminIdentity(t *testing.T)
 	})
 }
 
+func TestSeedITSM_AllowsNilEnforcerWhileStillSeedingCoreArtifacts(t *testing.T) {
+	db := newSeedAlignmentDB(t)
+
+	if err := SeedITSM(db, nil); err != nil {
+		t.Fatalf("SeedITSM with nil enforcer: %v", err)
+	}
+
+	var itsmRoot coremodel.Menu
+	if err := db.Where("permission = ?", "itsm").First(&itsmRoot).Error; err != nil {
+		t.Fatalf("find itsm root menu: %v", err)
+	}
+	if itsmRoot.Type != coremodel.MenuTypeDirectory {
+		t.Fatalf("expected itsm root directory, got %+v", itsmRoot)
+	}
+
+	var priorityCount int64
+	if err := db.Model(&Priority{}).Count(&priorityCount).Error; err != nil {
+		t.Fatalf("count priorities: %v", err)
+	}
+	if priorityCount == 0 {
+		t.Fatal("expected priorities to be seeded even without enforcer")
+	}
+
+	var serviceCount int64
+	if err := db.Model(&ServiceDefinition{}).Count(&serviceCount).Error; err != nil {
+		t.Fatalf("count service definitions: %v", err)
+	}
+	if serviceCount == 0 {
+		t.Fatal("expected service definitions to be seeded even without enforcer")
+	}
+}
+
+func TestSeedITSM_RestoresDriftedPriorityAndSLATemplateDefaults(t *testing.T) {
+	db := newSeedAlignmentDB(t)
+	enforcer := newTestEnforcer(t)
+
+	driftedPriority := Priority{
+		Name:        "漂移紧急",
+		Code:        "P0",
+		Value:       99,
+		Color:       "#000000",
+		Description: "错误优先级",
+		IsActive:    false,
+	}
+	if err := db.Create(&driftedPriority).Error; err != nil {
+		t.Fatalf("create drifted priority: %v", err)
+	}
+	if err := db.Delete(&driftedPriority).Error; err != nil {
+		t.Fatalf("soft delete drifted priority: %v", err)
+	}
+
+	driftedSLA := SLATemplate{
+		Name:              "漂移标准",
+		Code:              "standard",
+		Description:       "错误模板",
+		ResponseMinutes:   999,
+		ResolutionMinutes: 9999,
+		IsActive:          false,
+	}
+	if err := db.Create(&driftedSLA).Error; err != nil {
+		t.Fatalf("create drifted sla: %v", err)
+	}
+	if err := db.Delete(&driftedSLA).Error; err != nil {
+		t.Fatalf("soft delete drifted sla: %v", err)
+	}
+
+	if err := SeedITSM(db, enforcer); err != nil {
+		t.Fatalf("SeedITSM restore drifted defaults: %v", err)
+	}
+
+	var restoredPriority Priority
+	if err := db.Unscoped().Where("code = ?", "P0").First(&restoredPriority).Error; err != nil {
+		t.Fatalf("load restored priority: %v", err)
+	}
+	if restoredPriority.DeletedAt.Valid || restoredPriority.Name != "紧急" || restoredPriority.Value != 1 || restoredPriority.Color != "#FF0000" || !restoredPriority.IsActive {
+		t.Fatalf("expected restored canonical priority, got %+v", restoredPriority)
+	}
+
+	var restoredSLA SLATemplate
+	if err := db.Unscoped().Where("code = ?", "standard").First(&restoredSLA).Error; err != nil {
+		t.Fatalf("load restored sla template: %v", err)
+	}
+	if restoredSLA.DeletedAt.Valid || restoredSLA.Name != "标准" || restoredSLA.ResponseMinutes != 240 || restoredSLA.ResolutionMinutes != 1440 || !restoredSLA.IsActive {
+		t.Fatalf("expected restored canonical sla template, got %+v", restoredSLA)
+	}
+}
+
 func TestSeedITSMGrantsUserServiceDeskSessionPolicies(t *testing.T) {
 	db := newSeedAlignmentDB(t)
 	enforcer := newTestEnforcer(t)
@@ -401,6 +488,220 @@ func TestSeedITSMGrantsUserServiceDeskSessionPolicies(t *testing.T) {
 		}
 		if ok {
 			t.Fatalf("user should not receive privileged policy %v", policy)
+		}
+	}
+}
+
+func TestSeedITSM_RebuildsLegacySubmissionIndexAndBackfillsRuntimeVersions(t *testing.T) {
+	db := newSeedAlignmentDB(t)
+	enforcer := newTestEnforcer(t)
+
+	if err := db.AutoMigrate(&ServiceDeskSubmission{}, &Ticket{}); err != nil {
+		t.Fatalf("migrate runtime version prerequisites: %v", err)
+	}
+	if err := db.Migrator().DropIndex(&ServiceDeskSubmission{}, "idx_itsm_submission_draft"); err != nil {
+		t.Fatalf("drop modern draft index: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX idx_itsm_submission_draft ON itsm_service_desk_submissions(session_id, draft_version, fields_hash)`).Error; err != nil {
+		t.Fatalf("create legacy draft index: %v", err)
+	}
+
+	catalog := ServiceCatalog{Name: "Legacy Root", Code: "legacy-runtime-root", IsActive: true}
+	if err := db.Create(&catalog).Error; err != nil {
+		t.Fatalf("create custom catalog: %v", err)
+	}
+	service := ServiceDefinition{
+		Name:              "Legacy Runtime Service",
+		Code:              "legacy-runtime-service",
+		CatalogID:         catalog.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "legacy runtime contract",
+		IsActive:          true,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create custom service: %v", err)
+	}
+	ticket := Ticket{
+		Code:        "LEGACY-RUNTIME-1",
+		Title:       "legacy runtime ticket",
+		ServiceID:   service.ID,
+		EngineType:  "smart",
+		Status:      TicketStatusDecisioning,
+		PriorityID:  1,
+		RequesterID: 1,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create legacy ticket: %v", err)
+	}
+
+	if err := SeedITSM(db, enforcer); err != nil {
+		t.Fatalf("seed itsm: %v", err)
+	}
+
+	legacyA := ServiceDeskSubmission{SessionID: 7, DraftVersion: 1, FieldsHash: "same", RequestHash: "r1", Status: "submitted"}
+	if err := db.Create(&legacyA).Error; err != nil {
+		t.Fatalf("insert first rebuilt submission: %v", err)
+	}
+	legacyB := ServiceDeskSubmission{SessionID: 7, DraftVersion: 1, FieldsHash: "same", RequestHash: "r2", Status: "submitted"}
+	if err := db.Create(&legacyB).Error; err != nil {
+		t.Fatalf("expected rebuilt index to allow distinct request_hash, got %v", err)
+	}
+
+	var versions []ServiceDefinitionVersion
+	if err := db.Where("service_id = ?", service.ID).Find(&versions).Error; err != nil {
+		t.Fatalf("list runtime versions: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("expected one runtime version after seed, got %+v", versions)
+	}
+
+	var updated Ticket
+	if err := db.First(&updated, ticket.ID).Error; err != nil {
+		t.Fatalf("reload legacy ticket: %v", err)
+	}
+	if updated.ServiceVersionID == nil || *updated.ServiceVersionID != versions[0].ID {
+		t.Fatalf("expected legacy ticket backfilled to version %d, got %v", versions[0].ID, updated.ServiceVersionID)
+	}
+
+	if err := SeedITSM(db, enforcer); err != nil {
+		t.Fatalf("seed itsm second run: %v", err)
+	}
+	if err := db.Where("service_id = ?", service.ID).Find(&versions).Error; err != nil {
+		t.Fatalf("list runtime versions after second seed: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("expected idempotent runtime version count 1 after second seed, got %+v", versions)
+	}
+}
+
+func TestSeedITSM_LeavesModernSubmissionIndexAndBoundRuntimeVersionUntouched(t *testing.T) {
+	db := newSeedAlignmentDB(t)
+	enforcer := newTestEnforcer(t)
+
+	if err := db.AutoMigrate(&ServiceDeskSubmission{}, &Ticket{}); err != nil {
+		t.Fatalf("migrate runtime version prerequisites: %v", err)
+	}
+
+	catalog := ServiceCatalog{Name: "Modern Root", Code: "modern-runtime-root", IsActive: true}
+	if err := db.Create(&catalog).Error; err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+	service := ServiceDefinition{
+		Name:              "Modern Runtime Service",
+		Code:              "modern-runtime-service",
+		CatalogID:         catalog.ID,
+		EngineType:        "smart",
+		CollaborationSpec: "modern runtime contract",
+		IsActive:          true,
+	}
+	if err := db.Create(&service).Error; err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	version := ServiceDefinitionVersion{
+		ServiceID:   service.ID,
+		Version:     3,
+		ContentHash: "existing-hash",
+		EngineType:  "smart",
+	}
+	if err := db.Create(&version).Error; err != nil {
+		t.Fatalf("create bound runtime version: %v", err)
+	}
+	ticket := Ticket{
+		Code:             "MODERN-RUNTIME-1",
+		Title:            "modern runtime ticket",
+		ServiceID:        service.ID,
+		ServiceVersionID: &version.ID,
+		EngineType:       "smart",
+		Status:           TicketStatusDecisioning,
+		PriorityID:       1,
+		RequesterID:      1,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	if err := SeedITSM(db, enforcer); err != nil {
+		t.Fatalf("seed itsm: %v", err)
+	}
+
+	legacy, err := hasLegacyServiceDeskSubmissionIndex(db)
+	if err != nil {
+		t.Fatalf("hasLegacyServiceDeskSubmissionIndex: %v", err)
+	}
+	if legacy {
+		t.Fatal("expected modern submission index to remain modern")
+	}
+
+	var versions []ServiceDefinitionVersion
+	if err := db.Where("service_id = ?", service.ID).Order("id ASC").Find(&versions).Error; err != nil {
+		t.Fatalf("list service versions: %v", err)
+	}
+	if len(versions) == 0 {
+		t.Fatal("expected runtime versions to remain available after seed")
+	}
+	foundOriginal := false
+	for _, item := range versions {
+		if item.ID == version.ID {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("expected pre-bound runtime version %d to remain, got %+v", version.ID, versions)
+	}
+
+	var updated Ticket
+	if err := db.First(&updated, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if updated.ServiceVersionID == nil || *updated.ServiceVersionID != version.ID {
+		t.Fatalf("expected bound ticket to keep runtime version %d, got %v", version.ID, updated.ServiceVersionID)
+	}
+}
+
+func TestSeedITSM_ReplacesLegacyEngineConfigPolicies(t *testing.T) {
+	db := newSeedAlignmentDB(t)
+	enforcer := newTestEnforcer(t)
+
+	if _, err := enforcer.AddPolicy("admin", "/api/v1/itsm/engine/config", "GET"); err != nil {
+		t.Fatalf("seed legacy GET policy: %v", err)
+	}
+	if _, err := enforcer.AddPolicy("admin", "/api/v1/itsm/engine/config", "PUT"); err != nil {
+		t.Fatalf("seed legacy PUT policy: %v", err)
+	}
+	if _, err := enforcer.AddPolicy("admin", "itsm:engine:config", "read"); err != nil {
+		t.Fatalf("seed legacy menu policy: %v", err)
+	}
+
+	if err := SeedITSM(db, enforcer); err != nil {
+		t.Fatalf("seed itsm: %v", err)
+	}
+
+	for _, policy := range [][]string{
+		{"admin", "/api/v1/itsm/engine/config", "GET"},
+		{"admin", "/api/v1/itsm/engine/config", "PUT"},
+		{"admin", "itsm:engine:config", "read"},
+	} {
+		ok, err := enforcer.HasPolicy(policy)
+		if err != nil {
+			t.Fatalf("check removed policy %v: %v", policy, err)
+		}
+		if ok {
+			t.Fatalf("expected legacy engine-config policy removed: %v", policy)
+		}
+	}
+
+	for _, policy := range [][]string{
+		{"admin", "/api/v1/itsm/engine-settings/config", "GET"},
+		{"admin", "/api/v1/itsm/engine-settings/config", "PUT"},
+		{"admin", "itsm:engine-settings:config", "read"},
+	} {
+		ok, err := enforcer.HasPolicy(policy)
+		if err != nil {
+			t.Fatalf("check new policy %v: %v", policy, err)
+		}
+		if !ok {
+			t.Fatalf("expected replacement policy seeded: %v", policy)
 		}
 	}
 }

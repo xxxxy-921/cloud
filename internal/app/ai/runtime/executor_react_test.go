@@ -107,6 +107,41 @@ func TestReactExecutor_DirectContent(t *testing.T) {
 	}
 }
 
+func TestReactExecutor_RetriesSilentTurnUntilContentArrives(t *testing.T) {
+	mockLLM := newControlledStreamLLMClient(2)
+
+	exec := NewReactExecutor(mockLLM, newMockToolExecutor())
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "我要提一个高风险变更协同申请"}},
+		MaxTurns: 2,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected first event to be LLM start, got %+v", evt)
+	}
+
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 3, OutputTokens: 0}}
+	close(mockLLM.streams[0])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected second LLM start after silent first turn, got %+v", evt)
+	}
+
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "content_delta", Content: "请补充申请主题。"}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeContentDelta || evt.Text != "请补充申请主题。" {
+		t.Fatalf("expected retry turn content delta, got %+v", evt)
+	}
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 4, OutputTokens: 6}}
+	close(mockLLM.streams[1])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeDone {
+		t.Fatalf("expected done event after retry turn, got %+v", evt)
+	}
+}
+
 func TestReactExecutor_ChatStreamStartTimeoutEmitsError(t *testing.T) {
 	previous := llmTurnTimeout
 	llmTurnTimeout = 20 * time.Millisecond

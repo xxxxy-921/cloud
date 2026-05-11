@@ -3,11 +3,13 @@ package ticket
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	itsmdef "metis/internal/app/itsm/definition"
 	. "metis/internal/app/itsm/domain"
 	itsmsla "metis/internal/app/itsm/sla"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -153,8 +155,16 @@ func (h *TicketHandler) buildTimelineResponses(items []TicketTimeline) ([]Ticket
 }
 
 func (h *TicketHandler) List(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	params := TicketListParams{
 		Keyword:    c.Query("keyword"),
@@ -163,34 +173,53 @@ func (h *TicketHandler) List(c *gin.Context) {
 		Page:       page,
 		PageSize:   pageSize,
 	}
+	var ok bool
+	params.Status, ok = normalizeTicketQueryStatus(params.Status)
+	if !ok {
+		handler.Fail(c, http.StatusBadRequest, "invalid status")
+		return
+	}
+	params.EngineType, ok = normalizeTicketQueryEngineType(params.EngineType)
+	if !ok {
+		handler.Fail(c, http.StatusBadRequest, "invalid engineType")
+		return
+	}
 
 	if v := c.Query("priorityId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.PriorityID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid priorityId")
+			return
 		}
+		uid := uint(id)
+		params.PriorityID = &uid
 	}
 	if v := c.Query("serviceId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.ServiceID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid serviceId")
+			return
 		}
+		uid := uint(id)
+		params.ServiceID = &uid
 	}
 	if v := c.Query("assigneeId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.AssigneeID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid assigneeId")
+			return
 		}
+		uid := uint(id)
+		params.AssigneeID = &uid
 	}
 	if v := c.Query("requesterId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.RequesterID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid requesterId")
+			return
 		}
+		uid := uint(id)
+		params.RequesterID = &uid
 	}
 
 	items, total, err := h.svc.List(params)
@@ -202,8 +231,16 @@ func (h *TicketHandler) List(c *gin.Context) {
 }
 
 func (h *TicketHandler) Monitor(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	params := TicketMonitorParams{
 		Keyword:    c.Query("keyword"),
@@ -215,6 +252,17 @@ func (h *TicketHandler) Monitor(c *gin.Context) {
 		PageSize:   pageSize,
 		OperatorID: currentUserID(c),
 	}
+	var ok bool
+	params.Status, ok = normalizeTicketQueryStatus(params.Status)
+	if !ok {
+		handler.Fail(c, http.StatusBadRequest, "invalid status")
+		return
+	}
+	params.EngineType, ok = normalizeTicketQueryEngineType(params.EngineType)
+	if !ok {
+		handler.Fail(c, http.StatusBadRequest, "invalid engineType")
+		return
+	}
 	if scope, ok := c.Get("deptScope"); ok {
 		if deptScope, ok := scope.(*[]uint); ok {
 			params.DeptScope = deptScope
@@ -223,17 +271,29 @@ func (h *TicketHandler) Monitor(c *gin.Context) {
 
 	if v := c.Query("priorityId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.PriorityID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid priorityId")
+			return
 		}
+		uid := uint(id)
+		params.PriorityID = &uid
 	}
 	if v := c.Query("serviceId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			params.ServiceID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid serviceId")
+			return
 		}
+		uid := uint(id)
+		params.ServiceID = &uid
+	}
+	if !isValidTicketMonitorRiskLevel(params.RiskLevel) {
+		handler.Fail(c, http.StatusBadRequest, "invalid riskLevel")
+		return
+	}
+	if !isValidTicketMonitorMetricCode(params.MetricCode) {
+		handler.Fail(c, http.StatusBadRequest, "invalid metricCode")
+		return
 	}
 
 	resp, err := h.svc.Monitor(params, currentUserID(c))
@@ -244,25 +304,68 @@ func (h *TicketHandler) Monitor(c *gin.Context) {
 	handler.OK(c, resp)
 }
 
+func isValidTicketMonitorRiskLevel(riskLevel string) bool {
+	switch strings.TrimSpace(riskLevel) {
+	case "", "all", "stuck", "blocked", "risk":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidTicketMonitorMetricCode(metricCode string) bool {
+	switch strings.TrimSpace(metricCode) {
+	case "", "all",
+		"active_total",
+		"blocked_total",
+		"stuck_total",
+		"risk_total",
+		"sla_risk_total",
+		"ai_incident_total",
+		"completed_today_total",
+		"smart_active_total",
+		"classic_active_total":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *TicketHandler) DecisionQuality(c *gin.Context) {
-	windowDays, _ := strconv.Atoi(c.DefaultQuery("windowDays", "30"))
+	windowDays, err := strconv.Atoi(c.DefaultQuery("windowDays", "30"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid windowDays")
+		return
+	}
+	if windowDays <= 0 || windowDays > 180 {
+		handler.Fail(c, http.StatusBadRequest, "invalid windowDays")
+		return
+	}
 	dimension := c.DefaultQuery("dimension", "service")
+	if !isValidDecisionQualityDimension(dimension) {
+		handler.Fail(c, http.StatusBadRequest, "invalid dimension")
+		return
+	}
 
 	var serviceID *uint
 	if v := c.Query("serviceId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			serviceID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid serviceId")
+			return
 		}
+		uid := uint(id)
+		serviceID = &uid
 	}
 	var departmentID *uint
 	if v := c.Query("departmentId"); v != "" {
 		id, err := strconv.ParseUint(v, 10, 64)
-		if err == nil {
-			uid := uint(id)
-			departmentID = &uid
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid departmentId")
+			return
 		}
+		uid := uint(id)
+		departmentID = &uid
 	}
 
 	resp, err := h.svc.DecisionQuality(windowDays, dimension, serviceID, departmentID)
@@ -271,6 +374,54 @@ func (h *TicketHandler) DecisionQuality(c *gin.Context) {
 		return
 	}
 	handler.OK(c, resp)
+}
+
+func isValidDecisionQualityDimension(dimension string) bool {
+	switch strings.TrimSpace(strings.ToLower(dimension)) {
+	case "", "service", "department":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeTicketQueryStatus(status string) (string, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(status))
+	switch normalized {
+	case "", "all",
+		"active",
+		"terminal",
+		TicketStatusDecisioning,
+		TicketStatusSubmitted,
+		TicketStatusWaitingHuman,
+		TicketStatusApprovedDecisioning,
+		TicketStatusRejectedDecisioning,
+		TicketStatusExecutingAction,
+		TicketStatusCompleted,
+		TicketStatusRejected,
+		TicketStatusWithdrawn,
+		TicketStatusCancelled,
+		TicketStatusFailed:
+		if normalized == "all" {
+			return "", true
+		}
+		return normalized, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeTicketQueryEngineType(engineType string) (string, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(engineType))
+	switch normalized {
+	case "", "all", "classic", "smart", "manual":
+		if normalized == "all" {
+			return "", true
+		}
+		return normalized, true
+	default:
+		return "", false
+	}
 }
 
 func (h *TicketHandler) Get(c *gin.Context) {
@@ -319,6 +470,10 @@ func (h *TicketHandler) Assign(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrTicketTerminal):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrInvalidActivityType):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrNoActiveAssignment):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
 		}
@@ -355,6 +510,10 @@ func (h *TicketHandler) Cancel(c *gin.Context) {
 		case errors.Is(err, ErrTicketNotFound):
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrTicketTerminal):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrInvalidActivityType):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrNoActiveAssignment):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
@@ -415,23 +574,42 @@ func (h *TicketHandler) Mine(c *gin.Context) {
 	userID, _ := c.Get("userId")
 	requesterID := userID.(uint)
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 	keyword := c.Query("keyword")
 	status := c.Query("status")
+	status, ok := normalizeTicketQueryStatus(status)
+	if !ok {
+		handler.Fail(c, http.StatusBadRequest, "invalid status")
+		return
+	}
 
 	var startDate *time.Time
 	if v := c.Query("startDate"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
-			startDate = &t
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid startDate")
+			return
 		}
+		startDate = &t
 	}
 	var endDate *time.Time
 	if v := c.Query("endDate"); v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil {
-			end := t.Add(24*time.Hour - time.Nanosecond)
-			endDate = &end
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid endDate")
+			return
 		}
+		end := t.Add(24*time.Hour - time.Nanosecond)
+		endDate = &end
 	}
 
 	items, total, err := h.svc.Mine(requesterID, keyword, status, startDate, endDate, page, pageSize)
@@ -446,8 +624,16 @@ func (h *TicketHandler) PendingApprovals(c *gin.Context) {
 	userID, _ := c.Get("userId")
 	operatorID := userID.(uint)
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 	items, total, err := h.svc.PendingApprovals(operatorID, c.Query("keyword"), page, pageSize)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
@@ -460,8 +646,16 @@ func (h *TicketHandler) ApprovalHistory(c *gin.Context) {
 	userID, _ := c.Get("userId")
 	operatorID := userID.(uint)
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 	items, total, err := h.svc.ApprovalHistory(operatorID, c.Query("keyword"), page, pageSize)
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
@@ -578,7 +772,7 @@ func (h *TicketHandler) Signal(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrTicketTerminal):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
-		case errors.Is(err, ErrActivityNotWait), errors.Is(err, engine.ErrActivityNotActive):
+		case errors.Is(err, ErrActivityNotWait), errors.Is(err, engine.ErrActivityNotFound), errors.Is(err, engine.ErrActivityNotActive):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
@@ -648,6 +842,10 @@ func (h *TicketHandler) OverrideJump(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrTicketTerminal):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrInvalidActivityType):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrNoActiveAssignment):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
 		}
@@ -691,6 +889,8 @@ func (h *TicketHandler) OverrideReassign(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrTicketTerminal):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrNoActiveAssignment):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
 		}
@@ -731,7 +931,9 @@ func (h *TicketHandler) Recover(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrTicketNotFound):
 			handler.Fail(c, http.StatusNotFound, err.Error())
-		case errors.Is(err, ErrTicketTerminal), errors.Is(err, ErrInvalidRecoveryAction):
+		case errors.Is(err, ErrTicketTerminal), errors.Is(err, ErrInvalidRecoveryAction),
+			errors.Is(err, ErrRetryAIOnlyForSmart), errors.Is(err, ErrHandoffHumanOnlyForSmart),
+			errors.Is(err, ErrRecoveryOperatorRequired):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrNotRequester):
 			handler.Fail(c, http.StatusForbidden, err.Error())
@@ -757,7 +959,10 @@ func (h *TicketHandler) RetryAI(c *gin.Context) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		handler.Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	userID, _ := c.Get("userId")
 	operatorID := userID.(uint)
@@ -771,8 +976,10 @@ func (h *TicketHandler) RetryAI(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrTicketNotFound):
 			handler.Fail(c, http.StatusNotFound, err.Error())
-		case errors.Is(err, ErrTicketTerminal):
+		case errors.Is(err, ErrTicketTerminal), errors.Is(err, ErrRetryAIOnlyForSmart), errors.Is(err, ErrRecoveryOperatorRequired):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrRecoveryActionTooFrequent):
+			handler.Fail(c, http.StatusConflict, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
 		}

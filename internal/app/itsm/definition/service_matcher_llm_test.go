@@ -4,6 +4,7 @@ import (
 	"context"
 	. "metis/internal/app/itsm/config"
 	. "metis/internal/app/itsm/domain"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -204,5 +205,143 @@ func TestLLMServiceMatcher_RequiresConfiguredServiceMatcherEngine(t *testing.T) 
 
 	if _, _, err := matcher.MatchServices(context.Background(), "我要申请VPN"); err == nil {
 		t.Fatal("expected missing service matcher engine configuration to fail")
+	}
+}
+
+func TestLLMServiceMatcher_GuardsAndClientFailures(t *testing.T) {
+	t.Run("empty query and missing dependencies are rejected", func(t *testing.T) {
+		db := newTestDB(t)
+		matcher := newTestLLMServiceMatcher(t, &fakeServiceMatchLLMClient{}, db)
+		if _, _, err := matcher.MatchServices(context.Background(), "   "); err == nil || !strings.Contains(err.Error(), "query is required") {
+			t.Fatalf("expected empty query guard, got %v", err)
+		}
+
+		noDB := NewLLMServiceMatcher(nil, fakeServiceMatchConfigProvider{}, nil)
+		if _, _, err := noDB.MatchServices(context.Background(), "我要申请VPN"); err == nil || !strings.Contains(err.Error(), "database is not configured") {
+			t.Fatalf("expected missing database guard, got %v", err)
+		}
+
+		noCfg := NewLLMServiceMatcher(db, nil, nil)
+		if _, _, err := noCfg.MatchServices(context.Background(), "我要申请VPN"); err == nil || !strings.Contains(err.Error(), "config provider is not configured") {
+			t.Fatalf("expected missing config guard, got %v", err)
+		}
+	})
+
+	t.Run("client factory and upstream chat errors surface", func(t *testing.T) {
+		db := newTestDB(t)
+		seedLLMMatcherCatalogAndServices(t, db)
+
+		matcher := NewLLMServiceMatcher(
+			db,
+			fakeServiceMatchConfigProvider{cfg: aiapp.LLMToolRuntimeConfig{Model: "test-model", Protocol: llm.ProtocolOpenAI, APIKey: "key", TimeoutSeconds: 30}},
+			func(protocol, baseURL, apiKey string) (llm.Client, error) {
+				return nil, errors.New("factory down")
+			},
+		)
+		if _, _, err := matcher.MatchServices(context.Background(), "我要申请VPN"); err == nil || !strings.Contains(err.Error(), "create service match llm client") {
+			t.Fatalf("expected client factory error, got %v", err)
+		}
+
+		upstream := newTestLLMServiceMatcher(t, &fakeServiceMatchLLMClient{err: errors.New("upstream down")}, db)
+		if _, _, err := upstream.MatchServices(context.Background(), "我要申请VPN"); err == nil || !strings.Contains(err.Error(), "service match llm chat") {
+			t.Fatalf("expected upstream chat error, got %v", err)
+		}
+	})
+}
+
+func TestLLMServiceMatcher_ReturnsNoMatchWhenNoActiveCandidatesRemain(t *testing.T) {
+	db := newTestDB(t)
+	vpn, copilot := seedLLMMatcherCatalogAndServices(t, db)
+	if err := db.Model(&ServiceDefinition{}).Where("id = ?", vpn.ID).Update("is_active", false).Error; err != nil {
+		t.Fatalf("disable vpn service: %v", err)
+	}
+	if err := db.Model(&ServiceDefinition{}).Where("id = ?", copilot.ID).Update("publish_health_status", "fail").Error; err != nil {
+		t.Fatalf("mark copilot unhealthy: %v", err)
+	}
+
+	matcher := NewLLMServiceMatcher(
+		db,
+		fakeServiceMatchConfigProvider{cfg: aiapp.LLMToolRuntimeConfig{Model: "test-model", Protocol: llm.ProtocolOpenAI, APIKey: "key", TimeoutSeconds: 30}},
+		func(protocol, baseURL, apiKey string) (llm.Client, error) {
+			t.Fatal("client factory should not be called when there are no candidates")
+			return nil, nil
+		},
+	)
+
+	matches, decision, err := matcher.MatchServices(context.Background(), "我要开通服务")
+	if err != nil {
+		t.Fatalf("MatchServices: %v", err)
+	}
+	if decision.Kind != tools.MatchDecisionNoMatch || len(matches) != 0 {
+		t.Fatalf("expected no match when no active healthy services remain, got decision=%+v matches=%+v", decision, matches)
+	}
+}
+
+func TestLLMServiceMatcher_ParseDecisionRejectsEmptyClarificationCandidates(t *testing.T) {
+	db := newTestDB(t)
+	vpn, _ := seedLLMMatcherCatalogAndServices(t, db)
+	matcher := newTestLLMServiceMatcher(t, &fakeServiceMatchLLMClient{}, db)
+
+	_, _, err := matcher.parseDecision(&llm.ChatResponse{
+		ToolCalls: []llm.ToolCall{{Name: "need_clarification", Arguments: `{"service_ids":[],"question":"请选择"}`}},
+	}, []serviceMatchCandidate{{ID: vpn.ID, Name: vpn.Name}})
+	if err == nil || !strings.Contains(err.Error(), "at least one service_id") {
+		t.Fatalf("expected empty clarification candidates to fail, got %v", err)
+	}
+}
+
+func TestLLMServiceMatcher_ParseDecisionRejectsBlankClarificationQuestion(t *testing.T) {
+	db := newTestDB(t)
+	vpn, _ := seedLLMMatcherCatalogAndServices(t, db)
+	matcher := newTestLLMServiceMatcher(t, &fakeServiceMatchLLMClient{}, db)
+
+	_, _, err := matcher.parseDecision(&llm.ChatResponse{
+		ToolCalls: []llm.ToolCall{{Name: "need_clarification", Arguments: `{"service_ids":[` + strconv.FormatUint(uint64(vpn.ID), 10) + `],"question":"   "}`}},
+	}, []serviceMatchCandidate{{ID: vpn.ID, Name: vpn.Name}})
+	if err == nil || !strings.Contains(err.Error(), "clarification question") {
+		t.Fatalf("expected blank clarification question to fail, got %v", err)
+	}
+}
+
+func TestLLMServiceMatcher_LoadCandidatesBuildsCatalogPathAndTruncatesDescriptions(t *testing.T) {
+	db := newTestDB(t)
+
+	root := ServiceCatalog{Name: "基础设施", Code: "infra", IsActive: true}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatalf("create root catalog: %v", err)
+	}
+	child := ServiceCatalog{Name: "网络", Code: "infra-network", ParentID: &root.ID, IsActive: true}
+	if err := db.Create(&child).Error; err != nil {
+		t.Fatalf("create child catalog: %v", err)
+	}
+	desc := strings.Repeat("超长说明", 80)
+	early := ServiceDefinition{Name: "先建服务", Code: "svc-early", CatalogID: child.ID, Description: "短描述", SortOrder: 20, IsActive: true}
+	late := ServiceDefinition{Name: "后建服务", Code: "svc-late", CatalogID: child.ID, Description: desc, SortOrder: 10, IsActive: true}
+	if err := db.Create(&early).Error; err != nil {
+		t.Fatalf("create early service: %v", err)
+	}
+	if err := db.Create(&late).Error; err != nil {
+		t.Fatalf("create late service: %v", err)
+	}
+
+	matcher := newTestLLMServiceMatcher(t, &fakeServiceMatchLLMClient{}, db)
+	candidates, err := matcher.loadCandidates()
+	if err != nil {
+		t.Fatalf("loadCandidates: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("expected two candidates, got %+v", candidates)
+	}
+	if candidates[0].ID != late.ID || candidates[1].ID != early.ID {
+		t.Fatalf("expected sort_order asc ordering, got %+v", candidates)
+	}
+	if candidates[0].CatalogPath != "基础设施/网络" {
+		t.Fatalf("unexpected catalog path: %+v", candidates[0])
+	}
+	if !strings.HasSuffix(candidates[0].Description, "...") {
+		t.Fatalf("expected long description to be truncated, got %q", candidates[0].Description)
+	}
+	if candidates[1].Description != "短描述" {
+		t.Fatalf("expected short description to be preserved, got %q", candidates[1].Description)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"metis/internal/app/license/domain"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/do/v2"
@@ -55,7 +56,7 @@ func (h *LicenseeHandler) Create(c *gin.Context) {
 		Notes: req.Notes,
 	})
 	if err != nil {
-		if errors.Is(err, ErrLicenseeNameExists) {
+		if errors.Is(err, ErrLicenseeNameExists) || errors.Is(err, ErrInvalidLicenseeName) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -69,14 +70,26 @@ func (h *LicenseeHandler) Create(c *gin.Context) {
 }
 
 func (h *LicenseeHandler) List(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	params := LicenseeListParams{
 		Keyword:  c.Query("keyword"),
-		Status:   c.Query("status"),
+		Status:   normalizeLicenseeListStatus(c.Query("status")),
 		Page:     page,
 		PageSize: pageSize,
+	}
+	if !isValidLicenseeListStatus(params.Status) {
+		handler.Fail(c, http.StatusBadRequest, "invalid status")
+		return
 	}
 
 	items, total, err := h.svc.ListLicensees(params)
@@ -96,6 +109,23 @@ func (h *LicenseeHandler) List(c *gin.Context) {
 		"page":     page,
 		"pageSize": pageSize,
 	})
+}
+
+func isValidLicenseeListStatus(status string) bool {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "", "all", domain.LicenseeStatusActive, domain.LicenseeStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeLicenseeListStatus(status string) string {
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "all" {
+		return ""
+	}
+	return status
 }
 
 func (h *LicenseeHandler) Get(c *gin.Context) {
@@ -144,7 +174,7 @@ func (h *LicenseeHandler) Update(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, ErrLicenseeNameExists) {
+		if errors.Is(err, ErrLicenseeNameExists) || errors.Is(err, ErrInvalidLicenseeName) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}

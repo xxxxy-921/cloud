@@ -19,6 +19,7 @@ var (
 	ErrEscalationRuleNotFound = errors.New("escalation rule not found")
 	ErrEscalationLevelExists  = errors.New("escalation level already exists for this SLA and trigger type")
 	ErrEscalationTargetConfig = errors.New("invalid escalation target config")
+	ErrEscalationRuleInvalid  = errors.New("invalid escalation rule")
 )
 
 type EscalationRuleService struct {
@@ -32,7 +33,24 @@ func NewEscalationRuleService(i do.Injector) (*EscalationRuleService, error) {
 	return &EscalationRuleService{repo: repo, db: db}, nil
 }
 
+func (s *EscalationRuleService) ensureSLAExists(slaID uint) error {
+	var sla SLATemplate
+	if err := s.db.First(&sla, slaID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrSLATemplateNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *EscalationRuleService) Create(rule *EscalationRule) (*EscalationRule, error) {
+	if err := s.ensureSLAExists(rule.SLAID); err != nil {
+		return nil, err
+	}
+	if err := validateEscalationRuleBasics(rule.Level, rule.WaitMinutes); err != nil {
+		return nil, err
+	}
 	if err := validateEscalationTargetConfig(rule.ActionType, rule.TargetConfig); err != nil {
 		return nil, err
 	}
@@ -84,6 +102,9 @@ func (s *EscalationRuleService) Update(id uint, updates map[string]any) (*Escala
 	if v, ok := updates["target_config"].(JSONField); ok {
 		candidate.TargetConfig = v
 	}
+	if err := validateEscalationRuleBasics(candidate.Level, candidate.WaitMinutes); err != nil {
+		return nil, err
+	}
 	if err := validateEscalationTargetConfig(candidate.ActionType, candidate.TargetConfig); err != nil {
 		return nil, err
 	}
@@ -112,6 +133,9 @@ func (s *EscalationRuleService) Delete(id uint) error {
 }
 
 func (s *EscalationRuleService) ListBySLA(slaID uint) ([]EscalationRule, error) {
+	if err := s.ensureSLAExists(slaID); err != nil {
+		return nil, err
+	}
 	return s.repo.ListBySLA(slaID)
 }
 
@@ -167,6 +191,16 @@ func validateEscalationTargetConfig(actionType string, raw JSONField) error {
 		}
 	default:
 		return fmt.Errorf("%w: unsupported actionType %s", ErrEscalationTargetConfig, actionType)
+	}
+	return nil
+}
+
+func validateEscalationRuleBasics(level, waitMinutes int) error {
+	if level <= 0 {
+		return fmt.Errorf("%w: level must be positive", ErrEscalationRuleInvalid)
+	}
+	if waitMinutes < 0 {
+		return fmt.Errorf("%w: waitMinutes must be zero or positive", ErrEscalationRuleInvalid)
 	}
 	return nil
 }

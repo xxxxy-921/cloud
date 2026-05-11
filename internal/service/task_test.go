@@ -65,6 +65,25 @@ func seedTaskExecution(t *testing.T, db *gorm.DB, exec *model.TaskExecution) {
 	}
 }
 
+func TestNewTask_ConstructsService(t *testing.T) {
+	db := newTestDBForTask(t)
+	injector := do.New()
+	do.ProvideValue(injector, &database.DB{DB: db})
+	engine, err := scheduler.New(injector)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	do.ProvideValue(injector, engine)
+
+	svc, err := NewTask(injector)
+	if err != nil {
+		t.Fatalf("NewTask returned error: %v", err)
+	}
+	if svc.engine == nil || svc.store == nil {
+		t.Fatalf("expected task service dependencies to be wired, got %+v", svc)
+	}
+}
+
 func TestTaskServiceListTasks_WithTypeFilter(t *testing.T) {
 	db := newTestDBForTask(t)
 	svc := newTaskServiceForTest(t, db)
@@ -150,6 +169,20 @@ func TestTaskServiceGetTask_WithRecentExecutions(t *testing.T) {
 	}
 	if len(execs) != 3 {
 		t.Fatalf("expected 3 recent executions, got %d", len(execs))
+	}
+}
+
+func TestTaskServiceGetTask_NotFound(t *testing.T) {
+	db := newTestDBForTask(t)
+	svc := newTaskServiceForTest(t, db)
+	ctx := context.Background()
+
+	info, execs, err := svc.GetTask(ctx, "missing-task")
+	if err == nil {
+		t.Fatal("expected missing task error")
+	}
+	if info != nil || execs != nil {
+		t.Fatalf("expected nil task result on error, got info=%v execs=%v", info, execs)
 	}
 }
 

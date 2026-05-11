@@ -72,12 +72,18 @@ func validateFieldValue(field FormField, val any, path string) *FieldValidationE
 	switch field.Type {
 	case FieldText, FieldTextarea, FieldEmail, FieldURL, FieldSelect, FieldRadio,
 		FieldDate, FieldDatetime, FieldUserPicker, FieldDeptPicker, FieldRichText:
-		s, ok := val.(string)
-		if !ok {
-			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是字符串", field.Label)}
+		if field.Type == FieldSelect || field.Type == FieldRadio {
+			s, ok := optionValueString(val)
+			if !ok {
+				return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是可比较值", field.Label)}
+			}
+			if !optionContains(field.Options, s) {
+				return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 的值 %q 不在可选项中", field.Label, s)}
+			}
+			return nil
 		}
-		if (field.Type == FieldSelect || field.Type == FieldRadio) && !optionContains(field.Options, s) {
-			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 的值 %q 不在可选项中", field.Label, s)}
+		if _, ok := val.(string); !ok {
+			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是字符串", field.Label)}
 		}
 	case FieldNumber:
 		if !isNumber(val) {
@@ -94,9 +100,9 @@ func validateFieldValue(field FormField, val any, path string) *FieldValidationE
 			}
 			return nil
 		}
-		values, ok := toStringSlice(val)
+		values, ok := toOptionValueStrings(val)
 		if !ok {
-			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是字符串数组", field.Label)}
+			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是可比较值数组", field.Label)}
 		}
 		for _, item := range values {
 			if !optionContains(field.Options, item) {
@@ -104,9 +110,9 @@ func validateFieldValue(field FormField, val any, path string) *FieldValidationE
 			}
 		}
 	case FieldMultiSelect:
-		values, ok := toStringSlice(val)
+		values, ok := toOptionValueStrings(val)
 		if !ok {
-			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是字符串数组", field.Label)}
+			return &FieldValidationError{Field: path, Message: fmt.Sprintf("%s 必须是可比较值数组", field.Label)}
 		}
 		for _, item := range values {
 			if !optionContains(field.Options, item) {
@@ -205,6 +211,8 @@ func isEmptyFormValue(val any) bool {
 		return len(v) == 0
 	case []any:
 		return len(v) == 0
+	case []map[string]any:
+		return len(v) == 0
 	case map[string]any:
 		return len(v) == 0 || allMapValuesEmpty(v)
 	default:
@@ -232,6 +240,36 @@ func toStringSlice(val any) ([]string, bool) {
 		out := make([]string, 0, len(v))
 		for _, item := range v {
 			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func optionValueString(val any) (string, bool) {
+	switch v := val.(type) {
+	case string:
+		return v, true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, bool, json_number:
+		return fmt.Sprintf("%v", v), true
+	default:
+		return "", false
+	}
+}
+
+func toOptionValueStrings(val any) ([]string, bool) {
+	switch v := val.(type) {
+	case []string:
+		return v, true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := optionValueString(item)
 			if !ok {
 				return nil, false
 			}
@@ -378,7 +416,23 @@ func toFloat(v any) float64 {
 		return float64(n)
 	case int:
 		return float64(n)
+	case int8:
+		return float64(n)
+	case int16:
+		return float64(n)
+	case int32:
+		return float64(n)
 	case int64:
+		return float64(n)
+	case uint:
+		return float64(n)
+	case uint8:
+		return float64(n)
+	case uint16:
+		return float64(n)
+	case uint32:
+		return float64(n)
+	case uint64:
 		return float64(n)
 	case json_number:
 		f, _ := n.Float64()

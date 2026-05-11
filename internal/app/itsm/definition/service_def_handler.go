@@ -7,6 +7,7 @@ import (
 	. "metis/internal/app/itsm/domain"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/do/v2"
@@ -47,7 +48,7 @@ type CreateServiceDefRequest struct {
 	Code              string    `json:"code" binding:"required,max=64"`
 	Description       string    `json:"description" binding:"max=1024"`
 	CatalogID         uint      `json:"catalogId" binding:"required"`
-	EngineType        string    `json:"engineType" binding:"required,oneof=classic smart"`
+	EngineType        string    `json:"engineType" binding:"required,oneof=classic smart manual"`
 	SLAID             *uint     `json:"slaId"`
 	IntakeFormSchema  JSONField `json:"intakeFormSchema"`
 	WorkflowJSON      JSONField `json:"workflowJson"`
@@ -87,6 +88,8 @@ func (h *ServiceDefHandler) Create(c *gin.Context) {
 	result, err := h.svc.Create(svc)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrInvalidServiceName), errors.Is(err, ErrInvalidServiceCode):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrServiceCodeExists):
 			handler.Fail(c, http.StatusConflict, err.Error())
 		case errors.Is(err, ErrCatalogNotFound), errors.Is(err, ErrServiceEngineMismatch), errors.Is(err, ErrAgentNotAvailable), errors.Is(err, ErrSLATemplateUnavailable):
@@ -108,36 +111,62 @@ func (h *ServiceDefHandler) List(c *gin.Context) {
 	var catalogID *uint
 	if cidStr := c.Query("catalogId"); cidStr != "" {
 		cid, err := strconv.ParseUint(cidStr, 10, 64)
-		if err == nil {
-			v := uint(cid)
-			catalogID = &v
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid catalogId")
+			return
 		}
+		v := uint(cid)
+		catalogID = &v
 	}
 	var rootCatalogID *uint
 	if cidStr := c.Query("rootCatalogId"); cidStr != "" {
 		cid, err := strconv.ParseUint(cidStr, 10, 64)
-		if err == nil {
-			v := uint(cid)
-			rootCatalogID = &v
+		if err != nil {
+			handler.Fail(c, http.StatusBadRequest, "invalid rootCatalogId")
+			return
 		}
+		v := uint(cid)
+		rootCatalogID = &v
 	}
 	if catalogID != nil && rootCatalogID != nil {
 		handler.Fail(c, http.StatusBadRequest, "catalogId and rootCatalogId cannot be used together")
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid page")
+		return
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid pageSize")
+		return
+	}
 
 	var engineType *string
 	if et := c.Query("engineType"); et != "" {
-		engineType = &et
+		normalized := strings.TrimSpace(strings.ToLower(et))
+		if !isValidServiceEngineType(normalized) {
+			handler.Fail(c, http.StatusBadRequest, "invalid engineType")
+			return
+		}
+		engineType = &normalized
 	}
 
 	var isActive *bool
 	if v := c.Query("isActive"); v != "" {
-		b := v == "true"
-		isActive = &b
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true":
+			b := true
+			isActive = &b
+		case "false":
+			b := false
+			isActive = &b
+		default:
+			handler.Fail(c, http.StatusBadRequest, "invalid isActive")
+			return
+		}
 	}
 
 	items, total, err := h.svc.List(ServiceDefListParams{
@@ -159,6 +188,15 @@ func (h *ServiceDefHandler) List(c *gin.Context) {
 		result[i] = s.ToListItemResponse()
 	}
 	handler.OK(c, gin.H{"items": result, "total": total})
+}
+
+func isValidServiceEngineType(engineType string) bool {
+	switch strings.TrimSpace(strings.ToLower(engineType)) {
+	case "classic", "smart", "manual":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *ServiceDefHandler) Get(c *gin.Context) {
@@ -204,7 +242,7 @@ type UpdateServiceDefRequest struct {
 	Code              *string          `json:"code" binding:"omitempty,max=64"`
 	Description       *string          `json:"description" binding:"omitempty,max=1024"`
 	CatalogID         *uint            `json:"catalogId"`
-	EngineType        *string          `json:"engineType" binding:"omitempty,oneof=classic smart"`
+	EngineType        *string          `json:"engineType" binding:"omitempty,oneof=classic smart manual"`
 	SLAID             optionalUintJSON `json:"slaId"`
 	IntakeFormSchema  *JSONField       `json:"intakeFormSchema"`
 	WorkflowJSON      *JSONField       `json:"workflowJson"`
@@ -286,6 +324,8 @@ func (h *ServiceDefHandler) Update(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrServiceDefNotFound):
 			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrInvalidServiceName), errors.Is(err, ErrInvalidServiceCode):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrServiceCodeExists):
 			handler.Fail(c, http.StatusConflict, err.Error())
 		case errors.Is(err, ErrCatalogNotFound), errors.Is(err, ErrServiceEngineMismatch), errors.Is(err, ErrAgentNotAvailable), errors.Is(err, ErrSLATemplateUnavailable):

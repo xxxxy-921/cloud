@@ -26,6 +26,24 @@ const sidebars: SidebarsConfig = {
         'system-management/audit-log-management',
       ],
     },
+    {
+      type: 'category',
+      label: '许可管理',
+      items: [
+        'license-management/product-management',
+        'license-management/licensee-management',
+        'license-management/license-issuance',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'ITSM',
+      items: [
+        'itsm-management/service-catalog-management',
+        'itsm-management/ticket-monitoring',
+        'itsm-management/engine-settings',
+      ],
+    },
   ],
 };
 

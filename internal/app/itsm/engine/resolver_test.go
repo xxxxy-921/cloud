@@ -30,6 +30,35 @@ func TestParticipantResolverRequesterReturnsTicketRequester(t *testing.T) {
 	}
 }
 
+func TestParticipantResolverRequesterGuardsMissingAndAnonymousTickets(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&ticketModel{}); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+
+	resolver := NewParticipantResolver(nil)
+
+	if _, err := resolver.Resolve(db, 999999, Participant{Type: "requester"}); err == nil {
+		t.Fatal("expected missing ticket requester resolution to fail")
+	}
+
+	ticket := ticketModel{RequesterID: 0, Status: "submitted"}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create anonymous ticket: %v", err)
+	}
+
+	ids, err := resolver.Resolve(db, ticket.ID, Participant{Type: "requester"})
+	if err != nil {
+		t.Fatalf("resolve anonymous requester: %v", err)
+	}
+	if ids != nil {
+		t.Fatalf("expected nil ids for anonymous requester, got %+v", ids)
+	}
+}
+
 func TestParticipantResolverOrgTypesSingleSQLiteConnectionUseWorkflowTransaction(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -120,6 +149,76 @@ func TestParticipantResolverOrgTypesSingleSQLiteConnectionUseWorkflowTransaction
 				t.Fatalf("participant resolver %s blocked with a single SQLite connection", tc.name)
 			}
 		})
+	}
+}
+
+func TestParticipantResolverRequesterManagerGuardsMissingAndManagerlessTickets(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&ticketModel{}); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime, manager_id integer)`).Error; err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+
+	resolver := NewParticipantResolver(nil)
+
+	if _, err := resolver.Resolve(db, 999999, Participant{Type: "requester_manager"}); err == nil {
+		t.Fatal("expected missing ticket requester_manager resolution to fail")
+	}
+
+	if err := db.Exec(`INSERT INTO users (id, username, is_active, manager_id) VALUES (12, 'solo-requester', true, NULL)`).Error; err != nil {
+		t.Fatalf("seed requester user: %v", err)
+	}
+	ticket := ticketModel{RequesterID: 12, Status: "submitted"}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	ids, err := resolver.Resolve(db, ticket.ID, Participant{Type: "requester_manager"})
+	if err != nil {
+		t.Fatalf("resolve requester manager without manager: %v", err)
+	}
+	if ids != nil {
+		t.Fatalf("expected nil ids when requester has no manager, got %+v", ids)
+	}
+}
+
+func TestParticipantResolverResolveForToolParsesJSONArguments(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&ticketModel{}); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE users (id integer primary key, username text, is_active boolean, deleted_at datetime)`).Error; err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, username, is_active) VALUES (11, 'alice', true)`).Error; err != nil {
+		t.Fatalf("seed users: %v", err)
+	}
+	if err := db.Create(&ticketModel{ID: 1, RequesterID: 11, Status: "in_progress"}).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	resolver := NewParticipantResolver(nil)
+	ids, err := resolver.ResolveForTool(db, 1, []byte(`{"type":"user","value":"alice"}`))
+	if err != nil {
+		t.Fatalf("ResolveForTool: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != 11 {
+		t.Fatalf("expected alice to resolve to 11, got %+v", ids)
+	}
+
+	if _, err := resolver.ResolveForTool(db, 1, []byte(`{"value":"alice"}`)); err == nil {
+		t.Fatal("expected missing participant type to fail")
+	}
+	if _, err := resolver.ResolveForTool(db, 1, []byte(`not-json`)); err == nil {
+		t.Fatal("expected invalid json to fail")
 	}
 }
 

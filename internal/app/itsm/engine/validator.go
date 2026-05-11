@@ -872,7 +872,14 @@ func detectCycles(nodes []WFNode, edges []WFEdge) []ValidationError {
 						break
 					}
 				}
-				cyclePath := append(path[cycleStart:], next)
+				cyclePath := append([]string{}, path...)
+				if cycleStart >= 0 {
+					cyclePath = append(path[cycleStart:], next)
+				} else {
+					// Be conservative if the gray node is not in the current path slice:
+					// still surface a blocking cycle error instead of panicking.
+					cyclePath = append(cyclePath, next)
+				}
 				errs = append(errs, ValidationError{
 					Message: fmt.Sprintf("检测到环路: %s", strings.Join(cyclePath, " → ")),
 					Level:   "blocking",

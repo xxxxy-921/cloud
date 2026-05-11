@@ -3,6 +3,7 @@ package sla
 import (
 	"errors"
 	. "metis/internal/app/itsm/domain"
+	"strings"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -11,9 +12,11 @@ import (
 )
 
 var (
-	ErrSLATemplateNotFound = errors.New("SLA template not found")
-	ErrSLACodeExists       = errors.New("SLA code already exists")
-	ErrSLATemplateInUse    = errors.New("SLA template is referenced by active services")
+	ErrSLATemplateNotFound        = errors.New("SLA template not found")
+	ErrSLACodeExists              = errors.New("SLA code already exists")
+	ErrSLATemplateInUse           = errors.New("SLA template is referenced by active services")
+	ErrSLATemplateInvalidDuration = errors.New("SLA durations must be positive")
+	ErrSLATemplateInvalidIdentifier = errors.New("SLA template name and code must not be blank")
 )
 
 type SLATemplateService struct {
@@ -28,6 +31,14 @@ func NewSLATemplateService(i do.Injector) (*SLATemplateService, error) {
 }
 
 func (s *SLATemplateService) Create(sla *SLATemplate) (*SLATemplate, error) {
+	sla.Name = strings.TrimSpace(sla.Name)
+	sla.Code = strings.TrimSpace(sla.Code)
+	if sla.Name == "" || sla.Code == "" {
+		return nil, ErrSLATemplateInvalidIdentifier
+	}
+	if err := validateSLADurations(sla.ResponseMinutes, sla.ResolutionMinutes); err != nil {
+		return nil, err
+	}
 	if _, err := s.repo.FindByCode(sla.Code); err == nil {
 		return nil, ErrSLACodeExists
 	}
@@ -58,9 +69,32 @@ func (s *SLATemplateService) Update(id uint, updates map[string]any) (*SLATempla
 		return nil, err
 	}
 	if code, ok := updates["code"].(string); ok && code != existing.Code {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			return nil, ErrSLATemplateInvalidIdentifier
+		}
+		updates["code"] = code
 		if _, err := s.repo.FindByCode(code); err == nil {
 			return nil, ErrSLACodeExists
 		}
+	}
+	if name, ok := updates["name"].(string); ok {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, ErrSLATemplateInvalidIdentifier
+		}
+		updates["name"] = name
+	}
+	responseMinutes := existing.ResponseMinutes
+	if v, ok := updates["response_minutes"].(int); ok {
+		responseMinutes = v
+	}
+	resolutionMinutes := existing.ResolutionMinutes
+	if v, ok := updates["resolution_minutes"].(int); ok {
+		resolutionMinutes = v
+	}
+	if err := validateSLADurations(responseMinutes, resolutionMinutes); err != nil {
+		return nil, err
 	}
 	if isActive, ok := updates["is_active"].(bool); ok && !isActive && existing.IsActive {
 		if err := s.ensureNotReferencedByActiveService(id); err != nil {
@@ -99,6 +133,13 @@ func (s *SLATemplateService) ensureNotReferencedByActiveService(id uint) error {
 	}
 	if count > 0 {
 		return ErrSLATemplateInUse
+	}
+	return nil
+}
+
+func validateSLADurations(responseMinutes, resolutionMinutes int) error {
+	if responseMinutes <= 0 || resolutionMinutes <= 0 {
+		return ErrSLATemplateInvalidDuration
 	}
 	return nil
 }

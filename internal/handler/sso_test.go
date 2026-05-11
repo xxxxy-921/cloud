@@ -2,16 +2,21 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/glebarez/sqlite"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/samber/do/v2"
 	"golang.org/x/oauth2"
 	"gorm.io/gorm"
@@ -113,6 +118,98 @@ func (m *mockOIDCProvider) VerifyIDToken(ctx context.Context, token *oauth2.Toke
 		return m.verifyIDTokenFn(ctx, token)
 	}
 	return nil, fmt.Errorf("verify id token not implemented")
+}
+
+func newSSOOIDCDiscoveryServer() *httptest.Server {
+	mux := http.NewServeMux()
+	var issuer string
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                issuer,
+			"authorization_endpoint":                issuer + "/authorize",
+			"token_endpoint":                        issuer + "/token",
+			"jwks_uri":                              issuer + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
+	})
+	srv := httptest.NewServer(mux)
+	issuer = srv.URL
+	return srv
+}
+
+func newSignedIDTokenForSSOTest(t *testing.T) *gooidc.IDToken {
+	t.Helper()
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	var issuer string
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                issuer,
+			"authorization_endpoint":                issuer + "/authorize",
+			"token_endpoint":                        issuer + "/token",
+			"jwks_uri":                              issuer + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		pub := privateKey.PublicKey
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]any{{
+				"kty": "RSA",
+				"kid": "sso-test-key",
+				"use": "sig",
+				"alg": "RS256",
+				"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+			}},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	issuer = srv.URL
+	t.Cleanup(srv.Close)
+
+	op, err := identity.GetOIDCProvider(context.Background(), 998, &model.OIDCConfig{
+		IssuerURL: issuer,
+		ClientID:  "sso-client",
+	})
+	if err != nil {
+		t.Fatalf("get oidc provider: %v", err)
+	}
+	t.Cleanup(func() { identity.ClearOIDCProviderCache(998) })
+
+	raw, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"iss":     issuer,
+		"sub":     "sso-user",
+		"aud":     []string{"sso-client"},
+		"exp":     time.Now().Add(time.Hour).Unix(),
+		"iat":     time.Now().Unix(),
+		"email":   "sso@example.com",
+		"name":    "SSO User",
+		"picture": "https://example.com/avatar.png",
+	}).SignedString(privateKey)
+	if err != nil {
+		t.Fatalf("sign id token: %v", err)
+	}
+
+	tokenWithExtra := (&oauth2.Token{
+		AccessToken: "access-token",
+		TokenType:   "Bearer",
+		Expiry:      time.Now().Add(time.Hour),
+	}).WithExtra(map[string]any{"id_token": raw})
+
+	idToken, err := op.VerifyIDToken(context.Background(), tokenWithExtra)
+	if err != nil {
+		t.Fatalf("verify id token: %v", err)
+	}
+	return idToken
 }
 
 func TestSSOHandler_CheckDomain_Success(t *testing.T) {
@@ -267,6 +364,59 @@ func TestSSOHandler_InitiateSSO_NonOIDC(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSSOHandler_InitiateSSO_InvalidConfigAndDiscoveryFailure(t *testing.T) {
+	db := newTestDBForSSOHandler(t)
+	h := newSSOHandlerForTest(t, db)
+	invalid := seedIdentitySource(t, db, "Broken", "oidc", `{"issuerUrl":`, "", true)
+	r := setupSSORouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/auth/sso/%d/authorize", invalid.ID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for invalid OIDC config, got %d: %s", w.Code, w.Body.String())
+	}
+
+	good := seedIdentitySource(t, db, "Okta", "oidc", `{"issuerUrl":"https://example.com","clientId":"test"}`, "", true)
+	h.getOIDCProvider = func(ctx context.Context, sourceID uint, cfg *model.OIDCConfig) (oidcProvider, error) {
+		return nil, fmt.Errorf("discovery failed")
+	}
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/auth/sso/%d/authorize", good.ID), nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for discovery failure, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSSOHandler_InitiateSSO_WithPKCE(t *testing.T) {
+	db := newTestDBForSSOHandler(t)
+	h := newSSOHandlerForTest(t, db)
+	seeded := seedIdentitySource(t, db, "Okta", "oidc", `{"issuerUrl":"https://example.com","clientId":"test","usePkce":true}`, "", true)
+	var sawPKCE bool
+	h.getOIDCProvider = func(ctx context.Context, sourceID uint, cfg *model.OIDCConfig) (oidcProvider, error) {
+		return &mockOIDCProvider{
+			authURLFn: func(state string, pkce *identity.PKCEParams) string {
+				if pkce != nil && pkce.Verifier != "" && pkce.Challenge != "" {
+					sawPKCE = true
+				}
+				return "https://provider.example/authorize?state=" + state
+			},
+		}, nil
+	}
+	r := setupSSORouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/auth/sso/%d/authorize", seeded.ID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !sawPKCE {
+		t.Fatal("expected PKCE params to be passed to AuthURL")
 	}
 }
 
@@ -556,5 +706,102 @@ func TestSSOHandler_SSOCallback_ProvisionError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSSOHandlerResolveHelpers(t *testing.T) {
+	h := &SSOHandler{}
+
+	h.getOIDCProvider = func(ctx context.Context, sourceID uint, cfg *model.OIDCConfig) (oidcProvider, error) {
+		return &mockOIDCProvider{}, nil
+	}
+	if _, err := h.resolveOIDCProvider(context.Background(), 1, &model.OIDCConfig{}); err != nil {
+		t.Fatalf("expected resolveOIDCProvider override to be used, got %v", err)
+	}
+
+	h.extractClaims = func(idToken *gooidc.IDToken) (*identity.OIDCClaims, error) {
+		return &identity.OIDCClaims{Sub: "sub-1"}, nil
+	}
+	claims, err := h.resolveExtractClaims(&gooidc.IDToken{})
+	if err != nil || claims.Sub != "sub-1" {
+		t.Fatalf("expected resolveExtractClaims override, got %+v err=%v", claims, err)
+	}
+
+	h.provisionExternalUser = func(params service.ExternalUserParams) (*model.User, error) {
+		return &model.User{Username: "alice"}, nil
+	}
+	user, err := h.resolveProvisionExternalUser(service.ExternalUserParams{})
+	if err != nil || user.Username != "alice" {
+		t.Fatalf("expected resolveProvisionExternalUser override, got %+v err=%v", user, err)
+	}
+
+	h.generateTokenPair = func(user *model.User, ip, ua string) (*service.TokenPair, error) {
+		return &service.TokenPair{AccessToken: "token"}, nil
+	}
+	pair, err := h.resolveGenerateTokenPair(&model.User{}, "", "")
+	if err != nil || pair.AccessToken != "token" {
+		t.Fatalf("expected resolveGenerateTokenPair override, got %+v err=%v", pair, err)
+	}
+}
+
+func TestSSOHandlerResolveHelpers_Defaults(t *testing.T) {
+	discoverySrv := newSSOOIDCDiscoveryServer()
+	defer discoverySrv.Close()
+	t.Cleanup(func() { identity.ClearOIDCProviderCache(999) })
+
+	db := newSystemHandlerTestDB(t)
+	injector := newSystemInjector(t, db)
+	authSvc := do.MustInvoke[*service.AuthService](injector)
+	roleSvc := do.MustInvoke[*service.RoleService](injector)
+	userSvc := do.MustInvoke[*service.UserService](injector)
+
+	role, err := roleSvc.Create("普通用户", model.RoleUser, "", 1)
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	user, err := userSvc.Create("alice", "Password123!", "alice@example.com", "", role.ID)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	h := &SSOHandler{authSvc: authSvc}
+
+	provider, err := h.resolveOIDCProvider(context.Background(), 999, &model.OIDCConfig{
+		IssuerURL: discoverySrv.URL,
+		ClientID:  "client-id",
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("resolveOIDCProvider default returned (%v, %v)", provider, err)
+	}
+
+	claims, err := h.resolveExtractClaims(newSignedIDTokenForSSOTest(t))
+	if err != nil {
+		t.Fatalf("resolveExtractClaims default: %v", err)
+	}
+	if claims.Email != "sso@example.com" || claims.Sub != "sso-user" {
+		t.Fatalf("unexpected claims: %+v", claims)
+	}
+
+	provisioned, err := h.resolveProvisionExternalUser(service.ExternalUserParams{
+		Provider:          "oidc_999",
+		ExternalID:        "sub-999",
+		Email:             "jit@example.com",
+		DisplayName:       "JIT User",
+		DefaultRoleID:     role.ID,
+		PreferredUsername: "jit-user",
+	})
+	if err != nil {
+		t.Fatalf("resolveProvisionExternalUser default: %v", err)
+	}
+	if provisioned.Username != "jit-user" || provisioned.Email != "jit@example.com" {
+		t.Fatalf("unexpected provisioned user: %+v", provisioned)
+	}
+
+	pair, err := h.resolveGenerateTokenPair(user, "127.0.0.1", "test-agent")
+	if err != nil {
+		t.Fatalf("resolveGenerateTokenPair default: %v", err)
+	}
+	if pair.AccessToken == "" || pair.RefreshToken == "" || pair.UserID != user.ID {
+		t.Fatalf("unexpected token pair: %+v", pair)
 	}
 }

@@ -122,6 +122,8 @@ var AllowedSmartStepTypes = map[string]bool{
 	"notify": true, "form": true, "complete": true, "escalate": true,
 }
 
+var ErrSmartTaskSchedulerUnavailable = errors.New("smart task scheduler is not configured")
+
 // --- SmartEngine ---
 
 // SmartEngine implements WorkflowEngine via AI Agent-driven decisions.
@@ -158,6 +160,16 @@ func NewSmartEngine(
 // IsAvailable returns true if the smart engine has AI dependencies.
 func (e *SmartEngine) IsAvailable() bool {
 	return e.decisionExecutor != nil
+}
+
+func (e *SmartEngine) CanDispatchDecisionTask() error {
+	if !e.IsAvailable() {
+		return ErrSmartEngineUnavailable
+	}
+	if e.scheduler == nil {
+		return ErrSmartTaskSchedulerUnavailable
+	}
+	return nil
 }
 
 // SetActionExecutor injects the action executor for decision.execute_action tool support.
@@ -224,6 +236,9 @@ func (e *SmartEngine) Progress(ctx context.Context, tx *gorm.DB, params Progress
 	// Load and complete the activity
 	var activity activityModel
 	if err := tx.First(&activity, params.ActivityID).Error; err != nil {
+		return ErrActivityNotFound
+	}
+	if activity.TicketID != params.TicketID {
 		return ErrActivityNotFound
 	}
 	if activity.Status != ActivityPending && activity.Status != ActivityInProgress {
@@ -298,9 +313,11 @@ func (e *SmartEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPara
 	// Update ticket
 	now := time.Now()
 	if err := tx.Model(&ticketModel{}).Where("id = ?", params.TicketID).Updates(map[string]any{
-		"status":      ticketCancelStatus(params.EventType),
-		"outcome":     ticketCancelOutcome(params.EventType),
-		"finished_at": now,
+		"status":              ticketCancelStatus(params.EventType),
+		"outcome":             ticketCancelOutcome(params.EventType),
+		"finished_at":         now,
+		"current_activity_id": nil,
+		"assignee_id":         nil,
 	}).Error; err != nil {
 		return err
 	}
@@ -758,7 +775,7 @@ func findActiveServiceActionByCodeAliases(tx *gorm.DB, serviceID uint, codes []s
 	for _, code := range codes {
 		err := tx.Table("itsm_service_actions").
 			Where("service_id = ? AND code = ? AND is_active = ? AND deleted_at IS NULL", serviceID, code, true).
-			Select("id, name, code, service_id, is_active, config_json").
+			Select("id, name, code, service_id, is_active, action_type, config_json").
 			First(action).Error
 		if err == nil {
 			return nil
@@ -916,7 +933,7 @@ func (e *SmartEngine) executeParallelPlan(tx *gorm.DB, ticketID uint, plan *Deci
 			e.createRequesterAssignment(tx, ticketID, act.ID)
 		} else if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
 			e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
-		} else if da.Type == "process" || da.Type == "form" {
+		} else if da.Type == "process" || da.Type == "form" || da.Type == "approve" {
 			e.tryFallbackAssignment(tx, ticketID, act.ID)
 		}
 
@@ -958,7 +975,7 @@ func (e *SmartEngine) executeSinglePlan(tx *gorm.DB, ticketID uint, plan *Decisi
 	planJSON := mustJSON(plan)
 	da := plan.Activities[0]
 	status := ActivityInProgress
-	if da.Type == "form" || da.Type == "process" {
+	if da.Type == "form" || da.Type == "process" || da.Type == "approve" {
 		status = ActivityPending
 	}
 
@@ -1319,6 +1336,10 @@ func (e *SmartEngine) validateDecisionPlan(tx *gorm.DB, ticketID uint, plan *Dec
 			if parseErr == nil {
 				nodeMap, _ := def.BuildMaps()
 				if node, ok := nodeMap[a.NodeID]; ok {
+					if normalizedType, changed := normalizeDecisionActivityType(plan.NextStepType, a.Type, node.Type); changed {
+						plan.Activities[i].Type = normalizedType
+						a.Type = normalizedType
+					}
 					if node.Type != a.Type && !(a.Type == "approve" && node.Type == "process") {
 						slog.Warn("decision plan node_id type mismatch, clearing",
 							"activity_index", i, "node_id", a.NodeID,
@@ -1352,7 +1373,11 @@ func (e *SmartEngine) hasResolvableHumanParticipant(tx *gorm.DB, a DecisionActiv
 		return true
 	}
 	if a.ParticipantType == "position_department" && a.PositionCode != "" && a.DepartmentCode != "" {
-		return true
+		var positionID, departmentID uint
+		tx.Table("positions").Where("code = ?", a.PositionCode).Select("id").Scan(&positionID)
+		tx.Table("departments").Where("code = ?", a.DepartmentCode).Select("id").Scan(&departmentID)
+		userIDs, err := resolveUsersByPositionDepartmentInTx(tx, positionID, departmentID)
+		return err == nil && len(userIDs) > 0
 	}
 	if a.ParticipantType == "requester" {
 		return true
@@ -1481,11 +1506,17 @@ func collaborationSpecRequestKindPositions(tx *gorm.DB, ticketID uint, spec stri
 }
 
 func looksLikeVPNRequestKindSpec(spec string) bool {
-	return strings.Contains(spec, "form.request_kind") &&
+	if strings.Contains(spec, "form.request_kind") &&
 		strings.Contains(spec, "network_admin") &&
 		strings.Contains(spec, "security_admin") &&
 		strings.Contains(spec, "online_support") &&
-		strings.Contains(spec, "security_compliance")
+		strings.Contains(spec, "security_compliance") {
+		return true
+	}
+	return strings.Contains(spec, "访问原因包括线上支持") &&
+		strings.Contains(spec, "交给信息部网络管理员处理") &&
+		strings.Contains(spec, "交给信息部信息安全管理员处理") &&
+		strings.Contains(spec, "安全合规事项")
 }
 
 func collaborationSpecAccessPurposePosition(tx *gorm.DB, ticketID uint, spec string) (string, bool, error) {
@@ -1726,6 +1757,15 @@ func (e *SmartEngine) validateNoDuplicateCompletedHumanActivity(tx *gorm.DB, tic
 				return err
 			}
 			existingSignatures := participantSignaturesForAssignments(assignments)
+			// Allow explicitly justified recovery on the same rejected human path.
+			// The dedicated rejected-recovery validator will enforce whether the
+			// recovery path is actually permitted by collaborationSpec/workflow.
+			if !isPositiveActivityOutcome(existing.TransitionOutcome) &&
+				hasExplicitRecoveryIntent(plannedInstructions) &&
+				len(plannedSignatures) > 0 &&
+				participantSignaturesOverlap(plannedSignatures, existingSignatures) {
+				continue
+			}
 			if len(plannedSignatures) == 0 || participantSignaturesOverlap(plannedSignatures, existingSignatures) {
 				return fmt.Errorf("activities[%d] 重复创建已完成的人工活动：%s / %s", i, da.Type, plannedName)
 			}
@@ -1994,8 +2034,20 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
+func normalizeDecisionActivityType(nextStepType string, activityType string, nodeType string) (string, bool) {
+	if nextStepType == NodeApprove && activityType == NodeProcess {
+		return NodeApprove, true
+	}
+	if nodeType == NodeApprove && activityType == NodeProcess {
+		return NodeApprove, true
+	}
+	return activityType, false
+}
+
 func decisionActivityName(da DecisionActivity) string {
 	switch da.Type {
+	case "approve":
+		return "审批"
 	case "process":
 		return "处理"
 	case "action":
@@ -2290,13 +2342,16 @@ func (e *SmartEngine) ExecuteDecisionPlan(tx *gorm.DB, ticketID uint, plan *Deci
 
 // SubmitProgressTask submits an async smart-progress task.
 func (e *SmartEngine) SubmitProgressTask(payload json.RawMessage) error {
-	if e.scheduler != nil {
-		return e.scheduler.SubmitTask("itsm-smart-progress", payload)
+	if err := e.CanDispatchDecisionTask(); err != nil {
+		return err
 	}
-	return nil
+	return e.scheduler.SubmitTask("itsm-smart-progress", payload)
 }
 
 func (e *SmartEngine) SubmitProgressTaskTx(tx *gorm.DB, payload json.RawMessage) error {
+	if err := e.CanDispatchDecisionTask(); err != nil {
+		return err
+	}
 	return submitTaskInTx(e.scheduler, tx, "itsm-smart-progress", payload)
 }
 
@@ -2435,7 +2490,7 @@ func (e *SmartEngine) buildInitialSeed(tx *gorm.DB, ticketID uint, svc *serviceM
 		}
 	}
 
-	allowedSteps := []string{"process", "action", "notify", "form", "complete", "escalate"}
+	allowedSteps := []string{"approve", "process", "action", "notify", "form", "complete", "escalate"}
 	if IsTerminalTicketStatus(ticket.Status) {
 		allowedSteps = []string{}
 	}
@@ -2563,6 +2618,7 @@ func normalizedTriggerReason(completedActivityID *uint, triggerReasons ...string
 }
 
 func normalizedDecisionMode(decisionMode string) string {
+	decisionMode = strings.TrimSpace(decisionMode)
 	if decisionMode == "" {
 		return "direct_first"
 	}
@@ -2666,7 +2722,7 @@ const agenticOutputFormat = "## 输出要求\n\n" +
 	"  \"execution_mode\": \"single|parallel\",\n" +
 	"  \"activities\": [\n" +
 	"    {\n" +
-	"      \"type\": \"process|action|notify|form\",\n" +
+	"      \"type\": \"approve|process|action|notify|form\",\n" +
 	"      \"participant_type\": \"requester|user|position_department\",\n" +
 	"      \"participant_id\": 42,\n" +
 	"      \"position_code\": \"db_admin\",\n" +

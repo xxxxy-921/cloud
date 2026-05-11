@@ -156,6 +156,20 @@ func TestChannelHandlerGet_NotFound(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerGet_InvalidID(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/abc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
 func TestChannelHandlerCreate_Success(t *testing.T) {
 	db := newTestDBForChannelHandler(t)
 	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
@@ -198,6 +212,21 @@ func TestChannelHandlerCreate_InvalidType(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerCreate_InvalidBody(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestChannelHandlerUpdate_Success(t *testing.T) {
 	db := newTestDBForChannelHandler(t)
 	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
@@ -237,6 +266,29 @@ func TestChannelHandlerUpdate_NotFound(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerUpdate_InvalidIDAndBody(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	seeded := seedChannel(t, db, "SMTP", "email", `{}`, true)
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/abc", bytes.NewReader([]byte(`{"name":"New","config":"{}"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid id, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/channels/%d", seeded.ID), bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid body, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestChannelHandlerDelete_Success(t *testing.T) {
 	db := newTestDBForChannelHandler(t)
 	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
@@ -266,6 +318,20 @@ func TestChannelHandlerDelete_NotFound(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerDelete_InvalidID(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/channels/abc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
 func TestChannelHandlerToggle(t *testing.T) {
 	db := newTestDBForChannelHandler(t)
 	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
@@ -284,6 +350,34 @@ func TestChannelHandlerToggle(t *testing.T) {
 	data := resp["data"].(map[string]any)
 	if data["enabled"].(bool) {
 		t.Fatal("expected channel to be disabled after toggle")
+	}
+}
+
+func TestChannelHandlerToggle_NotFound(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/9999/toggle", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestChannelHandlerToggle_InvalidID(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/abc/toggle", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -332,6 +426,26 @@ func TestChannelHandlerTest_Failure(t *testing.T) {
 	}
 }
 
+func TestChannelHandlerTest_InvalidIDAndNotFound(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/abc/test", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid id, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/channels/9999/test", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing channel, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestChannelHandlerSendTest_Success(t *testing.T) {
 	db := newTestDBForChannelHandler(t)
 	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
@@ -352,5 +466,109 @@ func TestChannelHandlerSendTest_Success(t *testing.T) {
 	data := resp["data"].(map[string]any)
 	if !data["success"].(bool) {
 		t.Fatalf("expected success true, got %v", data)
+	}
+}
+
+func TestChannelHandlerSendTest_FailurePaths(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &failingChannelDriver{})
+	seeded := seedChannel(t, db, "Send", "email", `{}`, true)
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/channels/%d/send-test", seeded.ID), bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/channels/9999/send-test", bytes.NewReader([]byte(`{"to":"to@example.com","subject":"Hello","body":"World"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/channels/%d/send-test", seeded.ID), bytes.NewReader([]byte(`{"to":"to@example.com","subject":"Hello","body":"World"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]any)
+	if data["success"].(bool) {
+		t.Fatalf("expected success false, got %v", data)
+	}
+}
+
+func TestChannelHandlerSendTest_InvalidID(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	r := setupChannelRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/abc/send-test", bytes.NewReader([]byte(`{"to":"to@example.com","subject":"Hello","body":"World"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestChannelHandler_InternalErrors(t *testing.T) {
+	db := newTestDBForChannelHandler(t)
+	h := newChannelHandlerForTest(t, db, &stubChannelDriver{})
+	seeded := seedChannel(t, db, "SMTP", "email", `{}`, true)
+	r := setupChannelRouter(h)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql db: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		code   int
+	}{
+		{"list", http.MethodGet, "/api/v1/channels?page=1&pageSize=10", "", http.StatusInternalServerError},
+		{"get", http.MethodGet, fmt.Sprintf("/api/v1/channels/%d", seeded.ID), "", http.StatusInternalServerError},
+		{"update", http.MethodPut, fmt.Sprintf("/api/v1/channels/%d", seeded.ID), `{"name":"New","config":"{}"}`, http.StatusInternalServerError},
+		{"delete", http.MethodDelete, fmt.Sprintf("/api/v1/channels/%d", seeded.ID), "", http.StatusInternalServerError},
+		{"toggle", http.MethodPut, fmt.Sprintf("/api/v1/channels/%d/toggle", seeded.ID), "", http.StatusInternalServerError},
+		{"test", http.MethodPost, fmt.Sprintf("/api/v1/channels/%d/test", seeded.ID), "", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, bytes.NewReader([]byte(tc.body)))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.code {
+				t.Fatalf("expected %s => %d, got %d: %s", tc.name, tc.code, w.Code, w.Body.String())
+			}
+			if tc.name == "test" {
+				var resp map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("invalid JSON: %v", err)
+				}
+				data := resp["data"].(map[string]any)
+				if data["success"].(bool) {
+					t.Fatalf("expected failure payload, got %v", data)
+				}
+			}
+		})
 	}
 }

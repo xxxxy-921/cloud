@@ -56,6 +56,27 @@ func newRoleServiceForTest(t *testing.T, db *gorm.DB) *RoleService {
 	}
 }
 
+func TestNewRole_ConstructsService(t *testing.T) {
+	db := newTestDBForRole(t)
+	injector := do.New()
+	do.ProvideValue(injector, &database.DB{DB: db})
+	enforcer, err := casbinpkg.NewEnforcerWithDB(db)
+	if err != nil {
+		t.Fatalf("create casbin enforcer: %v", err)
+	}
+	do.ProvideValue(injector, enforcer)
+	do.Provide(injector, repository.NewRole)
+	do.Provide(injector, NewCasbin)
+
+	svc, err := NewRole(injector)
+	if err != nil {
+		t.Fatalf("NewRole returned error: %v", err)
+	}
+	if svc.roleRepo == nil || svc.casbinSvc == nil {
+		t.Fatalf("expected dependencies wired, got %+v", svc)
+	}
+}
+
 func seedRoleForTest(t *testing.T, db *gorm.DB, name, code string, isSystem bool) *model.Role {
 	t.Helper()
 	role := &model.Role{Name: name, Code: code, IsSystem: isSystem}
@@ -131,6 +152,21 @@ func TestRoleServiceGetByID_ReturnsNotFoundForMissing(t *testing.T) {
 	}
 }
 
+func TestRoleServiceList_Success(t *testing.T) {
+	db := newTestDBForRole(t)
+	svc := newRoleServiceForTest(t, db)
+	seedRoleForTest(t, db, "Admin", "admin", false)
+	seedRoleForTest(t, db, "Editor", "editor", false)
+
+	items, total, err := svc.List(0, 0)
+	if err != nil {
+		t.Fatalf("list roles: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected 2 roles, got total=%d len=%d", total, len(items))
+	}
+}
+
 func TestRoleServiceGetByIDWithDeptScope_Success(t *testing.T) {
 	db := newTestDBForRole(t)
 	svc := newRoleServiceForTest(t, db)
@@ -153,6 +189,16 @@ func TestRoleServiceGetByIDWithDeptScope_Success(t *testing.T) {
 	}
 	if len(foundDeptIDs) != 3 || foundDeptIDs[0] != 1 || foundDeptIDs[1] != 2 || foundDeptIDs[2] != 3 {
 		t.Fatalf("unexpected dept IDs: %v", foundDeptIDs)
+	}
+}
+
+func TestRoleServiceGetByIDWithDeptScope_ReturnsNotFoundForMissing(t *testing.T) {
+	db := newTestDBForRole(t)
+	svc := newRoleServiceForTest(t, db)
+
+	_, _, err := svc.GetByIDWithDeptScope(999)
+	if !errors.Is(err, ErrRoleNotFound) {
+		t.Fatalf("expected ErrRoleNotFound, got %v", err)
 	}
 }
 
@@ -401,5 +447,71 @@ func TestRoleServiceDelete_ReturnsNotFoundForMissing(t *testing.T) {
 	err := svc.Delete(999)
 	if !errors.Is(err, ErrRoleNotFound) {
 		t.Fatalf("expected ErrRoleNotFound, got %v", err)
+	}
+}
+
+func TestRoleServiceDelete_ReturnsCountErrorWhenUsersTableMissing(t *testing.T) {
+	db := newTestDBForRole(t)
+	svc := newRoleServiceForTest(t, db)
+	role := seedRoleForTest(t, db, "Editor", "editor", false)
+
+	if err := db.Exec("DROP TABLE users").Error; err != nil {
+		t.Fatalf("drop users table: %v", err)
+	}
+
+	if err := svc.Delete(role.ID); err == nil {
+		t.Fatal("expected delete to fail when user count query errors")
+	}
+}
+
+func TestRoleService_DBErrors(t *testing.T) {
+	db := newTestDBForRole(t)
+	svc := newRoleServiceForTest(t, db)
+	role := seedRoleForTest(t, db, "Editor", "editor", false)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql db: %v", err)
+	}
+
+	if _, err := svc.Create("Admin", "admin", "Admin", 0); err == nil {
+		t.Fatal("expected Create to fail after db close")
+	}
+
+	newName := "Renamed"
+	if _, err := svc.Update(role.ID, UpdateRoleParams{Name: &newName}); err == nil {
+		t.Fatal("expected Update to fail after db close")
+	}
+
+	if _, err := svc.UpdateDataScope(role.ID, model.DataScopeAll, nil); err == nil {
+		t.Fatal("expected UpdateDataScope to fail after db close")
+	}
+
+	if err := svc.Delete(role.ID); err == nil {
+		t.Fatal("expected Delete to fail after db close")
+	}
+}
+
+func TestRoleService_GettersReturnDBErrors(t *testing.T) {
+	db := newTestDBForRole(t)
+	svc := newRoleServiceForTest(t, db)
+	role := seedRoleForTest(t, db, "Editor", "editor", false)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql db: %v", err)
+	}
+
+	if _, err := svc.GetByID(role.ID); err == nil {
+		t.Fatal("expected GetByID to fail after db close")
+	}
+	if _, _, err := svc.GetByIDWithDeptScope(role.ID); err == nil {
+		t.Fatal("expected GetByIDWithDeptScope to fail after db close")
 	}
 }

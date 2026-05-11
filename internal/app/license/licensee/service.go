@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"metis/internal/app/license/domain"
+	"strings"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -13,6 +14,7 @@ var (
 	ErrLicenseeNotFound      = errors.New("error.license.licensee_not_found")
 	ErrLicenseeNameExists    = errors.New("error.license.licensee_name_exists")
 	ErrLicenseeCodeCollision = errors.New("error.license.licensee_code_collision")
+	ErrInvalidLicenseeName   = errors.New("error.license.invalid_licensee_name")
 	ErrLicenseeInvalidStatus = errors.New("error.license.licensee_invalid_status")
 )
 
@@ -32,6 +34,11 @@ type CreateLicenseeParams struct {
 }
 
 func (s *LicenseeService) CreateLicensee(params CreateLicenseeParams) (*domain.Licensee, error) {
+	params.Name = strings.TrimSpace(params.Name)
+	if params.Name == "" {
+		return nil, ErrInvalidLicenseeName
+	}
+
 	exists, err := s.repo.ExistsByName(params.Name)
 	if err != nil {
 		return nil, err
@@ -102,14 +109,18 @@ func (s *LicenseeService) UpdateLicensee(id uint, params UpdateLicenseeParams) (
 	}
 
 	if params.Name != nil && *params.Name != l.Name {
-		exists, err := s.repo.ExistsByName(*params.Name, id)
+		trimmedName := strings.TrimSpace(*params.Name)
+		if trimmedName == "" {
+			return nil, ErrInvalidLicenseeName
+		}
+		exists, err := s.repo.ExistsByName(trimmedName, id)
 		if err != nil {
 			return nil, err
 		}
 		if exists {
 			return nil, ErrLicenseeNameExists
 		}
-		l.Name = *params.Name
+		l.Name = trimmedName
 	}
 	if params.Notes != nil {
 		l.Notes = *params.Notes

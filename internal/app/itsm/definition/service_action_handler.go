@@ -61,6 +61,9 @@ func (h *ServiceActionHandler) Create(c *gin.Context) {
 		case errors.Is(err, ErrServiceDefNotFound):
 			handler.Fail(c, http.StatusNotFound, err.Error())
 			return
+		case errors.Is(err, ErrInvalidActionName), errors.Is(err, ErrInvalidActionCode):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
 		case errors.Is(err, ErrInvalidActionConfig):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
@@ -160,6 +163,8 @@ func (h *ServiceActionHandler) Update(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrServiceDefNotFound), errors.Is(err, ErrServiceActionNotFound):
 			handler.Fail(c, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrInvalidActionName), errors.Is(err, ErrInvalidActionCode):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrInvalidActionConfig):
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, ErrActionCodeExists):

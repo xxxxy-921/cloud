@@ -253,6 +253,16 @@ func TestMessageChannelServiceToggleEnabled(t *testing.T) {
 	}
 }
 
+func TestMessageChannelServiceToggleEnabled_NotFound(t *testing.T) {
+	db := newTestDBForMessageChannel(t)
+	svc := newMessageChannelServiceForTest(t, db, &stubDriver{})
+
+	_, err := svc.ToggleEnabled(9999)
+	if !errors.Is(err, ErrChannelNotFound) {
+		t.Fatalf("expected ErrChannelNotFound, got %v", err)
+	}
+}
+
 func TestMessageChannelServiceTestChannel_Success(t *testing.T) {
 	db := newTestDBForMessageChannel(t)
 	stub := &stubDriver{}
@@ -273,6 +283,18 @@ func TestMessageChannelServiceTestChannel_Failure(t *testing.T) {
 	err := svc.TestChannel(seeded.ID)
 	if err == nil || err.Error() != "auth failed" {
 		t.Fatalf("expected auth failed error, got %v", err)
+	}
+}
+
+func TestMessageChannelServiceTestChannel_InvalidConfig(t *testing.T) {
+	db := newTestDBForMessageChannel(t)
+	stub := &stubDriver{}
+	svc := newMessageChannelServiceForTest(t, db, stub)
+	seeded := seedMessageChannel(t, db, "SMTP", "email", `not-json`, true)
+
+	err := svc.TestChannel(seeded.ID)
+	if err == nil {
+		t.Fatal("expected invalid config error")
 	}
 }
 
@@ -301,5 +323,40 @@ func TestMessageChannelServiceSendTest_NotFound(t *testing.T) {
 	err := svc.SendTest(9999, []string{"to@example.com"}, "Subject", "Body")
 	if !errors.Is(err, ErrChannelNotFound) {
 		t.Fatalf("expected ErrChannelNotFound, got %v", err)
+	}
+}
+
+func TestMessageChannelServiceSend_SuccessAndDisabled(t *testing.T) {
+	db := newTestDBForMessageChannel(t)
+	stub := &stubDriver{}
+	svc := newMessageChannelServiceForTest(t, db, stub)
+	enabled := seedMessageChannel(t, db, "SMTP", "email", `{"host":"localhost"}`, true)
+	disabled := seedMessageChannel(t, db, "Disabled", "email", `{"host":"localhost"}`, false)
+	if err := db.Model(&model.MessageChannel{}).Where("id = ?", disabled.ID).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable channel: %v", err)
+	}
+
+	if err := svc.Send(enabled.ID, []string{"to@example.com"}, "Subject", "Body"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if stub.sent == nil || stub.sent.Subject != "Subject" {
+		t.Fatalf("expected sent payload, got %+v", stub.sent)
+	}
+
+	err := svc.Send(disabled.ID, []string{"to@example.com"}, "Subject", "Body")
+	if !errors.Is(err, ErrChannelDisabled) {
+		t.Fatalf("expected ErrChannelDisabled, got %v", err)
+	}
+}
+
+func TestMessageChannelServiceSend_InvalidConfig(t *testing.T) {
+	db := newTestDBForMessageChannel(t)
+	stub := &stubDriver{}
+	svc := newMessageChannelServiceForTest(t, db, stub)
+	seeded := seedMessageChannel(t, db, "SMTP", "email", `not-json`, true)
+
+	err := svc.Send(seeded.ID, []string{"to@example.com"}, "Subject", "Body")
+	if err == nil {
+		t.Fatal("expected invalid config error")
 	}
 }

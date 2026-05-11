@@ -122,3 +122,50 @@ func TestEscalationTargetReferenceValidation(t *testing.T) {
 		t.Fatalf("enabled priority rejected: %v", err)
 	}
 }
+
+func TestEscalationRuleServiceRejectsInvalidLevelAndWaitMinutes(t *testing.T) {
+	svc, db := newEscalationRuleServiceForTest(t)
+	sla := seedEscalationRuleTestSLA(t, db, "esc-invalid")
+	if err := db.AutoMigrate(&model.MessageChannel{}); err != nil {
+		t.Fatalf("migrate message channels: %v", err)
+	}
+	channel := model.MessageChannel{Name: "Email", Type: "smtp", Config: `{}`, Enabled: true}
+	if err := db.Create(&channel).Error; err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	validTarget := JSONField(fmt.Sprintf(`{"recipients":[{"type":"user","value":"1"}],"channelId":%d}`, channel.ID))
+	if _, err := svc.Create(&EscalationRule{
+		SLAID:        sla.ID,
+		TriggerType:  "response_timeout",
+		Level:        0,
+		WaitMinutes:  5,
+		ActionType:   "notify",
+		TargetConfig: validTarget,
+	}); !errors.Is(err, ErrEscalationRuleInvalid) {
+		t.Fatalf("invalid level create error = %v, want %v", err, ErrEscalationRuleInvalid)
+	}
+
+	rule, err := svc.Create(&EscalationRule{
+		SLAID:        sla.ID,
+		TriggerType:  "response_timeout",
+		Level:        1,
+		WaitMinutes:  5,
+		ActionType:   "notify",
+		TargetConfig: validTarget,
+	})
+	if err != nil {
+		t.Fatalf("seed valid rule: %v", err)
+	}
+
+	if _, err := svc.Update(rule.ID, map[string]any{"wait_minutes": -1}); !errors.Is(err, ErrEscalationRuleInvalid) {
+		t.Fatalf("invalid wait_minutes update error = %v, want %v", err, ErrEscalationRuleInvalid)
+	}
+}
+
+func TestEscalationRuleServiceDeleteMissingReturnsBusinessNotFound(t *testing.T) {
+	svc, _ := newEscalationRuleServiceForTest(t)
+	if err := svc.Delete(999999); !errors.Is(err, ErrEscalationRuleNotFound) {
+		t.Fatalf("delete missing escalation error = %v, want %v", err, ErrEscalationRuleNotFound)
+	}
+}

@@ -59,8 +59,16 @@ func (h *EscalationRuleHandler) Create(c *gin.Context) {
 
 	result, err := h.svc.Create(rule)
 	if err != nil {
+		if errors.Is(err, ErrSLATemplateNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
 		if errors.Is(err, ErrEscalationLevelExists) {
 			handler.Fail(c, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, ErrEscalationRuleInvalid) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		if errors.Is(err, ErrEscalationTargetConfig) {
@@ -84,6 +92,10 @@ func (h *EscalationRuleHandler) List(c *gin.Context) {
 
 	items, err := h.svc.ListBySLA(slaID)
 	if err != nil {
+		if errors.Is(err, ErrSLATemplateNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -105,9 +117,28 @@ type UpdateEscalationRuleRequest struct {
 }
 
 func (h *EscalationRuleHandler) Update(c *gin.Context) {
+	slaID, err := ParseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid SLA id")
+		return
+	}
 	escalationID, err := ParseParamID(c, "escalationId")
 	if err != nil {
 		handler.Fail(c, http.StatusBadRequest, "invalid escalation id")
+		return
+	}
+
+	existing, err := h.svc.Get(escalationID)
+	if err != nil {
+		if errors.Is(err, ErrEscalationRuleNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing.SLAID != slaID {
+		handler.Fail(c, http.StatusNotFound, ErrEscalationRuleNotFound.Error())
 		return
 	}
 
@@ -150,6 +181,10 @@ func (h *EscalationRuleHandler) Update(c *gin.Context) {
 			handler.Fail(c, http.StatusConflict, err.Error())
 			return
 		}
+		if errors.Is(err, ErrEscalationRuleInvalid) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, ErrEscalationTargetConfig) {
 			handler.Fail(c, http.StatusBadRequest, err.Error())
 			return
@@ -163,9 +198,28 @@ func (h *EscalationRuleHandler) Update(c *gin.Context) {
 }
 
 func (h *EscalationRuleHandler) Delete(c *gin.Context) {
+	slaID, err := ParseID(c)
+	if err != nil {
+		handler.Fail(c, http.StatusBadRequest, "invalid SLA id")
+		return
+	}
 	escalationID, err := ParseParamID(c, "escalationId")
 	if err != nil {
 		handler.Fail(c, http.StatusBadRequest, "invalid escalation id")
+		return
+	}
+
+	existing, err := h.svc.Get(escalationID)
+	if err != nil {
+		if errors.Is(err, ErrEscalationRuleNotFound) {
+			handler.Fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		handler.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing.SLAID != slaID {
+		handler.Fail(c, http.StatusNotFound, ErrEscalationRuleNotFound.Error())
 		return
 	}
 

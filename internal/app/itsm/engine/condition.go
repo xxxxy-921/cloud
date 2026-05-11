@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -199,6 +200,33 @@ func containsAny(fieldVal, condVal any) bool {
 			}
 		}
 		return false
+	case []string:
+		switch cond := condVal.(type) {
+		case []any:
+			for _, fieldItem := range field {
+				for _, condItem := range cond {
+					condStr := fmt.Sprintf("%v", condItem)
+					if strings.EqualFold(fieldItem, condStr) {
+						return true
+					}
+				}
+			}
+		case []string:
+			for _, fieldItem := range field {
+				for _, condItem := range cond {
+					if strings.EqualFold(fieldItem, condItem) {
+						return true
+					}
+				}
+			}
+		case string:
+			for _, fieldItem := range field {
+				if strings.Contains(strings.ToLower(fieldItem), strings.ToLower(cond)) {
+					return true
+				}
+			}
+		}
+		return false
 	}
 
 	fieldStr := fmt.Sprintf("%v", fieldVal)
@@ -243,9 +271,13 @@ func toFloat64(v any) float64 {
 		return float64(val)
 	case int:
 		return float64(val)
+	case int32:
+		return float64(val)
 	case int64:
 		return float64(val)
 	case uint:
+		return float64(val)
+	case uint32:
 		return float64(val)
 	case uint64:
 		return float64(val)
@@ -275,6 +307,11 @@ func isEmpty(v any) bool {
 	case bool:
 		return !val
 	default:
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Array, reflect.Map:
+			return rv.Len() == 0
+		}
 		return fmt.Sprintf("%v", v) == ""
 	}
 }

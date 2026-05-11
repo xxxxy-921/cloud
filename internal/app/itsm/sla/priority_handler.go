@@ -52,6 +52,14 @@ func (h *PriorityHandler) Create(c *gin.Context) {
 			handler.Fail(c, http.StatusConflict, err.Error())
 			return
 		}
+		if errors.Is(err, ErrPriorityInvalidValue) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, ErrPriorityInvalidIdentifier) {
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		handler.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -127,6 +135,10 @@ func (h *PriorityHandler) Update(c *gin.Context) {
 			handler.Fail(c, http.StatusNotFound, err.Error())
 		case errors.Is(err, ErrPriorityCodeExists):
 			handler.Fail(c, http.StatusConflict, err.Error())
+		case errors.Is(err, ErrPriorityInvalidIdentifier):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrPriorityInvalidValue):
+			handler.Fail(c, http.StatusBadRequest, err.Error())
 		default:
 			handler.Fail(c, http.StatusInternalServerError, err.Error())
 		}

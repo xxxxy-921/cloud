@@ -747,7 +747,7 @@ func seedButtons(db *gorm.DB, parent *model.Menu, buttons []model.Menu) {
 	}
 	for _, btn := range buttons {
 		var existing model.Menu
-		if tx := db.Where("permission = ?", btn.Permission).Limit(1).Find(&existing); tx.Error != nil {
+		if tx := db.Unscoped().Where("permission = ?", btn.Permission).Limit(1).Find(&existing); tx.Error != nil {
 			slog.Error("seed: failed to query button", "permission", btn.Permission, "error", tx.Error)
 			continue
 		} else if tx.RowsAffected == 0 {
@@ -757,6 +757,17 @@ func seedButtons(db *gorm.DB, parent *model.Menu, buttons []model.Menu) {
 				continue
 			}
 			slog.Info("seed: created menu", "name", btn.Name, "permission", btn.Permission)
+		} else if existing.DeletedAt.Valid || existing.Name != btn.Name || existing.Type != btn.Type || existing.Sort != btn.Sort || !sameMenuParent(existing.ParentID, &parent.ID) {
+			if err := db.Unscoped().Model(&existing).Updates(map[string]any{
+				"name":       btn.Name,
+				"type":       btn.Type,
+				"sort":       btn.Sort,
+				"parent_id":  parent.ID,
+				"deleted_at": nil,
+			}).Error; err != nil {
+				slog.Error("seed: failed to update button", "permission", btn.Permission, "error", err)
+				continue
+			}
 		}
 	}
 }
@@ -895,6 +906,9 @@ func seedPolicies(enforcer *casbin.Enforcer) error {
 	}
 
 	allPolicies := append(policies, menuPerms...)
+	if enforcer == nil {
+		return nil
+	}
 	for _, p := range allPolicies {
 		if has, _ := enforcer.HasPolicy(p); !has {
 			if _, err := enforcer.AddPolicy(p); err != nil {
@@ -921,12 +935,27 @@ func seedPriorities(db *gorm.DB) error {
 
 	for _, p := range priorities {
 		var existing Priority
-		if err := db.Where("code = ?", p.Code).First(&existing).Error; err != nil {
+		if tx := db.Unscoped().Where("code = ?", p.Code).Limit(1).Find(&existing); tx.Error != nil {
+			slog.Error("seed: failed to query priority", "code", p.Code, "error", tx.Error)
+			continue
+		} else if tx.RowsAffected == 0 {
 			if err := db.Create(&p).Error; err != nil {
 				slog.Error("seed: failed to create priority", "code", p.Code, "error", err)
 				continue
 			}
 			slog.Info("seed: created priority", "code", p.Code, "name", p.Name)
+		} else if existing.DeletedAt.Valid || existing.Name != p.Name || existing.Value != p.Value || existing.Color != p.Color || existing.Description != p.Description || existing.IsActive != p.IsActive {
+			if err := db.Unscoped().Model(&existing).Updates(map[string]any{
+				"name":        p.Name,
+				"value":       p.Value,
+				"color":       p.Color,
+				"description": p.Description,
+				"is_active":   p.IsActive,
+				"deleted_at":  nil,
+			}).Error; err != nil {
+				slog.Error("seed: failed to restore priority", "code", p.Code, "error", err)
+				continue
+			}
 		}
 	}
 
@@ -944,12 +973,27 @@ func seedSLATemplates(db *gorm.DB) error {
 
 	for _, t := range templates {
 		var existing SLATemplate
-		if err := db.Where("code = ?", t.Code).First(&existing).Error; err != nil {
+		if tx := db.Unscoped().Where("code = ?", t.Code).Limit(1).Find(&existing); tx.Error != nil {
+			slog.Error("seed: failed to query SLA template", "code", t.Code, "error", tx.Error)
+			continue
+		} else if tx.RowsAffected == 0 {
 			if err := db.Create(&t).Error; err != nil {
 				slog.Error("seed: failed to create SLA template", "code", t.Code, "error", err)
 				continue
 			}
 			slog.Info("seed: created SLA template", "code", t.Code, "name", t.Name)
+		} else if existing.DeletedAt.Valid || existing.Name != t.Name || existing.Description != t.Description || existing.ResponseMinutes != t.ResponseMinutes || existing.ResolutionMinutes != t.ResolutionMinutes || existing.IsActive != t.IsActive {
+			if err := db.Unscoped().Model(&existing).Updates(map[string]any{
+				"name":               t.Name,
+				"description":        t.Description,
+				"response_minutes":   t.ResponseMinutes,
+				"resolution_minutes": t.ResolutionMinutes,
+				"is_active":          t.IsActive,
+				"deleted_at":         nil,
+			}).Error; err != nil {
+				slog.Error("seed: failed to restore SLA template", "code", t.Code, "error", err)
+				continue
+			}
 		}
 	}
 
@@ -1080,37 +1124,6 @@ func seedServiceDefinitions(db *gorm.DB) error {
 	}
 
 	for _, s := range seeds {
-		var existing ServiceDefinition
-		if err := db.Where("code = ?", s.Code).First(&existing).Error; err == nil {
-			if existing.Description != s.Description || existing.CollaborationSpec != s.CollaborationSpec {
-				if err := db.Model(&existing).Update("collaboration_spec", s.CollaborationSpec).Error; err != nil {
-					slog.Error("seed: failed to update service collaboration spec", "code", s.Code, "error", err)
-				} else {
-					slog.Info("seed: updated service collaboration spec", "code", s.Code)
-				}
-				_ = db.Model(&existing).Update("description", s.Description).Error
-			}
-			if s.IntakeFormSchema != "" && string(existing.IntakeFormSchema) != s.IntakeFormSchema {
-				if err := db.Model(&existing).Update("intake_form_schema", JSONField(s.IntakeFormSchema)).Error; err != nil {
-					slog.Error("seed: failed to update service intake form schema", "code", s.Code, "error", err)
-				} else {
-					slog.Info("seed: updated service intake form schema", "code", s.Code)
-				}
-			}
-			if s.WorkflowJSON != "" && string(existing.WorkflowJSON) != s.WorkflowJSON {
-				if err := db.Model(&existing).Update("workflow_json", JSONField(s.WorkflowJSON)).Error; err != nil {
-					slog.Error("seed: failed to update service workflow json", "code", s.Code, "error", err)
-				} else {
-					slog.Info("seed: updated service workflow json", "code", s.Code)
-				}
-			}
-			seedServiceActions(db, s.Code, existing.ID, s.Actions)
-			if s.Code == "db-backup-whitelist-action-flow" {
-				seedDBBackupWhitelistWorkflow(db, existing.ID)
-			}
-			continue
-		}
-
 		var catalog ServiceCatalog
 		if err := db.Where("code = ?", s.CatalogCode).First(&catalog).Error; err != nil {
 			slog.Error("seed: catalog not found for service", "serviceCode", s.Code, "catalogCode", s.CatalogCode, "error", err)
@@ -1128,6 +1141,35 @@ func seedServiceDefinitions(db *gorm.DB) error {
 		var intakeFormSchema JSONField
 		if s.IntakeFormSchema != "" {
 			intakeFormSchema = JSONField(s.IntakeFormSchema)
+		}
+
+		var existing ServiceDefinition
+		if tx := db.Unscoped().Where("code = ?", s.Code).Limit(1).Find(&existing); tx.Error != nil {
+			slog.Error("seed: failed to query service definition", "code", s.Code, "error", tx.Error)
+			continue
+		} else if tx.RowsAffected > 0 {
+			updates := map[string]any{
+				"name":               s.Name,
+				"description":        s.Description,
+				"catalog_id":         catalog.ID,
+				"engine_type":        "smart",
+				"sla_id":             slaID,
+				"intake_form_schema": intakeFormSchema,
+				"workflow_json":      JSONField(s.WorkflowJSON),
+				"collaboration_spec": s.CollaborationSpec,
+				"agent_id":           decisionAgentID,
+				"is_active":          true,
+				"deleted_at":         nil,
+			}
+			if err := db.Unscoped().Model(&existing).Updates(updates).Error; err != nil {
+				slog.Error("seed: failed to restore service definition", "code", s.Code, "error", err)
+				continue
+			}
+			seedServiceActions(db, s.Code, existing.ID, s.Actions)
+			if s.Code == "db-backup-whitelist-action-flow" {
+				seedDBBackupWhitelistWorkflow(db, existing.ID)
+			}
+			continue
 		}
 
 		svc := ServiceDefinition{
@@ -1171,14 +1213,25 @@ func seedServiceActions(db *gorm.DB, serviceCode string, serviceID uint, actions
 			continue
 		}
 		var existingAction ServiceAction
-		if err := db.Where("service_id = ? AND code = ?", serviceID, action.Code).First(&existingAction).Error; err == nil {
+		if err := db.Unscoped().Where("service_id = ? AND code = ?", serviceID, action.Code).First(&existingAction).Error; err == nil {
+			updates := map[string]any{
+				"name":        action.Name,
+				"description": action.Description,
+				"action_type": action.ActionType,
+				"config_json": action.ConfigJSON,
+				"is_active":   action.IsActive,
+				"deleted_at":  nil,
+			}
+			if err := db.Unscoped().Model(&existingAction).Updates(updates).Error; err != nil {
+				slog.Error("seed: failed to restore service action", "serviceCode", serviceCode, "actionCode", action.Code, "error", err)
+			}
 			continue
 		}
 
 		migrated := false
 		for _, legacyCode := range legacyActionCodesForCanonical(action.Code) {
 			var legacyAction ServiceAction
-			if err := db.Where("service_id = ? AND code = ?", serviceID, legacyCode).First(&legacyAction).Error; err != nil {
+			if err := db.Unscoped().Where("service_id = ? AND code = ?", serviceID, legacyCode).First(&legacyAction).Error; err != nil {
 				continue
 			}
 			updates := map[string]any{
@@ -1187,11 +1240,12 @@ func seedServiceActions(db *gorm.DB, serviceCode string, serviceID uint, actions
 				"description": action.Description,
 				"action_type": action.ActionType,
 				"is_active":   action.IsActive,
+				"deleted_at":  nil,
 			}
 			if len(legacyAction.ConfigJSON) == 0 && len(action.ConfigJSON) > 0 {
 				updates["config_json"] = action.ConfigJSON
 			}
-			if err := db.Model(&legacyAction).Updates(updates).Error; err != nil {
+			if err := db.Unscoped().Model(&legacyAction).Updates(updates).Error; err != nil {
 				slog.Error("seed: failed to migrate legacy service action", "serviceCode", serviceCode, "legacyCode", legacyCode, "actionCode", action.Code, "error", err)
 			} else {
 				slog.Info("seed: migrated legacy service action", "serviceCode", serviceCode, "legacyCode", legacyCode, "actionCode", action.Code)

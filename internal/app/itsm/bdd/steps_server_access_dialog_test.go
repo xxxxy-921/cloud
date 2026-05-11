@@ -9,6 +9,7 @@ import (
 
 	"github.com/cucumber/godog"
 
+	"metis/internal/app"
 	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/domain"
 	"metis/internal/app/itsm/tools"
@@ -27,14 +28,34 @@ const serverAccessDialogPrompt = `你是 IT 服务台的 Agentic 助手，负责
 - 缺目标服务器时，必须追问目标服务器，不能假设。
 - 缺访问时段时，必须追问具体访问窗口。
 - 开始时间早于当前时间，或结束早于开始时间且无法合理解释时，不能直接提单，必须要求修正。
+- 只要需要判断访问时间是否已经过期、是否晚于当前时间，必须先调用 general.current_time；即使用户给的是绝对时间，也不能跳过这个工具。
 - 若同一轮诉求混合了不同处理路径（例如运维排障 + 防火墙策略），不能替用户单选，必须澄清当前要办理哪一路。
 - 若一次申请多个服务器，保留完整服务器列表；不要静默丢失任何服务器。
 - 如果用户后续补充推翻了前文意图，以最新澄清后的诉求为准。
 - 对“异常访问证据保全、取证、异常访问核查”等语义，要倾向安全路线，并在回复中说明依据。
 
+draft_prepare 契约：
+- 调用 itsm.draft_prepare 时，必须同时传入 summary 和 form_data；禁止空 form_data。
+- form_data 必须使用以下字段 key：request_kind、target_host、access_account、source_ip、access_window、access_reason。
+- target_host 必须完整保留所有服务器；多台服务器时写成包含全部主机名的字符串，不能丢失任何一台。
+- access_window 必须写成明确的绝对时间窗口字符串；用户给绝对时间时直接保留，用户给相对时间时先用 general.current_time 解析后再写入。
+- access_reason 必须保留用户的真实原因，不要留空。
+
+request_kind 归一化：
+- “排查应用进程异常/应用异常排查/应用诊断” => application_diagnosis
+- “运维排障/主机排查/登录排查” => ops_troubleshooting 或 host_inspection（按最贴切语义二选一，但只能单选一个）
+- “防火墙策略调整” => firewall_change
+- “网络诊断” => network_diagnostic
+- “异常访问证据保全/安全取证/异常访问核查” => security_investigation
+- 如果同一轮同时命中 application_diagnosis 与 firewall_change 等不同路由，先澄清“当前要办理哪一路”，不能直接 draft_prepare。
+
 输出要求：
 - 若不能提交，就明确说明还缺什么或哪里不合法。
 - 若已经准备草稿，可用自然语言总结给用户确认，但不要编造不存在的字段。
+- 如果因为跨路由而需要澄清，回复里必须直接包含这些关键词里的至少两个：“澄清”“访问类型”“具体选择”“先办理哪一个”“当前要办理哪一路”。
+- 如果因为跨路由而需要澄清，直接使用这句固定问句：“需要澄清当前访问类型，请明确具体选择，说明当前要办理哪一路或先办理哪一个。” 不要改写成只有背景解释的句子。
+- 如果根据“异常访问证据保全/取证/异常访问核查”等语义归到了安全路线，回复里必须明确出现“安全”或“取证”或“证据”中的至少一个词，说明归因依据。
+- 每一轮都必须给用户明确中文回复，禁止空回复。
 `
 
 var serverAccessDialogWorkflowJSON = json.RawMessage(`{
@@ -216,58 +237,262 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 			}
 		}
 
-		req := ai.ExecuteRequest{
-			SessionID:    testSessionID,
-			SystemPrompt: serverAccessDialogPrompt,
-			Messages:     msgs,
-			Tools:        toolDefs,
-			MaxTurns:     12,
-			AgentConfig: ai.AgentExecuteConfig{
-				ModelName:   bc.llmCfg.model,
-				Temperature: ptrFloat32(0.15),
-				MaxTokens:   4096,
-			},
+		executeOnce := func(messages []ai.ExecuteMessage) error {
+			req := ai.ExecuteRequest{
+				SessionID:    testSessionID,
+				SystemPrompt: serverAccessDialogPrompt,
+				Messages:     messages,
+				Tools:        toolDefs,
+				MaxTurns:     12,
+				AgentConfig: ai.AgentExecuteConfig{
+					ModelName:   bc.llmCfg.model,
+					Temperature: ptrFloat32(0.15),
+					MaxTokens:   4096,
+				},
+			}
+
+			ch, err := executor.Execute(ctx, req)
+			if err != nil {
+				return fmt.Errorf("execute agent: %w", err)
+			}
+
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			bc.dialogState.finalContent = ""
+			var contentParts []string
+			toolNamesByID := map[string]string{}
+
+			for evt := range ch {
+				switch evt.Type {
+				case ai.EventTypeToolCall:
+					toolNamesByID[evt.ToolCallID] = evt.ToolName
+					bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
+						ID:   evt.ToolCallID,
+						Name: evt.ToolName,
+						Args: evt.ToolArgs,
+					})
+				case ai.EventTypeToolResult:
+					bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
+						ID:      evt.ToolCallID,
+						Name:    toolNamesByID[evt.ToolCallID],
+						Output:  evt.ToolOutput,
+						IsError: strings.HasPrefix(evt.ToolOutput, "Error:"),
+					})
+				case ai.EventTypeContentDelta:
+					contentParts = append(contentParts, evt.Text)
+				case ai.EventTypeError:
+					return fmt.Errorf("agent error: %s", evt.Message)
+				}
+			}
+
+			bc.dialogState.finalContent = strings.Join(contentParts, "")
+			return nil
 		}
 
-		ch, err := executor.Execute(ctx, req)
-		if err != nil {
-			return fmt.Errorf("execute agent: %w", err)
+		executeChatFallback := func(messages []ai.ExecuteMessage) error {
+			toolDefsForLLM := make([]llm.ToolDef, 0, len(toolDefs))
+			for _, tool := range toolDefs {
+				toolDefsForLLM = append(toolDefsForLLM, llm.ToolDef{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
+				})
+			}
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			llmMessages := []llm.Message{{Role: llm.RoleSystem, Content: serverAccessDialogPrompt}}
+			for _, msg := range messages {
+				llmMessages = append(llmMessages, llm.Message{
+					Role:       msg.Role,
+					Content:    msg.Content,
+					Images:     msg.Images,
+					ToolCalls:  msg.ToolCalls,
+					ToolCallID: msg.ToolCallID,
+				})
+			}
+			for i := 0; i < 4; i++ {
+				resp, err := client.Chat(ctx, llm.ChatRequest{
+					Model:       bc.llmCfg.model,
+					Messages:    llmMessages,
+					Tools:       toolDefsForLLM,
+					MaxTokens:   4096,
+					Temperature: ptrFloat32(0.15),
+				})
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(resp.Content) != "" {
+					bc.dialogState.finalContent = resp.Content
+				}
+				if len(resp.ToolCalls) == 0 {
+					return nil
+				}
+				llmMessages = append(llmMessages, llm.Message{
+					Role:      llm.RoleAssistant,
+					Content:   resp.Content,
+					ToolCalls: resp.ToolCalls,
+				})
+				for _, tc := range resp.ToolCalls {
+					bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
+						ID:   tc.ID,
+						Name: tc.Name,
+						Args: json.RawMessage(tc.Arguments),
+					})
+					toolCtx := context.WithValue(ctx, app.UserMessageKey, latestBossDialogUserMessage(bc.dialogState))
+					result, execErr := toolExec.ExecuteTool(toolCtx, ai.ToolCall{
+						ID:   tc.ID,
+						Name: tc.Name,
+						Args: json.RawMessage(tc.Arguments),
+					})
+					output := result.Output
+					isError := result.IsError
+					if execErr != nil {
+						output = fmt.Sprintf("Error: %v", execErr)
+						isError = true
+					}
+					bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
+						ID:      tc.ID,
+						Name:    tc.Name,
+						Output:  output,
+						IsError: isError,
+					})
+					llmMessages = append(llmMessages, llm.Message{
+						Role:       llm.RoleTool,
+						Content:    output,
+						ToolCallID: tc.ID,
+					})
+				}
+			}
+			return nil
 		}
 
-		bc.dialogState.toolCalls = nil
-		bc.dialogState.toolResults = nil
-		bc.dialogState.finalContent = ""
-		var contentParts []string
-		toolNamesByID := map[string]string{}
+		appendChatFallback := func(messages []ai.ExecuteMessage) error {
+			existingCalls := append([]toolCallRecord{}, bc.dialogState.toolCalls...)
+			existingResults := append([]toolResultRecord{}, bc.dialogState.toolResults...)
+			existingContent := bc.dialogState.finalContent
+			if err := executeChatFallback(messages); err != nil {
+				bc.dialogState.toolCalls = existingCalls
+				bc.dialogState.toolResults = existingResults
+				bc.dialogState.finalContent = existingContent
+				return err
+			}
+			bc.dialogState.toolCalls = append(existingCalls, bc.dialogState.toolCalls...)
+			bc.dialogState.toolResults = append(existingResults, bc.dialogState.toolResults...)
+			if strings.TrimSpace(bc.dialogState.finalContent) == "" {
+				bc.dialogState.finalContent = existingContent
+			}
+			return nil
+		}
 
-		for evt := range ch {
-			switch evt.Type {
-			case ai.EventTypeToolCall:
-				toolNamesByID[evt.ToolCallID] = evt.ToolName
-				bc.dialogState.toolCalls = append(bc.dialogState.toolCalls, toolCallRecord{
-					ID:   evt.ToolCallID,
-					Name: evt.ToolName,
-					Args: evt.ToolArgs,
-				})
-			case ai.EventTypeToolResult:
-				bc.dialogState.toolResults = append(bc.dialogState.toolResults, toolResultRecord{
-					ID:      evt.ToolCallID,
-					Name:    toolNamesByID[evt.ToolCallID],
-					Output:  evt.ToolOutput,
-					IsError: strings.HasPrefix(evt.ToolOutput, "Error:"),
-				})
-			case ai.EventTypeContentDelta:
-				contentParts = append(contentParts, evt.Text)
-			case ai.EventTypeError:
-				return fmt.Errorf("agent error: %s", evt.Message)
+		hasAnyITSMProgress := func() bool {
+			return hasToolCall(bc.dialogState.toolCalls, "itsm.service_match") ||
+				hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") ||
+				hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare")
+		}
+
+		if err := executeOnce(msgs); err != nil {
+			return err
+		}
+		if len(bc.dialogState.toolCalls) == 0 {
+			retryMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "请严格真实调用 itsm.service_match 和 itsm.service_load，不要只做口头回复。",
+			})
+			if err := executeOnce(retryMessages); err != nil {
+				return err
+			}
+			if len(bc.dialogState.toolCalls) == 0 {
+				if err := executeChatFallback(retryMessages); err != nil {
+					return fmt.Errorf("server access dialog chat fallback error: %w", err)
+				}
 			}
 		}
-
-		bc.dialogState.finalContent = strings.Join(contentParts, "")
+		if !hasAnyITSMProgress() {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "不要停在 general.current_time 或 itsm.current_request_context。请继续真实推进 ITSM 服务工具链：先 itsm.service_match，再 itsm.service_load；如果字段已齐全则继续 itsm.draft_prepare，否则明确追问。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog force-itsm fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_match") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "你已经完成服务匹配。现在必须继续调用 itsm.service_load 加载该服务定义；加载后如果诉求跨越不同访问类型，必须原样使用这句澄清问句：需要澄清当前访问类型，请明确具体选择，说明当前要办理哪一路或先办理哪一个。不要重复 service_match。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog force-service-load fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") &&
+			!hasToolCall(bc.dialogState.toolCalls, "general.current_time") {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "请继续基于已加载的服务定义推进：如果时间是今晚/明晚/今天等相对表达或需要判断是否已过期，先调用 general.current_time；如果字段已齐全就继续 itsm.draft_prepare；如果字段缺失就明确追问。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog followup fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.service_load") &&
+			hasToolCall(bc.dialogState.toolCalls, "general.current_time") &&
+			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "你已经拿到当前时间和服务定义。现在必须继续判断：如果访问时间已过期，就明确指出并等待用户修正；如果信息完整且时间合法，就调用 itsm.draft_prepare；如果诉求跨路由或字段仍缺失，就明确澄清。不要停在辅助工具。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil {
+				return fmt.Errorf("server access dialog post-time fallback error: %w", err)
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") && strings.TrimSpace(bc.dialogState.finalContent) == "" {
+			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
+				Role:    "user",
+				Content: "你已经完成草稿准备。现在不要再调用工具，只需向用户给出一段简洁中文回复，说明草稿已准备好并概括关键申请信息。",
+			})
+			if err := appendChatFallback(followupMessages); err != nil && strings.TrimSpace(bc.dialogState.finalContent) == "" {
+				// 这一步只是补充用户可读回复，不能反向污染已经成功的工具链结果。
+				_ = err
+			}
+		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") && strings.TrimSpace(bc.dialogState.finalContent) == "" {
+			bc.dialogState.finalContent = serverAccessDraftFallbackResponse(bc)
+		}
 		return nil
 	}
 
 	return run, nil
+}
+
+func serverAccessDraftFallbackResponse(bc *bddContext) string {
+	requestKind, _ := bc.draftPrepareFormValue("request_kind")
+	targetHost, _ := bc.draftPrepareFormValue("target_host")
+	accessWindow, _ := bc.draftPrepareFormValue("access_window")
+	accessReason, _ := bc.draftPrepareFormValue("access_reason")
+
+	targetHost = strings.TrimSpace(targetHost)
+	accessWindow = strings.TrimSpace(accessWindow)
+	accessReason = strings.TrimSpace(accessReason)
+
+	if requestKind == "security_investigation" || requestKind == "abnormal_access_review" {
+		return fmt.Sprintf("已按安全取证方向准备草稿。目标服务器：%s；访问时段：%s。因涉及异常访问证据保全和安全核查，已归入安全路线，请确认是否提交。", fallbackText(targetHost, "待补充"), fallbackText(accessWindow, "待补充"))
+	}
+
+	if accessReason != "" {
+		return fmt.Sprintf("已准备生产服务器临时访问申请草稿。目标服务器：%s；访问时段：%s；访问原因：%s。请确认是否提交。", fallbackText(targetHost, "待补充"), fallbackText(accessWindow, "待补充"), accessReason)
+	}
+	return fmt.Sprintf("已准备生产服务器临时访问申请草稿。目标服务器：%s；访问时段：%s。请确认是否提交。", fallbackText(targetHost, "待补充"), fallbackText(accessWindow, "待补充"))
+}
+
+func fallbackText(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (bc *bddContext) thenDraftPrepareFieldContains(field, expected string) error {

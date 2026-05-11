@@ -105,6 +105,50 @@ func TestIdentitySourceHandlerList(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceHandlerList_EmptyResult(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	r := setupIdentitySourceRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/identity-sources", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	data := resp["data"].([]any)
+	if len(data) != 0 {
+		t.Fatalf("expected empty list, got %d items", len(data))
+	}
+}
+
+func TestIdentitySourceHandlerList_InternalError(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	r := setupIdentitySourceRouter(h)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql db: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/identity-sources", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestIdentitySourceHandlerCreate_Success(t *testing.T) {
 	db := newTestDBForIdentitySourceHandler(t)
 	h := newIdentitySourceHandlerForTest(t, db)
@@ -163,6 +207,25 @@ func TestIdentitySourceHandlerCreate_DomainConflict(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceHandlerCreate_InvalidBody(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	r := setupIdentitySourceRouter(h)
+
+	for _, body := range []string{
+		`{}`,
+		`{"name":"Okta","type":"oidc","config":`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/identity-sources", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for body %s, got %d: %s", body, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestIdentitySourceHandlerUpdate_Success(t *testing.T) {
 	db := newTestDBForIdentitySourceHandler(t)
 	h := newIdentitySourceHandlerForTest(t, db)
@@ -202,6 +265,32 @@ func TestIdentitySourceHandlerUpdate_NotFound(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceHandlerUpdate_InvalidIDBodyAndConflict(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	seeded := seedIdentitySourceHandler(t, db, "Old", "oidc", `{"issuerUrl":"https://old.example.com"}`, "", true)
+	seedIdentitySourceHandler(t, db, "Existing", "oidc", `{}`, "example.com", true)
+	r := setupIdentitySourceRouter(h)
+
+	for _, tc := range []struct {
+		path string
+		body string
+		code int
+	}{
+		{"/api/v1/identity-sources/abc", `{"name":"New","config":{}}`, http.StatusBadRequest},
+		{fmt.Sprintf("/api/v1/identity-sources/%d", seeded.ID), `{"name":"New","config":`, http.StatusBadRequest},
+		{fmt.Sprintf("/api/v1/identity-sources/%d", seeded.ID), `{"name":"New","config":{},"domains":"example.com"}`, http.StatusConflict},
+	} {
+		req := httptest.NewRequest(http.MethodPut, tc.path, bytes.NewReader([]byte(tc.body)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != tc.code {
+			t.Fatalf("expected %s => %d, got %d: %s", tc.path, tc.code, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestIdentitySourceHandlerDelete_Success(t *testing.T) {
 	db := newTestDBForIdentitySourceHandler(t)
 	h := newIdentitySourceHandlerForTest(t, db)
@@ -231,6 +320,29 @@ func TestIdentitySourceHandlerDelete_NotFound(t *testing.T) {
 	}
 }
 
+func TestIdentitySourceHandlerDelete_InternalError(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	seeded := seedIdentitySourceHandler(t, db, "Delete", "oidc", `{}`, "", true)
+	r := setupIdentitySourceRouter(h)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql db: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v1/identity-sources/%d", seeded.ID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestIdentitySourceHandlerToggle(t *testing.T) {
 	db := newTestDBForIdentitySourceHandler(t)
 	h := newIdentitySourceHandlerForTest(t, db)
@@ -249,6 +361,27 @@ func TestIdentitySourceHandlerToggle(t *testing.T) {
 	data := resp["data"].(map[string]any)
 	if data["enabled"].(bool) {
 		t.Fatal("expected disabled after toggle")
+	}
+}
+
+func TestIdentitySourceHandlerToggle_InvalidIDAndNotFound(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	r := setupIdentitySourceRouter(h)
+
+	for _, tc := range []struct {
+		path string
+		code int
+	}{
+		{"/api/v1/identity-sources/abc/toggle", http.StatusBadRequest},
+		{"/api/v1/identity-sources/9999/toggle", http.StatusNotFound},
+	} {
+		req := httptest.NewRequest(http.MethodPut, tc.path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != tc.code {
+			t.Fatalf("expected %s => %d, got %d: %s", tc.path, tc.code, w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -273,5 +406,33 @@ func TestIdentitySourceHandlerTestConnection(t *testing.T) {
 	}
 	if data["message"] != "OIDC discovery successful" {
 		t.Fatalf("expected success message, got %v", data["message"])
+	}
+}
+
+func TestIdentitySourceHandlerTestConnection_InvalidIDAndMissingSource(t *testing.T) {
+	db := newTestDBForIdentitySourceHandler(t)
+	h := newIdentitySourceHandlerForTest(t, db)
+	r := setupIdentitySourceRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/identity-sources/abc/test", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid id, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/identity-sources/9999/test", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for missing source test result, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	data := resp["data"].(map[string]any)
+	if data["success"].(bool) {
+		t.Fatalf("expected missing source test to fail, got %v", data)
 	}
 }

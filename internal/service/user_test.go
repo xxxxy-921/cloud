@@ -56,6 +56,24 @@ func newUserServiceForTest(t *testing.T, db *gorm.DB) *UserService {
 	}
 }
 
+func TestNewUser_ConstructsService(t *testing.T) {
+	db := newTestDB(t)
+	injector := do.New()
+	do.ProvideValue(injector, &database.DB{DB: db})
+	do.Provide(injector, repository.NewUser)
+	do.Provide(injector, repository.NewRefreshToken)
+	do.Provide(injector, repository.NewSysConfig)
+	do.Provide(injector, NewSettings)
+
+	svc, err := NewUser(injector)
+	if err != nil {
+		t.Fatalf("NewUser returned error: %v", err)
+	}
+	if svc.userRepo == nil || svc.refreshTokenRepo == nil || svc.settingsSvc == nil {
+		t.Fatalf("expected service dependencies to be wired, got %+v", svc)
+	}
+}
+
 func seedRole(t *testing.T, db *gorm.DB, code string) *model.Role {
 	t.Helper()
 	role := &model.Role{Name: code, Code: code}
@@ -223,6 +241,33 @@ func TestUserServiceGetByIDWithManager_Success(t *testing.T) {
 	}
 }
 
+func TestUserServiceGetByIDWithManager_ReturnsNotFoundForMissing(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+
+	_, err := svc.GetByIDWithManager(999)
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestUserServiceList_Success(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+	role := seedRole(t, db, "test-role")
+	seedUser(t, db, svc, "alice", role.ID)
+	seedUser(t, db, svc, "bob", role.ID)
+	active := true
+
+	result, err := svc.List(repository.ListParams{Keyword: "a", IsActive: &active, Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if result.Total == 0 || len(result.Items) == 0 {
+		t.Fatalf("expected matching users, got %+v", result)
+	}
+}
+
 // 3. Update
 
 func TestUserServiceUpdate_Success(t *testing.T) {
@@ -252,6 +297,43 @@ func TestUserServiceUpdate_Success(t *testing.T) {
 	}
 	if updated.ManagerID == nil || *updated.ManagerID != newManagerID {
 		t.Fatalf("expected manager ID %d", newManagerID)
+	}
+}
+
+func TestUserServiceUpdate_CoversRemainingFields(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+	role := seedRole(t, db, "test-role")
+	newRole := seedRole(t, db, "new-role")
+	user := seedUser(t, db, svc, "alice", role.ID)
+
+	newAvatar := "https://example.com/avatar.png"
+	newLocale := "zh-CN"
+	newTimezone := "Asia/Shanghai"
+	newRoleID := newRole.ID
+	active := false
+
+	updated, err := svc.Update(user.ID, 9999, UpdateUserParams{
+		Avatar:   &newAvatar,
+		Locale:   &newLocale,
+		Timezone: &newTimezone,
+		RoleID:   &newRoleID,
+		IsActive: &active,
+	})
+	if err != nil {
+		t.Fatalf("update remaining fields: %v", err)
+	}
+	if updated.Avatar != newAvatar || updated.Locale != newLocale || updated.Timezone != newTimezone {
+		t.Fatalf("expected updated profile fields, got %+v", updated)
+	}
+	if updated.RoleID != newRole.ID {
+		t.Fatalf("expected role id %d, got %d", newRole.ID, updated.RoleID)
+	}
+	if updated.IsActive {
+		t.Fatal("expected user to be inactive")
+	}
+	if updated.Role.ID != newRole.ID {
+		t.Fatalf("expected reloaded role %d, got %+v", newRole.ID, updated.Role)
 	}
 }
 
@@ -416,6 +498,21 @@ func TestUserServiceResetPassword_ReturnsNotFoundForMissing(t *testing.T) {
 	}
 }
 
+func TestUserServiceResetPassword_ReturnsRevokeError(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+	role := seedRole(t, db, "test-role")
+	user := seedUser(t, db, svc, "alice", role.ID)
+
+	if err := db.Exec("DROP TABLE refresh_tokens").Error; err != nil {
+		t.Fatalf("drop refresh_tokens: %v", err)
+	}
+
+	if err := svc.ResetPassword(user.ID, "NewPassword123!"); err == nil {
+		t.Fatal("expected reset password to return revoke error")
+	}
+}
+
 func TestUserServiceUnlockUser_Success(t *testing.T) {
 	db := newTestDB(t)
 	svc := newUserServiceForTest(t, db)
@@ -515,6 +612,36 @@ func TestUserServiceDeactivate_PreventsSelfDeactivation(t *testing.T) {
 	_, err := svc.Deactivate(user.ID, user.ID)
 	if !errors.Is(err, ErrCannotSelf) {
 		t.Fatalf("expected ErrCannotSelf, got %v", err)
+	}
+}
+
+func TestUserServiceDeactivate_ReturnsNotFoundForMissing(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+
+	_, err := svc.Deactivate(999, 1)
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestUserServiceDeactivate_IgnoresTokenRevokeError(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+	role := seedRole(t, db, "test-role")
+	currentUser := seedUser(t, db, svc, "current", role.ID)
+	target := seedUser(t, db, svc, "target", role.ID)
+
+	if err := db.Exec("DROP TABLE refresh_tokens").Error; err != nil {
+		t.Fatalf("drop refresh_tokens: %v", err)
+	}
+
+	deactivated, err := svc.Deactivate(target.ID, currentUser.ID)
+	if err != nil {
+		t.Fatalf("expected deactivate to succeed despite revoke failure, got %v", err)
+	}
+	if deactivated.IsActive {
+		t.Fatal("expected target user to be inactive")
 	}
 }
 
@@ -645,5 +772,77 @@ func TestUserServiceClearManager_ReturnsNotFoundForMissing(t *testing.T) {
 	_, err := svc.ClearManager(999)
 	if !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestUserServiceUpdateProfile_Success(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+	role := seedRole(t, db, "test-role")
+	user := seedUser(t, db, svc, "alice", role.ID)
+	user.Locale = "zh-CN"
+	user.Timezone = "Asia/Shanghai"
+
+	if err := svc.UpdateProfile(user); err != nil {
+		t.Fatalf("UpdateProfile returned error: %v", err)
+	}
+
+	var updated model.User
+	if err := db.First(&updated, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if updated.Locale != "zh-CN" || updated.Timezone != "Asia/Shanghai" {
+		t.Fatalf("expected updated profile fields, got %+v", updated)
+	}
+}
+
+func TestUserService_ErrorBranchesOnClosedDB(t *testing.T) {
+	db := newTestDB(t)
+	svc := newUserServiceForTest(t, db)
+	role := seedRole(t, db, "test-role")
+	currentUser := seedUser(t, db, svc, "current", role.ID)
+	target := seedUser(t, db, svc, "target", role.ID)
+	createRefreshToken(t, db, target.ID, false)
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql db: %v", err)
+	}
+
+	if _, err := svc.Activate(target.ID); err == nil {
+		t.Fatal("expected activate to fail after db close")
+	}
+	if _, err := svc.Deactivate(target.ID, currentUser.ID); err == nil {
+		t.Fatal("expected deactivate to fail after db close")
+	}
+	if _, err := svc.ClearManager(target.ID); err == nil {
+		t.Fatal("expected clear manager to fail after db close")
+	}
+	if _, err := svc.GetManagerChain(target.ID); err == nil {
+		t.Fatal("expected manager chain to fail after db close")
+	}
+	if err := svc.UpdateProfile(target); err == nil {
+		t.Fatal("expected update profile to fail after db close")
+	}
+	if _, err := svc.GetByID(target.ID); err == nil {
+		t.Fatal("expected get by id to fail after db close")
+	}
+	if _, err := svc.GetByIDWithManager(target.ID); err == nil {
+		t.Fatal("expected get by id with manager to fail after db close")
+	}
+	if _, err := svc.Create("new-user", "Password123!", "new@example.com", "", role.ID); err == nil {
+		t.Fatal("expected create to fail after db close")
+	}
+	if err := svc.Delete(target.ID, currentUser.ID); err == nil {
+		t.Fatal("expected delete to fail after db close")
+	}
+	if err := svc.ResetPassword(target.ID, "NewPassword123!"); err == nil {
+		t.Fatal("expected reset password to fail after db close")
+	}
+	if err := svc.UnlockUser(target.ID); err == nil {
+		t.Fatal("expected unlock user to fail after db close")
 	}
 }

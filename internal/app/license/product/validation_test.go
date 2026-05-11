@@ -76,6 +76,33 @@ func TestValidateConstraintSchema(t *testing.T) {
 			},
 			wantErr: ErrInvalidConstraintSchema,
 		},
+		{
+			name: "number default outside allowed range",
+			schema: domain.ConstraintSchema{
+				{Key: "mod1", Features: []domain.ConstraintFeature{
+					{Key: "seats", Type: domain.FeatureTypeNumber, Min: ptrFloat64(1), Max: ptrFloat64(10), Default: 0},
+				}},
+			},
+			wantErr: ErrInvalidConstraintSchema,
+		},
+		{
+			name: "enum default must be in options",
+			schema: domain.ConstraintSchema{
+				{Key: "mod1", Features: []domain.ConstraintFeature{
+					{Key: "tier", Type: domain.FeatureTypeEnum, Options: []string{"basic", "pro"}, Default: "enterprise"},
+				}},
+			},
+			wantErr: ErrInvalidConstraintSchema,
+		},
+		{
+			name: "multi select default must be valid string array",
+			schema: domain.ConstraintSchema{
+				{Key: "mod1", Features: []domain.ConstraintFeature{
+					{Key: "addons", Type: domain.FeatureTypeMultiSelect, Options: []string{"backup", "audit"}, Default: []any{"backup", 1}},
+				}},
+			},
+			wantErr: ErrInvalidConstraintSchema,
+		},
 	}
 
 	for _, tt := range tests {

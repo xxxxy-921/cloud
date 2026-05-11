@@ -257,9 +257,11 @@ func (e *ClassicEngine) Cancel(ctx context.Context, tx *gorm.DB, params CancelPa
 	// Update ticket
 	now := time.Now()
 	if err := tx.Model(&ticketModel{}).Where("id = ?", params.TicketID).Updates(map[string]any{
-		"status":      ticketCancelStatus(params.EventType),
-		"outcome":     ticketCancelOutcome(params.EventType),
-		"finished_at": now,
+		"status":              ticketCancelStatus(params.EventType),
+		"outcome":             ticketCancelOutcome(params.EventType),
+		"finished_at":         now,
+		"current_activity_id": nil,
+		"assignee_id":         nil,
 	}).Error; err != nil {
 		return err
 	}

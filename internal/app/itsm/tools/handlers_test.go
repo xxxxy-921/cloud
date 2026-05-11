@@ -49,6 +49,11 @@ type stubOperator struct {
 	validatedServiceID  uint
 	validatedFormData   map[string]any
 	participantResult   *ParticipantValidation
+	tickets             []TicketSummary
+	listStatus          string
+	withdrawCode        string
+	withdrawReason      string
+	withdrawUserID      uint
 }
 
 func (s *stubOperator) MatchServices(ctx context.Context, query string) ([]ServiceMatch, MatchDecision, error) {
@@ -79,9 +84,13 @@ func (s *stubOperator) SubmitConfirmedDraft(userID uint, serviceID uint, service
 	return &TicketResult{TicketID: 123, TicketCode: "TICK-000123", Status: "in_progress"}, nil
 }
 func (s *stubOperator) ListMyTickets(userID uint, status string) ([]TicketSummary, error) {
-	return nil, nil
+	s.listStatus = status
+	return s.tickets, nil
 }
 func (s *stubOperator) WithdrawTicket(userID uint, ticketCode string, reason string) error {
+	s.withdrawUserID = userID
+	s.withdrawCode = ticketCode
+	s.withdrawReason = reason
 	return nil
 }
 func (s *stubOperator) ValidateParticipants(serviceID uint, formData map[string]any) (*ParticipantValidation, error) {
@@ -1330,6 +1339,85 @@ func TestServiceLoad_IsIdempotentAfterDraftConfirmed(t *testing.T) {
 	state := store.states[1]
 	if state.Stage != "confirmed" || state.DraftSummary != "preserve draft" || state.DraftVersion != 1 || state.ConfirmedDraftVersion != 1 {
 		t.Fatalf("idempotent load should preserve confirmed draft state, got %+v", state)
+	}
+}
+
+func TestCreateTicket_RejectsLoadedServiceMismatch(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{details: map[uint]*ServiceDetail{
+		5: vpnServiceDetail(5),
+		6: vpnServiceDetail(6),
+	}}
+	store.states[1] = &ServiceDeskState{
+		Stage:                 "confirmed",
+		LoadedServiceID:       5,
+		DraftVersion:          2,
+		ConfirmedDraftVersion: 2,
+		FieldsHash:            "vpn123",
+		DraftSummary:          "confirmed summary",
+		DraftFormData:         map[string]any{"vpn_account": "alice@example.com"},
+	}
+
+	_, err := NewServiceDeskSession(op, store).CreateTicket(1, 7, 6, "ignored", map[string]any{"vpn_account": "ignored"})
+	if err == nil || !strings.Contains(err.Error(), "与已加载的服务 5 不一致") {
+		t.Fatalf("expected loaded service mismatch error, got %v", err)
+	}
+	if op.createdServiceID != 0 {
+		t.Fatalf("expected mismatch to block ticket creation, got service=%d", op.createdServiceID)
+	}
+}
+
+func TestCreateTicket_RejectsConfirmedDraftVersionDrift(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: vpnServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:                 "confirmed",
+		LoadedServiceID:       5,
+		DraftVersion:          3,
+		ConfirmedDraftVersion: 2,
+		FieldsHash:            "vpn123",
+		DraftSummary:          "confirmed summary",
+		DraftFormData:         map[string]any{"vpn_account": "alice@example.com"},
+	}
+
+	_, err := NewServiceDeskSession(op, store).CreateTicket(1, 7, 5, "ignored", map[string]any{"vpn_account": "ignored"})
+	if err == nil || !strings.Contains(err.Error(), "草稿已变更") {
+		t.Fatalf("expected stale confirmed draft error, got %v", err)
+	}
+	if op.createdDraftVersion != 0 {
+		t.Fatalf("expected stale draft to block submit, got draft version %d", op.createdDraftVersion)
+	}
+}
+
+func TestCreateTicket_SuccessResetsConfirmedState(t *testing.T) {
+	store := newMemStateStore()
+	op := &stubOperator{detail: vpnServiceDetail(5)}
+	store.states[1] = &ServiceDeskState{
+		Stage:                   "confirmed",
+		LoadedServiceID:         5,
+		ServiceVersionID:        12,
+		DraftVersion:            4,
+		ConfirmedDraftVersion:   4,
+		FieldsHash:              "vpn123",
+		DraftSummary:            "confirmed summary",
+		DraftFormData:           map[string]any{"vpn_account": "alice@example.com", "request_kind": "online_support"},
+		PendingNextRequiredTool: "itsm.draft_confirm",
+	}
+	result, err := NewServiceDeskSession(op, store).CreateTicket(1, 7, 5, "ignored", map[string]any{"vpn_account": "ignored"})
+	if err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	if result.Message != "工单已提交" || result.State.Stage != "idle" {
+		t.Fatalf("expected submitted idle result, got %+v", result)
+	}
+	if op.createdServiceID != 5 || op.createdDraftVersion != 4 || op.createdFieldsHash != "vpn123" {
+		t.Fatalf("expected confirmed draft identity to be submitted, got service=%d version=%d fieldsHash=%q", op.createdServiceID, op.createdDraftVersion, op.createdFieldsHash)
+	}
+	if op.createdSummary != "confirmed summary" || op.createdFormData["request_kind"] != "online_support" {
+		t.Fatalf("expected confirmed draft payload to override ad-hoc input, got summary=%q form=%+v", op.createdSummary, op.createdFormData)
+	}
+	if state := store.states[1]; state == nil || state.Stage != "idle" || state.LoadedServiceID != 0 || state.DraftVersion != 0 || state.PendingNextRequiredTool != "" {
+		t.Fatalf("expected state reset after successful create, got %+v", state)
 	}
 }
 

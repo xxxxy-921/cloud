@@ -3,6 +3,7 @@ package definition
 import (
 	"errors"
 	. "metis/internal/app/itsm/domain"
+	"strings"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -12,6 +13,8 @@ var (
 	ErrServiceActionNotFound = errors.New("service action not found")
 	ErrActionCodeExists      = errors.New("action code already exists in this service")
 	ErrInvalidActionConfig   = errors.New("invalid action config")
+	ErrInvalidActionName     = errors.New("invalid action name")
+	ErrInvalidActionCode     = errors.New("invalid action code")
 )
 
 type ServiceActionService struct {
@@ -26,6 +29,14 @@ func NewServiceActionService(i do.Injector) (*ServiceActionService, error) {
 }
 
 func (s *ServiceActionService) Create(action *ServiceAction) (*ServiceAction, error) {
+	action.Name = strings.TrimSpace(action.Name)
+	action.Code = strings.TrimSpace(action.Code)
+	if action.Name == "" {
+		return nil, ErrInvalidActionName
+	}
+	if action.Code == "" {
+		return nil, ErrInvalidActionCode
+	}
 	if err := s.ensureServiceExists(action.ServiceID); err != nil {
 		return nil, err
 	}
@@ -85,7 +96,19 @@ func (s *ServiceActionService) Update(serviceID, id uint, updates map[string]any
 		}
 		return nil, err
 	}
+	if name, ok := updates["name"].(string); ok {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, ErrInvalidActionName
+		}
+		updates["name"] = name
+	}
 	if code, ok := updates["code"].(string); ok && code != existing.Code {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			return nil, ErrInvalidActionCode
+		}
+		updates["code"] = code
 		if _, err := s.repo.FindByServiceAndCode(serviceID, code); err == nil {
 			return nil, ErrActionCodeExists
 		}

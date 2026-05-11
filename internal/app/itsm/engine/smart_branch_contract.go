@@ -284,6 +284,8 @@ func collaborationSpecImpliesDirectCompletion(spec string) bool {
 	for _, marker := range []string{
 		"处理完成后直接结束流程",
 		"处理任务完成后直接结束流程",
+		"处理人完成处理后流程结束",
+		"处理后流程结束",
 		"完成后直接结束流程",
 		"处理完成后直接结束",
 	} {

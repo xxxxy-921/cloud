@@ -6,6 +6,7 @@ import (
 	"fmt"
 	licensecrypto "metis/internal/app/license/crypto"
 	"metis/internal/app/license/domain"
+	"strings"
 
 	"github.com/samber/do/v2"
 	"gorm.io/gorm"
@@ -16,6 +17,9 @@ import (
 var (
 	ErrProductNotFound         = errors.New("error.license.product_not_found")
 	ErrProductCodeExists       = errors.New("error.license.product_code_exists")
+	ErrInvalidProductName      = errors.New("error.license.invalid_product_name")
+	ErrInvalidProductCode      = errors.New("error.license.invalid_product_code")
+	ErrInvalidPlanName         = errors.New("error.license.invalid_plan_name")
 	ErrInvalidStatusTransition = errors.New("error.license.invalid_status_transition")
 	ErrPlanNotFound            = errors.New("error.license.plan_not_found")
 	ErrPlanNameExists          = errors.New("error.license.plan_name_exists")
@@ -54,6 +58,15 @@ func NewProductService(i do.Injector) (*ProductService, error) {
 }
 
 func (s *ProductService) CreateProduct(name, code, description string) (*domain.Product, error) {
+	name = strings.TrimSpace(name)
+	code = strings.TrimSpace(code)
+	if name == "" {
+		return nil, ErrInvalidProductName
+	}
+	if code == "" {
+		return nil, ErrInvalidProductCode
+	}
+
 	exists, err := s.productRepo.ExistsByCode(code)
 	if err != nil {
 		return nil, err
@@ -145,7 +158,11 @@ func (s *ProductService) UpdateProduct(id uint, params UpdateProductParams) (*do
 	}
 
 	if params.Name != nil {
-		p.Name = *params.Name
+		name := strings.TrimSpace(*params.Name)
+		if name == "" {
+			return nil, ErrInvalidProductName
+		}
+		p.Name = name
 	}
 	if params.Description != nil {
 		p.Description = *params.Description
@@ -268,6 +285,10 @@ func NewPlanService(i do.Injector) (*PlanService, error) {
 }
 
 func (s *PlanService) CreatePlan(productID uint, name string, constraintValues json.RawMessage, sortOrder int) (*domain.Plan, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, ErrInvalidPlanName
+	}
 	product, err := s.productRepo.FindByID(productID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -312,14 +333,18 @@ func (s *PlanService) UpdatePlan(id uint, name *string, constraintValues json.Ra
 	}
 
 	if name != nil {
-		exists, err := s.planRepo.ExistsByName(plan.ProductID, *name, id)
+		trimmedName := strings.TrimSpace(*name)
+		if trimmedName == "" {
+			return nil, ErrInvalidPlanName
+		}
+		exists, err := s.planRepo.ExistsByName(plan.ProductID, trimmedName, id)
 		if err != nil {
 			return nil, err
 		}
 		if exists {
 			return nil, ErrPlanNameExists
 		}
-		plan.Name = *name
+		plan.Name = trimmedName
 	}
 
 	if constraintValues != nil {
@@ -401,6 +426,11 @@ func validateConstraintSchema(schema domain.ConstraintSchema) error {
 				// valid
 			default:
 				return fmt.Errorf("%w: invalid feature type %s for %s.%s", ErrInvalidConstraintSchema, f.Type, m.Key, f.Key)
+			}
+			if f.Default != nil {
+				if err := validateFeatureValue(f, f.Default, m.Key); err != nil {
+					return fmt.Errorf("%w: invalid default for %s.%s: %v", ErrInvalidConstraintSchema, m.Key, f.Key, err)
+				}
 			}
 		}
 	}

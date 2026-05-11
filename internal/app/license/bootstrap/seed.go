@@ -10,37 +10,83 @@ import (
 )
 
 func SeedLicense(db *gorm.DB, enforcer *casbin.Enforcer) error {
-	// 1. Seed menus: 「许可管理」directory + 「商品管理」menu
-	var licenseDir model.Menu
-	if err := db.Where("permission = ?", "license").First(&licenseDir).Error; err != nil {
-		licenseDir = model.Menu{
-			Name:       "许可管理",
-			Type:       model.MenuTypeDirectory,
-			Icon:       "KeyRound",
-			Permission: "license",
-			Sort:       200,
+	seedMenu := func(parentID *uint, name string, menuType model.MenuType, path, icon, permission string, sort int) (*model.Menu, error) {
+		var menu model.Menu
+		if err := db.Unscoped().Where("permission = ?", permission).First(&menu).Error; err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return nil, err
+			}
+			menu = model.Menu{
+				ParentID:   parentID,
+				Name:       name,
+				Type:       menuType,
+				Path:       path,
+				Icon:       icon,
+				Permission: permission,
+				Sort:       sort,
+			}
+			if err := db.Create(&menu).Error; err != nil {
+				return nil, err
+			}
+			slog.Info("seed: created menu", "name", menu.Name, "permission", menu.Permission)
+			return &menu, nil
 		}
-		if err := db.Create(&licenseDir).Error; err != nil {
-			return err
+		if menu.DeletedAt.Valid || menu.Name != name || menu.Type != menuType || menu.Path != path || menu.Icon != icon || menu.Sort != sort || menu.ParentID != nil && parentID == nil || menu.ParentID == nil && parentID != nil || (menu.ParentID != nil && parentID != nil && *menu.ParentID != *parentID) {
+			if err := db.Unscoped().Model(&menu).Updates(map[string]any{
+				"parent_id":  parentID,
+				"name":       name,
+				"type":       menuType,
+				"path":       path,
+				"icon":       icon,
+				"sort":       sort,
+				"deleted_at": nil,
+			}).Error; err != nil {
+				return nil, err
+			}
 		}
-		slog.Info("seed: created menu", "name", licenseDir.Name, "permission", licenseDir.Permission)
+		return &menu, nil
 	}
 
-	var productMenu model.Menu
-	if err := db.Where("permission = ?", "license:product:list").First(&productMenu).Error; err != nil {
-		productMenu = model.Menu{
-			ParentID:   &licenseDir.ID,
-			Name:       "商品管理",
-			Type:       model.MenuTypeMenu,
-			Path:       "/license/products",
-			Icon:       "Package",
-			Permission: "license:product:list",
-			Sort:       0,
+	seedButton := func(parentID uint, name, permission string, sort int) error {
+		var menu model.Menu
+		if err := db.Unscoped().Where("permission = ?", permission).First(&menu).Error; err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			menu = model.Menu{
+				ParentID:   &parentID,
+				Name:       name,
+				Type:       model.MenuTypeButton,
+				Permission: permission,
+				Sort:       sort,
+			}
+			if err := db.Create(&menu).Error; err != nil {
+				return err
+			}
+			slog.Info("seed: created menu", "name", menu.Name, "permission", menu.Permission)
+			return nil
 		}
-		if err := db.Create(&productMenu).Error; err != nil {
-			return err
+		if menu.DeletedAt.Valid || menu.Name != name || menu.Type != model.MenuTypeButton || menu.Sort != sort || menu.ParentID == nil || *menu.ParentID != parentID {
+			return db.Unscoped().Model(&menu).Updates(map[string]any{
+				"parent_id":  parentID,
+				"name":       name,
+				"type":       model.MenuTypeButton,
+				"sort":       sort,
+				"deleted_at": nil,
+			}).Error
 		}
-		slog.Info("seed: created menu", "name", productMenu.Name, "permission", productMenu.Permission)
+		return nil
+	}
+
+	// 1. Seed menus: 「许可管理」directory + 「商品管理」menu
+	licenseDir, err := seedMenu(nil, "许可管理", model.MenuTypeDirectory, "", "KeyRound", "license", 200)
+	if err != nil {
+		return err
+	}
+
+	productMenu, err := seedMenu(&licenseDir.ID, "商品管理", model.MenuTypeMenu, "/license/products", "Package", "license:product:list", 0)
+	if err != nil {
+		return err
 	}
 
 	// Seed button permissions under product menu
@@ -51,33 +97,16 @@ func SeedLicense(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{Name: "管理密钥", Type: model.MenuTypeButton, Permission: "license:key:manage", Sort: 3},
 	}
 	for _, btn := range buttons {
-		var existing model.Menu
-		if err := db.Where("permission = ?", btn.Permission).First(&existing).Error; err != nil {
-			btn.ParentID = &productMenu.ID
-			if err := db.Create(&btn).Error; err != nil {
-				slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
-				continue
-			}
-			slog.Info("seed: created menu", "name", btn.Name, "permission", btn.Permission)
+		if err := seedButton(productMenu.ID, btn.Name, btn.Permission, btn.Sort); err != nil {
+			slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
+			continue
 		}
 	}
 
 	// 3. Seed 「授权主体」menu under 「许可管理」
-	var licenseeMenu model.Menu
-	if err := db.Where("permission = ?", "license:licensee:list").First(&licenseeMenu).Error; err != nil {
-		licenseeMenu = model.Menu{
-			ParentID:   &licenseDir.ID,
-			Name:       "授权主体",
-			Type:       model.MenuTypeMenu,
-			Path:       "/license/licensees",
-			Icon:       "Building2",
-			Permission: "license:licensee:list",
-			Sort:       1,
-		}
-		if err := db.Create(&licenseeMenu).Error; err != nil {
-			return err
-		}
-		slog.Info("seed: created menu", "name", licenseeMenu.Name, "permission", licenseeMenu.Permission)
+	licenseeMenu, err := seedMenu(&licenseDir.ID, "授权主体", model.MenuTypeMenu, "/license/licensees", "Building2", "license:licensee:list", 1)
+	if err != nil {
+		return err
 	}
 
 	// Seed button permissions under licensee menu
@@ -87,33 +116,16 @@ func SeedLicense(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{Name: "归档授权主体", Type: model.MenuTypeButton, Permission: "license:licensee:archive", Sort: 2},
 	}
 	for _, btn := range licenseeButtons {
-		var existing model.Menu
-		if err := db.Where("permission = ?", btn.Permission).First(&existing).Error; err != nil {
-			btn.ParentID = &licenseeMenu.ID
-			if err := db.Create(&btn).Error; err != nil {
-				slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
-				continue
-			}
-			slog.Info("seed: created menu", "name", btn.Name, "permission", btn.Permission)
+		if err := seedButton(licenseeMenu.ID, btn.Name, btn.Permission, btn.Sort); err != nil {
+			slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
+			continue
 		}
 	}
 
 	// 3. Seed 「许可签发」menu under 「许可管理」
-	var licenseMenu model.Menu
-	if err := db.Where("permission = ?", "license:license:list").First(&licenseMenu).Error; err != nil {
-		licenseMenu = model.Menu{
-			ParentID:   &licenseDir.ID,
-			Name:       "许可签发",
-			Type:       model.MenuTypeMenu,
-			Path:       "/license/licenses",
-			Icon:       "FileBadge",
-			Permission: "license:license:list",
-			Sort:       2,
-		}
-		if err := db.Create(&licenseMenu).Error; err != nil {
-			return err
-		}
-		slog.Info("seed: created menu", "name", licenseMenu.Name, "permission", licenseMenu.Permission)
+	licenseMenu, err := seedMenu(&licenseDir.ID, "许可签发", model.MenuTypeMenu, "/license/licenses", "FileBadge", "license:license:list", 2)
+	if err != nil {
+		return err
 	}
 
 	// Seed button permissions under license menu
@@ -126,33 +138,16 @@ func SeedLicense(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{Name: "恢复许可", Type: model.MenuTypeButton, Permission: "license:license:reactivate", Sort: 5},
 	}
 	for _, btn := range licenseButtons {
-		var existing model.Menu
-		if err := db.Where("permission = ?", btn.Permission).First(&existing).Error; err != nil {
-			btn.ParentID = &licenseMenu.ID
-			if err := db.Create(&btn).Error; err != nil {
-				slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
-				continue
-			}
-			slog.Info("seed: created menu", "name", btn.Name, "permission", btn.Permission)
+		if err := seedButton(licenseMenu.ID, btn.Name, btn.Permission, btn.Sort); err != nil {
+			slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
+			continue
 		}
 	}
 
 	// 4. Seed 「注册码管理」menu under 「许可管理」
-	var regMenu model.Menu
-	if err := db.Where("permission = ?", "license:registration:list").First(&regMenu).Error; err != nil {
-		regMenu = model.Menu{
-			ParentID:   &licenseDir.ID,
-			Name:       "注册码管理",
-			Type:       model.MenuTypeMenu,
-			Path:       "/license/registrations",
-			Icon:       "Ticket",
-			Permission: "license:registration:list",
-			Sort:       3,
-		}
-		if err := db.Create(&regMenu).Error; err != nil {
-			return err
-		}
-		slog.Info("seed: created menu", "name", regMenu.Name, "permission", regMenu.Permission)
+	regMenu, err := seedMenu(&licenseDir.ID, "注册码管理", model.MenuTypeMenu, "/license/registrations", "Ticket", "license:registration:list", 3)
+	if err != nil {
+		return err
 	}
 
 	regButtons := []model.Menu{
@@ -160,14 +155,9 @@ func SeedLicense(db *gorm.DB, enforcer *casbin.Enforcer) error {
 		{Name: "自动生成注册码", Type: model.MenuTypeButton, Permission: "license:registration:generate", Sort: 1},
 	}
 	for _, btn := range regButtons {
-		var existing model.Menu
-		if err := db.Where("permission = ?", btn.Permission).First(&existing).Error; err != nil {
-			btn.ParentID = &regMenu.ID
-			if err := db.Create(&btn).Error; err != nil {
-				slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
-				continue
-			}
-			slog.Info("seed: created menu", "name", btn.Name, "permission", btn.Permission)
+		if err := seedButton(regMenu.ID, btn.Name, btn.Permission, btn.Sort); err != nil {
+			slog.Error("seed: failed to create button menu", "permission", btn.Permission, "error", err)
+			continue
 		}
 	}
 
@@ -236,6 +226,9 @@ func SeedLicense(db *gorm.DB, enforcer *casbin.Enforcer) error {
 	}
 
 	allPolicies := append(policies, menuPerms...)
+	if enforcer == nil {
+		return nil
+	}
 	for _, p := range allPolicies {
 		if has, _ := enforcer.HasPolicy(p); !has {
 			if _, err := enforcer.AddPolicy(p); err != nil {

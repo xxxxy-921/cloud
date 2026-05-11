@@ -9,6 +9,7 @@ import (
 	licenseepkg "metis/internal/app/license/licensee"
 	productpkg "metis/internal/app/license/product"
 	"metis/internal/app/license/registration"
+	"strings"
 	"time"
 
 	"github.com/samber/do/v2"
@@ -29,10 +30,14 @@ var (
 	ErrLicenseeNotActive        = errors.New("error.license.licensee_not_active")
 	ErrProductKeyNotFound       = domain.ErrProductKeyNotFound
 	ErrRevokedLicenseNoExport   = errors.New("error.license.revoked_no_export")
+	ErrRegistrationCodeRequired = errors.New("error.license.registration_code_required")
 	ErrRegistrationNotFound     = errors.New("error.license.registration_not_found")
 	ErrRegistrationAlreadyBound = errors.New("error.license.registration_already_bound")
 	ErrRegistrationExpired      = errors.New("error.license.registration_expired")
+	ErrRegistrationOwnership    = errors.New("error.license.registration_scope_mismatch")
 	ErrInvalidLicenseState      = errors.New("error.license.invalid_state")
+	ErrInvalidValidityPeriod    = errors.New("error.license.invalid_validity_period")
+	ErrUpgradeScopeMismatch     = errors.New("error.license.upgrade_scope_mismatch")
 	ErrBulkReissueTooMany       = domain.ErrBulkReissueTooMany
 )
 
@@ -85,9 +90,11 @@ type licensePayloadArgs struct {
 	ValidFrom        time.Time
 	ValidUntil       *time.Time
 	KeyVersion       int
+	IssueNonce       string
 }
 
 func buildLicensePayload(args licensePayloadArgs) (map[string]any, error) {
+	const issueNonceCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 	var constraintMap map[string]any
 	if len(args.ConstraintValues) > 0 {
 		if err := json.Unmarshal(args.ConstraintValues.RawMessage(), &constraintMap); err != nil {
@@ -96,6 +103,14 @@ func buildLicensePayload(args licensePayloadArgs) (map[string]any, error) {
 	}
 	if constraintMap == nil {
 		constraintMap = make(map[string]any)
+	}
+	issueNonce := args.IssueNonce
+	if issueNonce == "" {
+		var err error
+		issueNonce, err = domain.GenerateRandomCode(issueNonceCharset, 12, "LI-")
+		if err != nil {
+			return nil, fmt.Errorf("generate issue nonce: %w", err)
+		}
 	}
 
 	payload := map[string]any{
@@ -109,11 +124,16 @@ func buildLicensePayload(args licensePayloadArgs) (map[string]any, error) {
 		"nbf":  args.ValidFrom.Unix(),
 		"exp":  nil,
 		"kv":   args.KeyVersion,
+		"iid":  issueNonce,
 	}
 	if args.ValidUntil != nil {
 		payload["exp"] = args.ValidUntil.Unix()
 	}
 	return payload, nil
+}
+
+func isRevokedLicenseState(status string, lifecycle string) bool {
+	return status == domain.LicenseStatusRevoked || lifecycle == domain.LicenseLifecycleRevoked
 }
 
 func deriveLifecycleStatus(validFrom time.Time, validUntil *time.Time, now time.Time) string {
@@ -126,7 +146,22 @@ func deriveLifecycleStatus(validFrom time.Time, validUntil *time.Time, now time.
 	return domain.LicenseLifecycleActive
 }
 
+func validateValidityPeriod(validFrom time.Time, validUntil *time.Time) error {
+	if validUntil != nil && !validUntil.After(validFrom) {
+		return ErrInvalidValidityPeriod
+	}
+	return nil
+}
+
 func (s *LicenseService) issueLicenseInTx(tx *gorm.DB, params IssueLicenseParams) (*domain.License, error) {
+	params.RegistrationCode = strings.TrimSpace(params.RegistrationCode)
+	if params.RegistrationCode == "" {
+		return nil, ErrRegistrationCodeRequired
+	}
+	if err := validateValidityPeriod(params.ValidFrom, params.ValidUntil); err != nil {
+		return nil, err
+	}
+
 	// Validate product
 	product, err := s.productRepo.FindByID(params.ProductID)
 	if err != nil {
@@ -225,6 +260,12 @@ func (s *LicenseService) issueLicenseInTx(tx *gorm.DB, params IssueLicenseParams
 		if r.ExpiresAt != nil && !r.ExpiresAt.After(now) {
 			return nil, ErrRegistrationExpired
 		}
+		if r.ProductID != nil && *r.ProductID != params.ProductID {
+			return nil, ErrRegistrationOwnership
+		}
+		if r.LicenseeID != nil && *r.LicenseeID != params.LicenseeID {
+			return nil, ErrRegistrationOwnership
+		}
 		reg = r
 	}
 
@@ -280,7 +321,7 @@ func (s *LicenseService) RevokeLicense(id uint, revokedBy uint) error {
 		}
 		return err
 	}
-	if detail.Status == domain.LicenseStatusRevoked {
+	if isRevokedLicenseState(detail.Status, detail.LifecycleStatus) {
 		return ErrLicenseAlreadyRevoked
 	}
 
@@ -301,11 +342,14 @@ func (s *LicenseService) RenewLicense(id uint, newValidUntil *time.Time, renewed
 		}
 		return err
 	}
-	if detail.LifecycleStatus == domain.LicenseLifecycleRevoked {
+	if isRevokedLicenseState(detail.Status, detail.LifecycleStatus) {
 		return ErrLicenseAlreadyRevoked
 	}
 	if detail.ProductID == nil {
 		return errors.New("license has no associated product")
+	}
+	if err := validateValidityPeriod(detail.ValidFrom, newValidUntil); err != nil {
+		return err
 	}
 
 	key, err := s.keyRepo.FindCurrentByProductID(*detail.ProductID)
@@ -347,11 +391,15 @@ func (s *LicenseService) RenewLicense(id uint, newValidUntil *time.Time, renewed
 	}
 
 	updates := map[string]any{
-		"lifecycle_status": deriveLifecycleStatus(detail.ValidFrom, newValidUntil, timeNow()),
-		"valid_until":      newValidUntil,
-		"key_version":      key.Version,
-		"signature":        sig,
-		"activation_code":  activationCode,
+		"valid_until":     newValidUntil,
+		"key_version":     key.Version,
+		"signature":       sig,
+		"activation_code": activationCode,
+	}
+	if detail.LifecycleStatus == domain.LicenseLifecycleSuspended {
+		updates["lifecycle_status"] = domain.LicenseLifecycleSuspended
+	} else {
+		updates["lifecycle_status"] = deriveLifecycleStatus(detail.ValidFrom, newValidUntil, timeNow())
 	}
 	return s.licenseRepo.UpdateStatus(id, updates)
 }
@@ -364,8 +412,17 @@ func (s *LicenseService) UpgradeLicense(id uint, params IssueLicenseParams) (*do
 		}
 		return nil, err
 	}
-	if original.LifecycleStatus == domain.LicenseLifecycleRevoked {
+	if isRevokedLicenseState(original.Status, original.LifecycleStatus) {
 		return nil, ErrLicenseAlreadyRevoked
+	}
+	if original.ProductID == nil || *original.ProductID != params.ProductID {
+		return nil, ErrUpgradeScopeMismatch
+	}
+	if original.LicenseeID == nil || *original.LicenseeID != params.LicenseeID {
+		return nil, ErrUpgradeScopeMismatch
+	}
+	if err := validateValidityPeriod(params.ValidFrom, params.ValidUntil); err != nil {
+		return nil, err
 	}
 
 	var newLicense *domain.License
@@ -402,6 +459,19 @@ func (s *LicenseService) UpgradeLicense(id uint, params IssueLicenseParams) (*do
 		}
 		newLicense.OriginalLicenseID = &id
 
+		if original.LifecycleStatus == domain.LicenseLifecycleSuspended {
+			if err := s.licenseRepo.UpdateStatusInTx(tx, newLicense.ID, map[string]any{
+				"lifecycle_status": domain.LicenseLifecycleSuspended,
+				"suspended_at":     original.SuspendedAt,
+				"suspended_by":     original.SuspendedBy,
+			}); err != nil {
+				return err
+			}
+			newLicense.LifecycleStatus = domain.LicenseLifecycleSuspended
+			newLicense.SuspendedAt = original.SuspendedAt
+			newLicense.SuspendedBy = original.SuspendedBy
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -419,7 +489,7 @@ func (s *LicenseService) SuspendLicense(id uint, suspendedBy uint) error {
 		}
 		return err
 	}
-	if detail.LifecycleStatus == domain.LicenseLifecycleRevoked {
+	if isRevokedLicenseState(detail.Status, detail.LifecycleStatus) {
 		return ErrLicenseAlreadyRevoked
 	}
 	if detail.LifecycleStatus == domain.LicenseLifecycleSuspended {
@@ -442,14 +512,14 @@ func (s *LicenseService) ReactivateLicense(id uint) error {
 		}
 		return err
 	}
-	if detail.LifecycleStatus == domain.LicenseLifecycleRevoked {
+	if isRevokedLicenseState(detail.Status, detail.LifecycleStatus) {
 		return ErrLicenseAlreadyRevoked
 	}
 	if detail.LifecycleStatus != domain.LicenseLifecycleSuspended {
 		return ErrLicenseNotSuspended
 	}
 
-	newStatus := deriveLifecycleStatus(detail.ValidFrom, detail.ValidUntil, time.Now())
+	newStatus := deriveLifecycleStatus(detail.ValidFrom, detail.ValidUntil, timeNow())
 	return s.licenseRepo.UpdateStatus(id, map[string]any{
 		"lifecycle_status": newStatus,
 		"suspended_at":     nil,
@@ -489,7 +559,7 @@ func (s *LicenseService) ExportLicFile(id uint, format string) (string, string, 
 		}
 		return "", "", err
 	}
-	if detail.LifecycleStatus == domain.LicenseLifecycleRevoked {
+	if isRevokedLicenseState(detail.Status, detail.LifecycleStatus) {
 		return "", "", ErrRevokedLicenseNoExport
 	}
 
@@ -551,6 +621,26 @@ func generateRegistrationCode() (string, error) {
 	return domain.GenerateRandomCode(charset, 16, "RG-")
 }
 
+func (s *LicenseService) ensureRegistrationScopeExists(productID, licenseeID *uint) error {
+	if productID != nil {
+		if _, err := s.productRepo.FindByID(*productID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return productpkg.ErrProductNotFound
+			}
+			return err
+		}
+	}
+	if licenseeID != nil {
+		if _, err := s.licenseeRepo.FindByID(*licenseeID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return licenseepkg.ErrLicenseeNotFound
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 type CreateLicenseRegistrationParams struct {
 	ProductID  *uint
 	LicenseeID *uint
@@ -560,7 +650,14 @@ type CreateLicenseRegistrationParams struct {
 }
 
 func (s *LicenseService) CreateLicenseRegistration(params CreateLicenseRegistrationParams) (*domain.LicenseRegistration, error) {
-	code := params.Code
+	if err := s.ensureRegistrationScopeExists(params.ProductID, params.LicenseeID); err != nil {
+		return nil, err
+	}
+	if params.ExpiresAt != nil && !params.ExpiresAt.After(timeNow()) {
+		return nil, ErrRegistrationExpired
+	}
+
+	code := strings.TrimSpace(params.Code)
 	if code == "" {
 		c, err := generateRegistrationCode()
 		if err != nil {
@@ -595,6 +692,10 @@ func (s *LicenseService) CreateLicenseRegistration(params CreateLicenseRegistrat
 }
 
 func (s *LicenseService) GenerateLicenseRegistration(productID, licenseeID *uint) (*domain.LicenseRegistration, error) {
+	if err := s.ensureRegistrationScopeExists(productID, licenseeID); err != nil {
+		return nil, err
+	}
+
 	var code string
 	for i := 0; i < 3; i++ {
 		c, err := generateRegistrationCode()
@@ -676,6 +777,19 @@ func (s *LicenseService) BulkReissueLicenses(productID uint, ids []uint, issuedB
 		}
 	}
 
+	if len(ids) > 0 {
+		deduped := make([]uint, 0, len(ids))
+		seen := make(map[uint]struct{}, len(ids))
+		for _, id := range ids {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			deduped = append(deduped, id)
+		}
+		ids = deduped
+	}
+
 	if len(ids) > 100 {
 		return 0, ErrBulkReissueTooMany
 	}
@@ -694,7 +808,10 @@ func (s *LicenseService) BulkReissueLicenses(productID uint, ids []uint, issuedB
 		if detail.ProductID == nil || *detail.ProductID != productID {
 			continue
 		}
-		if detail.LifecycleStatus == domain.LicenseLifecycleRevoked {
+		if detail.Status == domain.LicenseStatusRevoked || detail.LifecycleStatus == domain.LicenseLifecycleRevoked {
+			continue
+		}
+		if detail.KeyVersion >= key.Version {
 			continue
 		}
 

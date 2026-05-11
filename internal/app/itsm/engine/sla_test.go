@@ -17,6 +17,67 @@ type fakeSLAAssuranceExecutor struct {
 	trigger bool
 }
 
+type stubSLAAssuranceConfig struct {
+	agentID uint
+}
+
+func (s stubSLAAssuranceConfig) SLAAssuranceAgentID() uint { return s.agentID }
+
+type scriptedSLAAssuranceExecutor struct{}
+
+func (scriptedSLAAssuranceExecutor) Execute(ctx context.Context, agentID uint, req app.AIDecisionRequest) (*app.AIDecisionResponse, error) {
+	if _, err := req.ToolHandler("sla.risk_queue", json.RawMessage(`{}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.ticket_context", json.RawMessage(`{"ticket_id":1}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.escalation_rules", json.RawMessage(`{"ticket_id":1}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.write_timeline", json.RawMessage(`{"ticket_id":1,"message":"SLA 保障岗已确认规则命中","reasoning":"risk queue 与工单上下文均确认超时。"}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.trigger_escalation", json.RawMessage(`{"ticket_id":1,"rule_id":7,"reasoning":"命中响应超时升级规则，立即通知处理人。"}`)); err != nil {
+		return nil, err
+	}
+	return &app.AIDecisionResponse{Content: "triggered", Turns: 1}, nil
+}
+
+type defaultingSLAAssuranceExecutor struct{}
+
+func (defaultingSLAAssuranceExecutor) Execute(ctx context.Context, agentID uint, req app.AIDecisionRequest) (*app.AIDecisionResponse, error) {
+	if _, err := req.ToolHandler("sla.risk_queue", json.RawMessage(`{}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.ticket_context", json.RawMessage(`{"ticket_id":1}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.escalation_rules", json.RawMessage(`{"ticket_id":1}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.write_timeline", json.RawMessage(`{"ticket_id":1,"message":"","reasoning":"记录一次默认观察。"}`)); err != nil {
+		return nil, err
+	}
+	if _, err := req.ToolHandler("sla.trigger_escalation", json.RawMessage(`{"ticket_id":1,"rule_id":7,"reasoning":""}`)); err != nil {
+		return nil, err
+	}
+	return &app.AIDecisionResponse{Content: "triggered", Turns: 1}, nil
+}
+
+type invalidSLAAssuranceExecutor struct {
+	tool string
+	args string
+}
+
+func (e invalidSLAAssuranceExecutor) Execute(ctx context.Context, agentID uint, req app.AIDecisionRequest) (*app.AIDecisionResponse, error) {
+	_, err := req.ToolHandler(e.tool, json.RawMessage(e.args))
+	if err != nil {
+		return nil, err
+	}
+	return &app.AIDecisionResponse{Content: "unexpected success", Turns: 1}, nil
+}
+
 type fakeEscalationNotifier struct {
 	err   error
 	calls []fakeEscalationNotifyCall
@@ -441,6 +502,53 @@ func TestSLACheckReturnsErrorAndSkipsEscalationWhenBreachAuditFails(t *testing.T
 	}
 }
 
+func TestSLACheckSkipsAlreadyRecordedEscalationRule(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	deadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3,
+		`[{"id":17,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	ticket := &ticketModel{
+		ID:                  1,
+		Code:                "T-1",
+		Title:               "VPN 申请",
+		ServiceID:           1,
+		ServiceVersionID:    &versionID,
+		EngineType:          "classic",
+		Status:              TicketStatusWaitingHuman,
+		SLAResponseDeadline: &deadline,
+		SLAStatus:           slaBreachedResponse,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	if err := db.Create(&timelineModel{
+		TicketID:   ticket.ID,
+		OperatorID: 0,
+		EventType:  "sla_escalation",
+		Message:    "已执行过升级动作",
+		Details:    `{"rule_id":17,"trigger_type":"response_timeout"}`,
+	}).Error; err != nil {
+		t.Fatalf("seed prior escalation timeline: %v", err)
+	}
+	notifier := &fakeEscalationNotifier{}
+
+	if err := executeEscalation(context.Background(), db, ticket, "response_timeout", deadline.Add(5*time.Minute), nil, nil, NewParticipantResolver(nil), notifier); err != nil {
+		t.Fatalf("execute escalation: %v", err)
+	}
+	if len(notifier.calls) != 0 {
+		t.Fatalf("expected duplicate escalation to be skipped, got calls=%+v", notifier.calls)
+	}
+	var count int64
+	if err := db.Table("itsm_ticket_timelines").
+		Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":17%`).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count escalation timelines: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected duplicate escalation not to create new timeline, got %d", count)
+	}
+}
+
 func TestSLAAssuranceAgentTriggersEscalationTool(t *testing.T) {
 	db := setupSLAAssuranceTestDB(t)
 	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", SLAStatus: slaBreachedResponse}
@@ -481,6 +589,67 @@ func TestSLAAssuranceAgentMustTriggerEscalation(t *testing.T) {
 	if err := runSLAAssuranceAgent(context.Background(), db, ticket, rule, "response_timeout", 9, "SLA 保障智能体", fakeSLAAssuranceExecutor{}, nil, nil); err == nil {
 		t.Fatal("expected error when agent does not trigger escalation")
 	}
+}
+
+func TestSLAAssuranceAgentToolDefaultsAndGuards(t *testing.T) {
+	t.Run("defaults empty observation message and trigger reasoning", func(t *testing.T) {
+		db := setupSLAAssuranceTestDB(t)
+		ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", SLAStatus: slaBreachedResponse}
+		if err := db.Create(ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		rule := &escalationRuleModel{
+			ID:           7,
+			SLAID:        3,
+			TriggerType:  "response_timeout",
+			Level:        1,
+			ActionType:   "notify",
+			TargetConfig: `{"recipients":[{"type":"user","value":"999"}],"channelId":5}`,
+			IsActive:     true,
+		}
+		if err := runSLAAssuranceAgent(context.Background(), db, ticket, rule, "response_timeout", 9, "SLA 保障智能体", defaultingSLAAssuranceExecutor{}, NewParticipantResolver(nil), nil); err != nil {
+			t.Fatalf("run agent: %v", err)
+		}
+
+		var note timelineModel
+		if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "sla_assurance_note").First(&note).Error; err != nil {
+			t.Fatalf("load assurance note: %v", err)
+		}
+		if note.Message != "SLA 保障岗已记录处理观察" {
+			t.Fatalf("default note message = %q", note.Message)
+		}
+
+		var escalation timelineModel
+		if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":7%`).First(&escalation).Error; err != nil {
+			t.Fatalf("load escalation timeline: %v", err)
+		}
+		if escalation.Reasoning != "SLA 保障岗确认规则已命中，按已配置升级动作执行。" {
+			t.Fatalf("default escalation reasoning = %q", escalation.Reasoning)
+		}
+	})
+
+	t.Run("rejects foreign ticket and rule access", func(t *testing.T) {
+		db := setupSLAAssuranceTestDB(t)
+		ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", SLAStatus: slaBreachedResponse}
+		if err := db.Create(ticket).Error; err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+		rule := &escalationRuleModel{ID: 7, SLAID: 3, TriggerType: "response_timeout", Level: 1, ActionType: "notify", IsActive: true}
+
+		if err := runSLAAssuranceAgent(context.Background(), db, ticket, rule, "response_timeout", 9, "SLA 保障智能体", invalidSLAAssuranceExecutor{
+			tool: "sla.trigger_escalation",
+			args: `{"ticket_id":2,"rule_id":8,"reasoning":"越权触发"}`,
+		}, NewParticipantResolver(nil), nil); err == nil || !strings.Contains(err.Error(), "只允许触发当前候选工单和已命中规则") {
+			t.Fatalf("foreign trigger error = %v", err)
+		}
+
+		if err := runSLAAssuranceAgent(context.Background(), db, ticket, rule, "response_timeout", 9, "SLA 保障智能体", invalidSLAAssuranceExecutor{
+			tool: "sla.ticket_context",
+			args: `{"ticket_id":2}`,
+		}, NewParticipantResolver(nil), nil); err == nil || !strings.Contains(err.Error(), "只允许读取当前候选工单") {
+			t.Fatalf("foreign ticket context error = %v", err)
+		}
+	})
 }
 
 func TestEscalationNotifySendsResolvedUsers(t *testing.T) {
@@ -620,6 +789,56 @@ func TestEscalationReassignUpdatesCurrentAssignment(t *testing.T) {
 	}
 }
 
+func TestEscalationReassignSupportsInProgressCurrentAssignment(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	if err := db.AutoMigrate(&activityModel{}, &assignmentModel{}); err != nil {
+		t.Fatalf("migrate activity assignment models: %v", err)
+	}
+	activityID := uint(109)
+	currentUser := uint(20)
+	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "waiting_human", CurrentActivityID: &activityID, SLAStatus: slaBreachedResponse}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	activity := activityModel{ID: activityID, TicketID: ticket.ID, ActivityType: NodeProcess, Status: ActivityInProgress}
+	if err := db.Create(&activity).Error; err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+	assignment := assignmentModel{TicketID: ticket.ID, ActivityID: activity.ID, ParticipantType: "user", UserID: &currentUser, AssigneeID: &currentUser, Status: ActivityInProgress, IsCurrent: true}
+	if err := db.Create(&assignment).Error; err != nil {
+		t.Fatalf("create assignment: %v", err)
+	}
+	rule := &escalationRuleModel{
+		ID:           18,
+		SLAID:        3,
+		TriggerType:  "resolution_timeout",
+		Level:        2,
+		ActionType:   "reassign",
+		TargetConfig: `{"assigneeCandidates":[{"type":"user","value":"21"}]}`,
+		IsActive:     true,
+	}
+
+	if err := executeEscalationAction(context.Background(), db, ticket, rule, "resolution_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("execute escalation: %v", err)
+	}
+
+	var updated assignmentModel
+	if err := db.First(&updated, assignment.ID).Error; err != nil {
+		t.Fatalf("load assignment: %v", err)
+	}
+	if updated.UserID == nil || *updated.UserID != 21 || updated.AssigneeID == nil || *updated.AssigneeID != 21 {
+		t.Fatalf("expected in-progress assignment to move to user 21, got %+v", updated)
+	}
+
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":18%`).First(&timeline).Error; err != nil {
+		t.Fatalf("load timeline: %v", err)
+	}
+	if timeline.Message != "SLA 升级：工单已转派" {
+		t.Fatalf("timeline message = %q", timeline.Message)
+	}
+}
+
 func TestEscalationPriorityMissingTargetLeavesTicketUnchanged(t *testing.T) {
 	db := setupSLAAssuranceTestDB(t)
 	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", PriorityID: 2, SLAStatus: slaBreachedResponse}
@@ -653,6 +872,289 @@ func TestEscalationPriorityMissingTargetLeavesTicketUnchanged(t *testing.T) {
 	}
 	if timeline.Message != "SLA 升级：目标优先级不存在或已停用" {
 		t.Fatalf("timeline message = %q", timeline.Message)
+	}
+}
+
+func TestEscalationNotifyWithoutRecipientsOrNotifierRecordsDeterministicResult(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", PriorityID: 2, SLAStatus: slaBreachedResponse}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	t.Run("no resolved recipients", func(t *testing.T) {
+		rule := &escalationRuleModel{
+			ID:           11,
+			SLAID:        3,
+			TriggerType:  "response_timeout",
+			Level:        1,
+			ActionType:   "notify",
+			TargetConfig: `{"recipients":[{"type":"user","value":"999"}],"channelId":5}`,
+			IsActive:     true,
+		}
+		if err := executeEscalationAction(context.Background(), db, ticket, rule, "response_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), &fakeEscalationNotifier{}); err != nil {
+			t.Fatalf("execute escalation: %v", err)
+		}
+		var timeline timelineModel
+		if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":11%`).First(&timeline).Error; err != nil {
+			t.Fatalf("load no-recipient timeline: %v", err)
+		}
+		if timeline.Message != "SLA 升级通知未发送：未解析到接收人" {
+			t.Fatalf("timeline message = %q", timeline.Message)
+		}
+	})
+
+	t.Run("notifier unavailable", func(t *testing.T) {
+		rule := &escalationRuleModel{
+			ID:           12,
+			SLAID:        3,
+			TriggerType:  "response_timeout",
+			Level:        2,
+			ActionType:   "notify",
+			TargetConfig: `{"recipients":[{"type":"user","value":"10"}],"channelId":6}`,
+			IsActive:     true,
+		}
+		if err := executeEscalationAction(context.Background(), db, ticket, rule, "response_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), nil); err != nil {
+			t.Fatalf("execute escalation: %v", err)
+		}
+		var timeline timelineModel
+		if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":12%`).First(&timeline).Error; err != nil {
+			t.Fatalf("load no-notifier timeline: %v", err)
+		}
+		if timeline.Message != "SLA 升级通知未发送：消息通道不可用" {
+			t.Fatalf("timeline message = %q", timeline.Message)
+		}
+	})
+}
+
+func TestEscalationReassignWithoutCurrentActivityRecordsFailure(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "waiting_human", SLAStatus: slaBreachedResponse}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	rule := &escalationRuleModel{
+		ID:           13,
+		SLAID:        3,
+		TriggerType:  "resolution_timeout",
+		Level:        1,
+		ActionType:   "reassign",
+		TargetConfig: `{"assigneeCandidates":[{"type":"user","value":"20"}]}`,
+		IsActive:     true,
+	}
+
+	if err := executeEscalationAction(context.Background(), db, ticket, rule, "resolution_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("execute escalation: %v", err)
+	}
+
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":13%`).First(&timeline).Error; err != nil {
+		t.Fatalf("load timeline: %v", err)
+	}
+	if timeline.Message != "SLA 升级转派失败：工单没有当前活动" {
+		t.Fatalf("timeline message = %q", timeline.Message)
+	}
+}
+
+func TestEscalationPriorityUpdatesTicketAndTimeline(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	if err := db.Create(&slaPriorityTestModel{ID: 8, Name: "P0", Code: "P0", IsActive: true}).Error; err != nil {
+		t.Fatalf("create priority: %v", err)
+	}
+	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", PriorityID: 2, SLAStatus: slaBreachedResponse}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	rule := &escalationRuleModel{
+		ID:           14,
+		SLAID:        3,
+		TriggerType:  "response_timeout",
+		Level:        3,
+		ActionType:   "escalate_priority",
+		TargetConfig: `{"priorityId":8}`,
+		IsActive:     true,
+	}
+
+	if err := executeEscalationAction(context.Background(), db, ticket, rule, "response_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("execute escalation: %v", err)
+	}
+
+	var updated ticketModel
+	if err := db.First(&updated, ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if updated.PriorityID != 8 {
+		t.Fatalf("priority_id = %d, want 8", updated.PriorityID)
+	}
+
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":14%`).First(&timeline).Error; err != nil {
+		t.Fatalf("load timeline: %v", err)
+	}
+	if timeline.Message != "SLA 升级：工单优先级已提升" {
+		t.Fatalf("timeline message = %q", timeline.Message)
+	}
+	if !strings.Contains(timeline.Details, `"priority_code":"P0"`) {
+		t.Fatalf("unexpected timeline details: %s", timeline.Details)
+	}
+}
+
+func TestEscalationActionRejectsInvalidTargetConfigAndUnknownAction(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	ticket := &ticketModel{ID: 1, Code: "T-1", Title: "VPN 申请", Status: "in_progress", PriorityID: 2, SLAStatus: slaBreachedResponse}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	if err := executeEscalationAction(context.Background(), db, ticket, &escalationRuleModel{
+		ID:           15,
+		SLAID:        3,
+		TriggerType:  "response_timeout",
+		Level:        1,
+		ActionType:   "notify",
+		TargetConfig: `{bad json`,
+		IsActive:     true,
+	}, "response_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), nil); err == nil || !strings.Contains(err.Error(), "invalid SLA escalation target config") {
+		t.Fatalf("invalid target config error = %v", err)
+	}
+
+	if err := executeEscalationAction(context.Background(), db, ticket, &escalationRuleModel{
+		ID:          16,
+		SLAID:       3,
+		TriggerType: "response_timeout",
+		Level:       1,
+		ActionType:  "archive",
+		IsActive:    true,
+	}, "response_timeout", 0, "系统计时器", "命中规则", NewParticipantResolver(nil), nil); err == nil || !strings.Contains(err.Error(), "未知 SLA 升级动作") {
+		t.Fatalf("unknown action error = %v", err)
+	}
+}
+
+func TestSLACheckSmartTicketRecordsPendingWhenAssuranceAgentMissing(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	deadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3,
+		`[{"id":7,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	ticket := &ticketModel{
+		ID:                  1,
+		Code:                "T-1",
+		Title:               "VPN 申请",
+		ServiceID:           1,
+		ServiceVersionID:    &versionID,
+		EngineType:          "smart",
+		Status:              TicketStatusDecisioning,
+		SLAResponseDeadline: &deadline,
+		SLAStatus:           slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(5*time.Minute), nil, nil, NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
+
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "sla_assurance_pending").First(&timeline).Error; err != nil {
+		t.Fatalf("pending timeline not written: %v", err)
+	}
+	if timeline.Message != "SLA 保障岗未上岗，升级动作待人工处理" {
+		t.Fatalf("timeline message = %q", timeline.Message)
+	}
+	if !strings.Contains(timeline.Reasoning, "未绑定智能体") {
+		t.Fatalf("unexpected pending reasoning: %q", timeline.Reasoning)
+	}
+}
+
+func TestSLACheckSmartTicketRecordsPendingWhenExecutorUnavailable(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	deadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3,
+		`[{"id":8,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	ticket := &ticketModel{
+		ID:                  1,
+		Code:                "T-1",
+		Title:               "VPN 申请",
+		ServiceID:           1,
+		ServiceVersionID:    &versionID,
+		EngineType:          "smart",
+		Status:              TicketStatusDecisioning,
+		SLAResponseDeadline: &deadline,
+		SLAStatus:           slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	cfg := stubSLAAssuranceConfig{agentID: 88}
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(5*time.Minute), cfg, nil, NewParticipantResolver(nil), nil); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
+
+	var timeline timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "sla_assurance_pending").First(&timeline).Error; err != nil {
+		t.Fatalf("pending timeline not written: %v", err)
+	}
+	if !strings.Contains(timeline.Reasoning, "AI 执行器不可用") {
+		t.Fatalf("unexpected pending reasoning: %q", timeline.Reasoning)
+	}
+	if !strings.Contains(timeline.Details, `"agent_id":88`) {
+		t.Fatalf("expected pending details to include agent id, got %s", timeline.Details)
+	}
+}
+
+func TestSLACheckSmartTicketRunsAssuranceAgentAndWritesObservation(t *testing.T) {
+	db := setupSLAAssuranceTestDB(t)
+	if err := db.Exec(`CREATE TABLE ai_agents (id integer primary key, name text, is_active boolean)`).Error; err != nil {
+		t.Fatalf("create ai_agents table: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO ai_agents (id, name, is_active) VALUES (55, 'SLA 保障智能体', true)`).Error; err != nil {
+		t.Fatalf("seed ai agent: %v", err)
+	}
+	deadline := time.Now().Add(-5 * time.Minute)
+	versionID := seedSLARuntimeVersion(t, db, 1, 3,
+		`[{"id":7,"slaId":3,"triggerType":"response_timeout","level":1,"waitMinutes":0,"actionType":"notify","targetConfig":{"recipients":[{"type":"user","value":"10"}],"channelId":5},"isActive":true}]`)
+	ticket := &ticketModel{
+		ID:                  1,
+		Code:                "T-1",
+		Title:               "VPN 申请",
+		ServiceID:           1,
+		ServiceVersionID:    &versionID,
+		EngineType:          "smart",
+		Status:              TicketStatusDecisioning,
+		SLAResponseDeadline: &deadline,
+		SLAStatus:           slaOnTrack,
+	}
+	if err := db.Create(ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+
+	notifier := &fakeEscalationNotifier{}
+	cfg := stubSLAAssuranceConfig{agentID: 55}
+	if err := checkTicketSLA(context.Background(), db, ticket, deadline.Add(5*time.Minute), cfg, scriptedSLAAssuranceExecutor{}, NewParticipantResolver(nil), notifier); err != nil {
+		t.Fatalf("sla check: %v", err)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(notifier.calls))
+	}
+	if notifier.calls[0].channelID != 5 || len(notifier.calls[0].recipientIDs) != 1 || notifier.calls[0].recipientIDs[0] != 10 {
+		t.Fatalf("unexpected notify call: %+v", notifier.calls[0])
+	}
+
+	var note timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "sla_assurance_note").First(&note).Error; err != nil {
+		t.Fatalf("load assurance note: %v", err)
+	}
+	if note.Message != "SLA 保障岗已确认规则命中" || !strings.Contains(note.Reasoning, "risk queue") {
+		t.Fatalf("unexpected assurance note: %+v", note)
+	}
+
+	var escalation timelineModel
+	if err := db.Where("ticket_id = ? AND event_type = ? AND details LIKE ?", ticket.ID, "sla_escalation", `%"rule_id":7%`).First(&escalation).Error; err != nil {
+		t.Fatalf("load escalation timeline: %v", err)
+	}
+	if !strings.Contains(escalation.Details, `"agent_name":"SLA 保障智能体"`) {
+		t.Fatalf("unexpected escalation details: %s", escalation.Details)
 	}
 }
 

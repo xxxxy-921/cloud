@@ -449,8 +449,8 @@ func reassignCurrentActivity(db *gorm.DB, t *ticketModel, newAssignee uint) erro
 			"department_id":    nil,
 		}
 		result := tx.Model(&assignmentModel{}).
-			Where("ticket_id = ? AND activity_id = ? AND status = ? AND is_current = ?",
-				t.ID, *t.CurrentActivityID, "pending", true).
+			Where("ticket_id = ? AND activity_id = ? AND status IN ? AND is_current = ?",
+				t.ID, *t.CurrentActivityID, []string{"pending", "in_progress"}, true).
 			Updates(updates)
 		if result.Error != nil {
 			return result.Error

@@ -249,7 +249,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 	userID := c.GetUint("userId")
 	if err := h.auth.ChangePassword(userID, req.OldPassword, req.NewPassword); err != nil {
-		if errors.Is(err, service.ErrOldPasswordWrong) {
+		if errors.Is(err, service.ErrOldPasswordWrong) || errors.Is(err, service.ErrPasswordViolation) {
 			Fail(c, http.StatusBadRequest, err.Error())
 			return
 		}

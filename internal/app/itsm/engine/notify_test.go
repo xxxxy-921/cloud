@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -293,5 +294,88 @@ func TestClassicEngine_FailingNotifierDoesNotPanic(t *testing.T) {
 	err := e.notifier.Send(context.Background(), 1, "test", "body", []uint{1})
 	if err == nil {
 		t.Error("expected error from failing notifier")
+	}
+}
+
+func TestClassicEngineNotifyNodeSendsMessageAndContinues(t *testing.T) {
+	f := newClassicMatrixFixture(t)
+	mock := &mockNotificationSender{}
+	f.engine = NewClassicEngine(NewParticipantResolver(nil), f.submitter, mock)
+
+	workflow := json.RawMessage(`{
+		"nodes":[
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"notify","type":"notify","data":{"label":"通知管理员","channel_id":5,"template":"工单 {{ticket.code}} 环境 {{var.env}}","recipients":[{"type":"user","value":"7"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges":[
+			{"id":"e1","source":"start","target":"notify","data":{}},
+			{"id":"e2","source":"notify","target":"end","data":{}}
+		]
+	}`)
+	ticket := f.createTicket(t, workflow)
+	if err := f.db.Create(&processVariableModel{TicketID: ticket.ID, ScopeID: "root", Key: "env", Value: "prod"}).Error; err != nil {
+		t.Fatalf("seed process variable: %v", err)
+	}
+
+	if err := f.start(t, ticket, workflow); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got := f.ticketStatus(t, ticket.ID); got != TicketStatusCompleted {
+		t.Fatalf("ticket status = %s, want %s", got, TicketStatusCompleted)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("notifier calls = %d, want 1", len(mock.calls))
+	}
+	call := mock.calls[0]
+	if call.ChannelID != 5 || call.Subject != "通知管理员" {
+		t.Fatalf("unexpected notify call: %+v", call)
+	}
+	if call.Body != fmt.Sprintf("工单 TICK-%06d 环境 prod", ticket.ID) {
+		t.Fatalf("unexpected notify body: %q", call.Body)
+	}
+	if len(call.RecipientIDs) != 1 || call.RecipientIDs[0] != 7 {
+		t.Fatalf("unexpected recipients: %+v", call.RecipientIDs)
+	}
+
+	var sentCount int64
+	if err := f.db.Model(&timelineModel{}).Where("ticket_id = ? AND event_type = ?", ticket.ID, "notification_sent").Count(&sentCount).Error; err != nil {
+		t.Fatalf("count notification_sent: %v", err)
+	}
+	if sentCount != 1 {
+		t.Fatalf("notification_sent count = %d, want 1", sentCount)
+	}
+}
+
+func TestClassicEngineNotifyNodeWarnsButDoesNotBlockOnSendFailure(t *testing.T) {
+	f := newClassicMatrixFixture(t)
+	mock := &mockNotificationSender{err: errors.New("smtp down")}
+	f.engine = NewClassicEngine(NewParticipantResolver(nil), f.submitter, mock)
+
+	workflow := json.RawMessage(`{
+		"nodes":[
+			{"id":"start","type":"start","data":{"label":"开始"}},
+			{"id":"notify","type":"notify","data":{"label":"通知管理员","channel_id":5,"template":"body","recipients":[{"type":"user","value":"7"}]}},
+			{"id":"end","type":"end","data":{"label":"结束"}}
+		],
+		"edges":[
+			{"id":"e1","source":"start","target":"notify","data":{}},
+			{"id":"e2","source":"notify","target":"end","data":{}}
+		]
+	}`)
+	ticket := f.createTicket(t, workflow)
+	if err := f.start(t, ticket, workflow); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got := f.ticketStatus(t, ticket.ID); got != TicketStatusCompleted {
+		t.Fatalf("ticket status = %s, want %s", got, TicketStatusCompleted)
+	}
+
+	var warningCount int64
+	if err := f.db.Model(&timelineModel{}).Where("ticket_id = ? AND event_type = ?", ticket.ID, "warning").Count(&warningCount).Error; err != nil {
+		t.Fatalf("count warning timeline: %v", err)
+	}
+	if warningCount != 1 {
+		t.Fatalf("warning timeline count = %d, want 1", warningCount)
 	}
 }
