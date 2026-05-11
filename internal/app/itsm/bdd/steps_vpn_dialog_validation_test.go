@@ -153,15 +153,18 @@ const serviceDeskTestPrompt = `你是 IT 服务台智能体，帮助用户完成
 - “尽快”“随时”“越快越好”不能写入时间字段；需要追问具体时间`
 
 func setupDialogTest(bc *bddContext) (func(ctx context.Context, userMsg string) error, error) {
+	return setupDialogTestWithOptions(bc, newMemStateStore(), serviceDeskTestPrompt)
+}
+
+func setupDialogTestWithOptions(bc *bddContext, store tools.StateStore, systemPrompt string) (func(ctx context.Context, userMsg string) error, error) {
 	// Build LLM client.
 	client, err := llm.NewClient(llm.ProtocolOpenAI, bc.llmCfg.baseURL, bc.llmCfg.apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("create LLM client: %w", err)
 	}
 
-	// Build ITSM tool registry backed by real operator + memStateStore.
+	// Build ITSM tool registry backed by real operator + state store.
 	op := tools.NewOperator(bc.db, nil, nil, nil, nil, &bddServiceMatcher{db: bc.db})
-	store := newMemStateStore()
 	registry := tools.NewRegistry(op, store)
 
 	// The session ID used for state management.
@@ -205,7 +208,7 @@ func setupDialogTest(bc *bddContext) (func(ctx context.Context, userMsg string) 
 		executeOnce := func(messages []ai.ExecuteMessage) error {
 			req := ai.ExecuteRequest{
 				SessionID:    testSessionID,
-				SystemPrompt: serviceDeskTestPrompt,
+				SystemPrompt: systemPrompt,
 				Messages:     messages,
 				Tools:        toolDefs,
 				MaxTurns:     10,
@@ -273,7 +276,13 @@ func setupDialogTest(bc *bddContext) (func(ctx context.Context, userMsg string) 
 			}
 			bc.dialogState.toolCalls = nil
 			bc.dialogState.toolResults = nil
-			llmMessages := []llm.Message{{Role: llm.RoleSystem, Content: serviceDeskTestPrompt}}
+			existingCalls := append([]toolCallRecord{}, bc.dialogState.toolCalls...)
+			existingResults := append([]toolResultRecord{}, bc.dialogState.toolResults...)
+			existingContent := bc.dialogState.finalContent
+			bc.dialogState.toolCalls = nil
+			bc.dialogState.toolResults = nil
+			bc.dialogState.finalContent = existingContent
+			llmMessages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt}}
 			for _, msg := range messages {
 				llmMessages = append(llmMessages, llm.Message{
 					Role:       msg.Role,
@@ -283,7 +292,7 @@ func setupDialogTest(bc *bddContext) (func(ctx context.Context, userMsg string) 
 					ToolCallID: msg.ToolCallID,
 				})
 			}
-			for i := 0; i < 4; i++ {
+			for i := 0; i < 5; i++ {
 				resp, err := client.Chat(ctx, llm.ChatRequest{
 					Model:       bc.llmCfg.model,
 					Messages:    llmMessages,
@@ -292,12 +301,24 @@ func setupDialogTest(bc *bddContext) (func(ctx context.Context, userMsg string) 
 					Temperature: ptrFloat32(0.2),
 				})
 				if err != nil {
+					bc.dialogState.toolCalls = existingCalls
+					bc.dialogState.toolResults = existingResults
+					bc.dialogState.finalContent = existingContent
 					return err
 				}
 				if strings.TrimSpace(resp.Content) != "" {
 					bc.dialogState.finalContent = resp.Content
 				}
 				if len(resp.ToolCalls) == 0 {
+					if strings.TrimSpace(resp.Content) == "" && i < 4 {
+						llmMessages = append(llmMessages, llm.Message{
+							Role:    llm.RoleUser,
+							Content: "请直接面向用户输出下一步问题或说明，不要留空白。",
+						})
+						continue
+					}
+					bc.dialogState.toolCalls = append(existingCalls, bc.dialogState.toolCalls...)
+					bc.dialogState.toolResults = append(existingResults, bc.dialogState.toolResults...)
 					return nil
 				}
 				llmMessages = append(llmMessages, llm.Message{

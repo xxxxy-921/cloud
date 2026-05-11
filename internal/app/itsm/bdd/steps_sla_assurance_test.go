@@ -13,6 +13,7 @@ import (
 
 	ai "metis/internal/app/ai/runtime"
 	"metis/internal/app/itsm/engine"
+	"metis/internal/app/itsm/tools"
 )
 
 const bddSLAAssuranceAgentPrompt = `你是 SLA 保障岗，负责监督智能 ITSM 工单的 SLA 风险并在规则命中时触发升级动作。
@@ -164,6 +165,11 @@ func (bc *bddContext) createResponseSLATicketWithRule(actionType string, waitMin
 	if err := bc.db.Create(rule).Error; err != nil {
 		return fmt.Errorf("create escalation rule: %w", err)
 	}
+	op := tools.NewOperator(bc.db, nil, nil, nil, nil, nil)
+	detail, err := op.LoadService(bc.service.ID)
+	if err != nil {
+		return fmt.Errorf("load service snapshot: %w", err)
+	}
 
 	now := time.Now()
 	responseDeadline := now.Add(responseDeadlineOffset)
@@ -180,12 +186,45 @@ func (bc *bddContext) createResponseSLATicketWithRule(actionType string, waitMin
 		AssigneeID:            &current.ID,
 		Source:                TicketSourceAgent,
 		FormData:              JSONField(`{"impact":"production"}`),
+		ServiceVersionID:      uintPtr(detail.ServiceVersionID),
 		SLAResponseDeadline:   &responseDeadline,
 		SLAResolutionDeadline: &resolutionDeadline,
 		SLAStatus:             SLAStatusOnTrack,
 	}
 	if err := bc.db.Create(ticket).Error; err != nil {
 		return fmt.Errorf("create ticket: %w", err)
+	}
+	if actionType == "reassign" {
+		activity := &TicketActivity{
+			TicketID:     ticket.ID,
+			Name:         "当前人工处理",
+			ActivityType: "process",
+			Status:       AssignmentPending,
+			StartedAt:    &now,
+		}
+		if err := bc.db.Create(activity).Error; err != nil {
+			return fmt.Errorf("create current activity: %w", err)
+		}
+		assignment := &TicketAssignment{
+			TicketID:        ticket.ID,
+			ActivityID:      activity.ID,
+			ParticipantType: "user",
+			UserID:          &current.ID,
+			AssigneeID:      &current.ID,
+			Status:          AssignmentPending,
+			IsCurrent:       true,
+		}
+		if err := bc.db.Create(assignment).Error; err != nil {
+			return fmt.Errorf("create current assignment: %w", err)
+		}
+		if err := bc.db.Model(ticket).Updates(map[string]any{
+			"current_activity_id": activity.ID,
+			"assignee_id":         current.ID,
+		}).Error; err != nil {
+			return fmt.Errorf("bind current activity: %w", err)
+		}
+		ticket.CurrentActivityID = &activity.ID
+		ticket.AssigneeID = &current.ID
 	}
 	bc.ticket = ticket
 	return nil

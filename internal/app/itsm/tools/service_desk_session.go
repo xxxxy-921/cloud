@@ -224,6 +224,9 @@ func (s *ServiceDeskSession) LoadService(sessionID uint, requestedServiceID uint
 			state.ServiceVersionID = detail.ServiceVersionID
 			state.ServiceVersionHash = detail.ServiceVersionHash
 			state.ConfirmedDraftVersion = 0
+			if err := state.TransitionTo("service_loaded"); err != nil {
+				return nil, err
+			}
 		}
 		state.PrefillFormData = detail.PrefillSuggestions
 		clearPendingNextRequiredTool(state)

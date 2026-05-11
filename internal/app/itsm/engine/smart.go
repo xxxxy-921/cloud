@@ -1487,11 +1487,17 @@ func collaborationSpecRequestKindPositions(tx *gorm.DB, ticketID uint, spec stri
 }
 
 func looksLikeVPNRequestKindSpec(spec string) bool {
-	return strings.Contains(spec, "form.request_kind") &&
+	if strings.Contains(spec, "form.request_kind") &&
 		strings.Contains(spec, "network_admin") &&
 		strings.Contains(spec, "security_admin") &&
 		strings.Contains(spec, "online_support") &&
-		strings.Contains(spec, "security_compliance")
+		strings.Contains(spec, "security_compliance") {
+		return true
+	}
+	return strings.Contains(spec, "访问原因包括线上支持") &&
+		strings.Contains(spec, "交给信息部网络管理员处理") &&
+		strings.Contains(spec, "交给信息部信息安全管理员处理") &&
+		strings.Contains(spec, "安全合规事项")
 }
 
 func collaborationSpecAccessPurposePosition(tx *gorm.DB, ticketID uint, spec string) (string, bool, error) {

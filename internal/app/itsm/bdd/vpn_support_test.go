@@ -207,6 +207,7 @@ const decisionAgentSystemPrompt = `你是流程决策智能体，负责为 ITSM 
 2. 当需要确定具体处理人、岗位或岗位+部门时，必须先依据组织架构和已知上下文做判断，不能凭空假设
 3. 只能输出当前工单"下一步真正需要执行"的活动，不要把未来多步一次性展开
 4. reasoning 必须解释判断依据，说明为什么是这个人、这个岗位，或者这个岗位+部门
+5. 每次决策前必须先调用 decision.ticket_context 读取当前工单事实；只有拿到 ticket_context 后，才允许调用 decision.resolve_participant 或输出最终决策
 
 决策原则：
 1. 优先遵循明确规则，其次才是保守推断；不能为了让流程继续而编造参与者、节点或条件
@@ -223,15 +224,9 @@ const decisionAgentSystemPrompt = `你是流程决策智能体，负责为 ITSM 
 请始终输出结构化、保守且可审计的判断。`
 
 // publishVPNSmartService creates a smart service definition for BDD tests:
-// LLM-generated workflow JSON + Agent record + ServiceDefinition(engine_type=smart).
+// static workflow JSON + Agent record + ServiceDefinition(engine_type=smart).
 func publishVPNSmartService(bc *bddContext) error {
-	// 1. Generate workflow via LLM (smart engine tool chain also needs workflow_json as context)
-	workflowJSON, err := generateVPNWorkflow(bc.llmCfg)
-	if err != nil {
-		return fmt.Errorf("generate VPN workflow: %w", err)
-	}
-
-	// 2. ServiceCatalog
+	// 1. ServiceCatalog
 	catalog := &ServiceCatalog{
 		Name:     "VPN服务(智能)",
 		Code:     "vpn-smart",
@@ -241,7 +236,7 @@ func publishVPNSmartService(bc *bddContext) error {
 		return fmt.Errorf("create service catalog: %w", err)
 	}
 
-	// 3. Priority
+	// 2. Priority
 	priority := &Priority{
 		Name:     "普通",
 		Code:     "normal-smart",
@@ -254,7 +249,7 @@ func publishVPNSmartService(bc *bddContext) error {
 	}
 	bc.priority = priority
 
-	// 4. Seed Agent record (process decision agent)
+	// 3. Seed Agent record (process decision agent)
 	agent := &ai.Agent{
 		Name:         "流程决策智能体",
 		Type:         "assistant",
@@ -271,13 +266,14 @@ func publishVPNSmartService(bc *bddContext) error {
 		return fmt.Errorf("create agent: %w", err)
 	}
 
-	// 5. ServiceDefinition with engine_type=smart
+	// 4. ServiceDefinition with engine_type=smart
 	svc := &ServiceDefinition{
 		Name:              "VPN开通申请(智能)",
 		Code:              "vpn-activation-smart",
 		CatalogID:         catalog.ID,
 		EngineType:        "smart",
-		WorkflowJSON:      JSONField(workflowJSON),
+		IntakeFormSchema:  JSONField(vpnFormSchema),
+		WorkflowJSON:      JSONField(vpnDialogWorkflowJSON),
 		CollaborationSpec: vpnCollaborationSpec,
 		AgentID:           &agent.ID,
 		IsActive:          true,
