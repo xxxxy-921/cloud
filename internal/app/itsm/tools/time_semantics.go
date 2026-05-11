@@ -77,6 +77,16 @@ func validateDateTimeRangeField(field FormField, raw any, requestText string) *D
 			Message: fmt.Sprintf("%s 的结束时间必须晚于开始时间。", field.Label),
 		}
 	}
+	result := resolveRelativeDateTimeRange(requestText, now)
+	if result.Resolved != nil {
+		if !timesNearlyEqual(result.Resolved.Start, startAt) || !timesNearlyEqual(result.Resolved.End, endAt) {
+			return &DraftWarning{
+				Type:    "invalid_datetime_range",
+				Field:   field.Key,
+				Message: fmt.Sprintf("%s 与原始时间描述不一致，请重新确认具体起止时间。", field.Label),
+			}
+		}
+	}
 	if startAt.Before(now) || endAt.Before(now) {
 		return &DraftWarning{
 			Type:    "past_datetime_range",
@@ -85,19 +95,11 @@ func validateDateTimeRangeField(field FormField, raw any, requestText string) *D
 		}
 	}
 
-	if result := resolveRelativeDateTimeRange(requestText, now); result.NeedsClarification {
+	if result.NeedsClarification {
 		return &DraftWarning{
 			Type:    "ambiguous_datetime_range",
 			Field:   field.Key,
 			Message: result.Reason,
-		}
-	} else if result.Resolved != nil {
-		if !timesNearlyEqual(result.Resolved.Start, startAt) || !timesNearlyEqual(result.Resolved.End, endAt) {
-			return &DraftWarning{
-				Type:    "invalid_datetime_range",
-				Field:   field.Key,
-				Message: fmt.Sprintf("%s 与原始时间描述不一致，请重新确认具体起止时间。", field.Label),
-			}
 		}
 	}
 

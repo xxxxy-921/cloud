@@ -8,6 +8,42 @@ function delay(ms: number) {
   })
 }
 
+function emitUsageFromChunk(
+  chunk: UIMessageChunk,
+  onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void,
+) {
+  if (
+    chunk.type === "message-metadata" &&
+    "messageMetadata" in chunk &&
+    chunk.messageMetadata &&
+    typeof chunk.messageMetadata === "object"
+  ) {
+    const metadata = chunk.messageMetadata as {
+      usage?: { promptTokens?: number; completionTokens?: number }
+    }
+    if (metadata.usage) {
+      onUsage?.({
+        promptTokens: metadata.usage.promptTokens || 0,
+        completionTokens: metadata.usage.completionTokens || 0,
+      })
+    }
+    return
+  }
+
+  if (
+    chunk.type === "finish" &&
+    "usage" in chunk &&
+    chunk.usage &&
+    typeof chunk.usage === "object"
+  ) {
+    const usage = chunk.usage as { promptTokens?: number; completionTokens?: number }
+    onUsage?.({
+      promptTokens: usage.promptTokens || 0,
+      completionTokens: usage.completionTokens || 0,
+    })
+  }
+}
+
 export function createStreamFromSSE(
   response: Response,
   onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void,
@@ -27,18 +63,7 @@ export function createStreamFromSSE(
 
     try {
       const chunk = JSON.parse(data) as UIMessageChunk
-      if (
-        chunk.type === "finish" &&
-        "usage" in chunk &&
-        chunk.usage &&
-        typeof chunk.usage === "object"
-      ) {
-        const usage = chunk.usage as { promptTokens?: number; completionTokens?: number }
-        onUsage?.({
-          promptTokens: usage.promptTokens || 0,
-          completionTokens: usage.completionTokens || 0,
-        })
-      }
+      emitUsageFromChunk(chunk, onUsage)
       pendingChunks.push(chunk)
     } catch (e) {
       console.error("Failed to parse SSE chunk:", data, e)

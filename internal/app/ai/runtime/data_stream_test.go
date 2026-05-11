@@ -170,6 +170,41 @@ func TestUIMessageStreamEncoder_Reasoning(t *testing.T) {
 	assertJSONField(t, lines[4], "type", "finish")
 }
 
+func TestUIMessageStreamEncoder_ClosesReasoningBeforeText(t *testing.T) {
+	var buf bytes.Buffer
+	enc := NewUIMessageStreamEncoder(&buf)
+
+	_ = enc.Encode(Event{Type: EventTypeLLMStart, Sequence: 1})
+	_ = enc.Encode(Event{Type: EventTypeThinkingDelta, Sequence: 2, Text: "think"})
+	_ = enc.Encode(Event{Type: EventTypeContentDelta, Sequence: 3, Text: "answer"})
+	_ = enc.Encode(Event{Type: EventTypeDone})
+	_ = enc.Close()
+
+	lines := extractDataLines(t, &buf)
+	assertJSONField(t, lines[1], "type", "reasoning-start")
+	assertJSONField(t, lines[2], "type", "reasoning-delta")
+	assertJSONField(t, lines[3], "type", "reasoning-end")
+	assertJSONField(t, lines[4], "type", "text-start")
+	assertJSONField(t, lines[5], "type", "text-delta")
+}
+
+func TestUIMessageStreamEncoder_ClosesReasoningBeforeToolCall(t *testing.T) {
+	var buf bytes.Buffer
+	enc := NewUIMessageStreamEncoder(&buf)
+
+	_ = enc.Encode(Event{Type: EventTypeLLMStart, Sequence: 1})
+	_ = enc.Encode(Event{Type: EventTypeThinkingDelta, Sequence: 2, Text: "think"})
+	_ = enc.Encode(Event{Type: EventTypeToolCall, Sequence: 3, ToolCallID: "call_1", ToolName: "search", ToolArgs: json.RawMessage(`{"q":"x"}`)})
+	_ = enc.Encode(Event{Type: EventTypeDone})
+	_ = enc.Close()
+
+	lines := extractDataLines(t, &buf)
+	assertJSONField(t, lines[1], "type", "reasoning-start")
+	assertJSONField(t, lines[2], "type", "reasoning-delta")
+	assertJSONField(t, lines[3], "type", "reasoning-end")
+	assertJSONField(t, lines[4], "type", "tool-input-available")
+}
+
 func TestUIMessageStreamEncoder_ErrorClosesOpenBlocks(t *testing.T) {
 	var buf bytes.Buffer
 	enc := NewUIMessageStreamEncoder(&buf)
@@ -183,10 +218,10 @@ func TestUIMessageStreamEncoder_ErrorClosesOpenBlocks(t *testing.T) {
 	lines := extractDataLines(t, &buf)
 	assertJSONField(t, lines[1], "type", "reasoning-start")
 	assertJSONField(t, lines[2], "type", "reasoning-delta")
-	assertJSONField(t, lines[3], "type", "text-start")
-	assertJSONField(t, lines[4], "type", "text-delta")
-	assertJSONField(t, lines[5], "type", "text-end")
-	assertJSONField(t, lines[6], "type", "reasoning-end")
+	assertJSONField(t, lines[3], "type", "reasoning-end")
+	assertJSONField(t, lines[4], "type", "text-start")
+	assertJSONField(t, lines[5], "type", "text-delta")
+	assertJSONField(t, lines[6], "type", "text-end")
 	assertJSONField(t, lines[7], "type", "error")
 }
 

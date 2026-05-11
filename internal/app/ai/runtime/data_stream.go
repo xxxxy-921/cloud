@@ -64,6 +64,11 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		})
 
 	case EventTypeContentDelta:
+		if enc.reasonBlock.started {
+			if err := enc.closeReasoningBlock(); err != nil {
+				return err
+			}
+		}
 		if !enc.textBlock.started {
 			enc.textBlock.id = fmt.Sprintf("text-%d", evt.Sequence)
 			enc.textBlock.started = true
@@ -152,6 +157,11 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		})
 
 	case EventTypeToolCall:
+		if enc.reasonBlock.started {
+			if err := enc.closeReasoningBlock(); err != nil {
+				return err
+			}
+		}
 		if enc.textBlock.started {
 			enc.textBlock.started = false
 			if err := enc.writeLine(map[string]any{
@@ -276,15 +286,19 @@ func (enc *UIMessageStreamEncoder) closeOpenBlocks() error {
 		}
 	}
 	if enc.reasonBlock.started {
-		enc.reasonBlock.started = false
-		if err := enc.writeLine(map[string]any{
-			"type": "reasoning-end",
-			"id":   enc.reasonBlock.id,
-		}); err != nil {
+		if err := enc.closeReasoningBlock(); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (enc *UIMessageStreamEncoder) closeReasoningBlock() error {
+	enc.reasonBlock.started = false
+	return enc.writeLine(map[string]any{
+		"type": "reasoning-end",
+		"id":   enc.reasonBlock.id,
+	})
 }
 
 // Heartbeat writes an SSE comment frame. UI Message Stream clients ignore it,
