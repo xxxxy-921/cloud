@@ -288,6 +288,12 @@ func EvaluateTicketMonitorRules(ticket *Ticket, fact ticketMonitorFact, now time
 			"current_activity_id": monitorOptionalUint(ticket.CurrentActivityID),
 		})
 	}
+	if ticket.Status == TicketStatusSuspended {
+		addReason("blocked_total", "approver_missing_suspended", "blocked", "工单已暂停：审批人岗位配置缺失，等待管理员修复", map[string]any{
+			"ticket_status":       ticket.Status,
+			"current_activity_id": monitorOptionalUint(ticket.CurrentActivityID),
+		})
+	}
 	activityFacts := fact.ActivityFacts
 	if len(activityFacts) == 0 && fact.Activity != nil {
 		activityFacts = []ticketMonitorActivityFact{{

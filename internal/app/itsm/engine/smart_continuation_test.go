@@ -516,8 +516,8 @@ func TestSmartDecisionPositionAssignmentWithoutUsersWaitsForHuman(t *testing.T) 
 	if err := db.First(&reloaded, ticket.ID).Error; err != nil {
 		t.Fatalf("reload ticket: %v", err)
 	}
-	if reloaded.Status != TicketStatusWaitingHuman {
-		t.Fatalf("expected ticket status waiting_human, got %s", reloaded.Status)
+	if reloaded.Status != TicketStatusSuspended {
+		t.Fatalf("expected ticket status suspended (no fallback configured), got %s", reloaded.Status)
 	}
 	var assignment assignmentModel
 	if err := db.Where("ticket_id = ? AND participant_type = ?", ticket.ID, "position_department").First(&assignment).Error; err != nil {
@@ -528,11 +528,11 @@ func TestSmartDecisionPositionAssignmentWithoutUsersWaitsForHuman(t *testing.T) 
 	}
 
 	var timeline timelineModel
-	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "participant_fallback_warning").First(&timeline).Error; err != nil {
-		t.Fatalf("load pending timeline: %v", err)
+	if err := db.Where("ticket_id = ? AND event_type = ?", ticket.ID, "approver_missing_suspended").First(&timeline).Error; err != nil {
+		t.Fatalf("load suspend timeline: %v", err)
 	}
 	if timeline.Message == "" {
-		t.Fatal("expected pending participant timeline message")
+		t.Fatal("expected suspend timeline message")
 	}
 }
 

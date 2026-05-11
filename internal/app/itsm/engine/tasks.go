@@ -398,8 +398,86 @@ func HandleSmartRecovery(db *gorm.DB, smartEngine *SmartEngine) func(ctx context
 		}
 
 		slog.Info("smart recovery: completed", "scanned", len(tickets), "recovered", recovered)
+
+		// Second pass: recover suspended tickets whose org config has been fixed.
+		return recoverSuspendedTickets(ctx, db, smartEngine)
+	}
+}
+
+// recoverSuspendedTickets scans tickets in "suspended" status and transitions them
+// back to "waiting_human" if the missing position/department participant can now
+// be resolved to at least one active user.
+func recoverSuspendedTickets(_ context.Context, db *gorm.DB, smartEngine *SmartEngine) error {
+	type suspendedTicket struct {
+		ID uint
+	}
+	var suspended []suspendedTicket
+	if err := db.Table("itsm_tickets").
+		Where("engine_type = ? AND status = ? AND deleted_at IS NULL", "smart", TicketStatusSuspended).
+		Select("id").Find(&suspended).Error; err != nil {
+		return fmt.Errorf("smart recovery: query suspended tickets: %w", err)
+	}
+	if len(suspended) == 0 {
 		return nil
 	}
+
+	type assignmentRow struct {
+		ID           uint
+		ActivityID   uint
+		PositionID   *uint
+		DepartmentID *uint
+	}
+	recoveredCount := 0
+	for _, t := range suspended {
+		var assignments []assignmentRow
+		if err := db.Table("itsm_ticket_assignments").
+			Where("ticket_id = ? AND status = ? AND assignee_id IS NULL AND (position_id IS NOT NULL OR department_id IS NOT NULL)",
+				t.ID, "pending").
+			Select("id, activity_id, position_id, department_id").
+			Find(&assignments).Error; err != nil {
+			slog.Warn("smart recovery: failed to load suspended ticket assignments", "ticketID", t.ID, "error", err)
+			continue
+		}
+
+		anyResolved := false
+		for _, a := range assignments {
+			var posID, deptID uint
+			if a.PositionID != nil {
+				posID = *a.PositionID
+			}
+			if a.DepartmentID != nil {
+				deptID = *a.DepartmentID
+			}
+			userIDs, err := resolveUsersByPositionDepartmentInTx(db, posID, deptID)
+			if err != nil || len(userIDs) == 0 {
+				continue
+			}
+			// At least one active user found – update the assignment and ticket.
+			if err := db.Table("itsm_ticket_assignments").Where("id = ?", a.ID).
+				Updates(map[string]any{"user_id": userIDs[0], "assignee_id": userIDs[0]}).Error; err != nil {
+				slog.Error("smart recovery: failed to update assignment", "assignmentID", a.ID, "error", err)
+				continue
+			}
+			if err := db.Table("itsm_tickets").Where("id = ?", t.ID).
+				Updates(map[string]any{"status": TicketStatusWaitingHuman, "assignee_id": userIDs[0]}).Error; err != nil {
+				slog.Error("smart recovery: failed to restore ticket status", "ticketID", t.ID, "error", err)
+				continue
+			}
+			activityID := a.ActivityID
+			smartEngine.recordTimeline(db, t.ID, &activityID, 0, "participant_recovered",
+				"审批人岗位已恢复，工单继续处理", "")
+			anyResolved = true
+			break // one resolved assignment is enough to unblock the ticket
+		}
+		if anyResolved {
+			recoveredCount++
+			slog.Info("smart recovery: resumed suspended ticket", "ticketID", t.ID)
+		}
+	}
+	if recoveredCount > 0 {
+		slog.Info("smart recovery: resumed suspended tickets", "count", recoveredCount)
+	}
+	return nil
 }
 
 // HandleSmartProgress is the scheduler task handler for itsm-smart-progress.

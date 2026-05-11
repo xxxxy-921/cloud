@@ -5,6 +5,7 @@ export const TICKET_STATUSES = [
   "rejected_decisioning",
   "decisioning",
   "executing_action",
+  "suspended",
   "completed",
   "rejected",
   "withdrawn",

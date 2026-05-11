@@ -171,6 +171,7 @@ const (
 	TicketStatusRejected            = string(contract.TicketStatusRejected)
 	TicketStatusWithdrawn           = string(contract.TicketStatusWithdrawn)
 	TicketStatusCancelled           = string(contract.TicketStatusCancelled)
+	TicketStatusSuspended           = string(contract.TicketStatusSuspended)
 	TicketStatusFailed              = string(contract.TicketStatusFailed)
 )
 

@@ -19,6 +19,7 @@ const (
 	TicketStatusRejected            = string(contract.TicketStatusRejected)
 	TicketStatusWithdrawn           = string(contract.TicketStatusWithdrawn)
 	TicketStatusCancelled           = string(contract.TicketStatusCancelled)
+	TicketStatusSuspended           = string(contract.TicketStatusSuspended)
 	TicketStatusFailed              = string(contract.TicketStatusFailed)
 )
 
@@ -290,6 +291,8 @@ func TicketStatusLabel(status string, outcome string) string {
 		return "已撤回"
 	case TicketStatusCancelled:
 		return "已取消"
+	case TicketStatusSuspended:
+		return "已暂停"
 	case TicketStatusFailed:
 		return "失败"
 	default:
@@ -309,6 +312,8 @@ func TicketStatusTone(status string, outcome string) string {
 		return "progress"
 	case TicketStatusWaitingHuman:
 		return "warning"
+	case TicketStatusSuspended:
+		return "destructive"
 	default:
 		return "secondary"
 	}
