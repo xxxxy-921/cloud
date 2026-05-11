@@ -14,6 +14,8 @@ var (
 	llmTurnTimeout        = 2 * time.Minute
 )
 
+const emptyDisplayOutputMessage = "模型没有返回可展示内容，请检查模型配置、max tokens 或上游返回格式"
+
 type chatStreamResult struct {
 	ch  <-chan llm.StreamEvent
 	err error

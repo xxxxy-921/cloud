@@ -188,6 +188,76 @@ func TestPlanAndExecuteExecutor_ToolExecutionErrorBecomesToolResult(t *testing.T
 	}
 }
 
+func TestPlanAndExecuteExecutor_UsageOnlyStepEmitsError(t *testing.T) {
+	mockLLM := &scriptedPlanLLMClient{
+		chatResponse: &llm.ChatResponse{
+			Content: `[{"index":1,"description":"answer"}]`,
+		},
+		streams: [][]llm.StreamEvent{
+			{
+				{Type: "done", Usage: &llm.Usage{InputTokens: 4, OutputTokens: 46}},
+			},
+		},
+	}
+
+	exec := NewPlanAndExecuteExecutor(mockLLM, newMockToolExecutor())
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	events := collectEvents(ch)
+	last := events[len(events)-1]
+	if last.Type != EventTypeError {
+		t.Fatalf("expected usage-only step to emit error, got %#v from %#v", last, events)
+	}
+	if !strings.Contains(last.Message, "模型没有返回可展示内容") {
+		t.Fatalf("expected clear empty-output message, got %q", last.Message)
+	}
+}
+
+func TestPlanAndExecuteExecutor_ReasoningOnlyStepEmitsError(t *testing.T) {
+	mockLLM := &scriptedPlanLLMClient{
+		chatResponse: &llm.ChatResponse{
+			Content: `[{"index":1,"description":"answer"}]`,
+		},
+		streams: [][]llm.StreamEvent{
+			{
+				{Type: "thinking_delta", Content: "thinking"},
+				{Type: "done", Usage: &llm.Usage{InputTokens: 4, OutputTokens: 8}},
+			},
+		},
+	}
+
+	exec := NewPlanAndExecuteExecutor(mockLLM, newMockToolExecutor())
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	events := collectEvents(ch)
+	var sawReasoning bool
+	for _, evt := range events {
+		if evt.Type == EventTypeThinkingDelta && evt.Text == "thinking" {
+			sawReasoning = true
+		}
+	}
+	if !sawReasoning {
+		t.Fatalf("expected reasoning delta before error, got %#v", events)
+	}
+	last := events[len(events)-1]
+	if last.Type != EventTypeError {
+		t.Fatalf("expected reasoning-only step to emit error, got %#v from %#v", last, events)
+	}
+	if !strings.Contains(last.Message, "模型没有返回可展示内容") {
+		t.Fatalf("expected clear empty-output message, got %q", last.Message)
+	}
+}
+
 func TestPlanAndExecuteExecutor_StepTurnBudgetExceeded(t *testing.T) {
 	streams := make([][]llm.StreamEvent, 0, defaultStepTurnBudget)
 	for i := 0; i < defaultStepTurnBudget; i++ {

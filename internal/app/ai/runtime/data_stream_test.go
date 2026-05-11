@@ -170,6 +170,26 @@ func TestUIMessageStreamEncoder_Reasoning(t *testing.T) {
 	assertJSONField(t, lines[4], "type", "finish")
 }
 
+func TestUIMessageStreamEncoder_ErrorClosesOpenBlocks(t *testing.T) {
+	var buf bytes.Buffer
+	enc := NewUIMessageStreamEncoder(&buf)
+
+	_ = enc.Encode(Event{Type: EventTypeLLMStart, Sequence: 1})
+	_ = enc.Encode(Event{Type: EventTypeThinkingDelta, Sequence: 2, Text: "think"})
+	_ = enc.Encode(Event{Type: EventTypeContentDelta, Sequence: 3, Text: "partial"})
+	_ = enc.Encode(Event{Type: EventTypeError, Message: "failed"})
+	_ = enc.Close()
+
+	lines := extractDataLines(t, &buf)
+	assertJSONField(t, lines[1], "type", "reasoning-start")
+	assertJSONField(t, lines[2], "type", "reasoning-delta")
+	assertJSONField(t, lines[3], "type", "text-start")
+	assertJSONField(t, lines[4], "type", "text-delta")
+	assertJSONField(t, lines[5], "type", "text-end")
+	assertJSONField(t, lines[6], "type", "reasoning-end")
+	assertJSONField(t, lines[7], "type", "error")
+}
+
 func TestUIMessageStreamEncoder_ToolCallAndResult(t *testing.T) {
 	var buf bytes.Buffer
 	enc := NewUIMessageStreamEncoder(&buf)

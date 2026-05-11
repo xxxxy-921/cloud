@@ -144,6 +144,7 @@ func (e *PlanAndExecuteExecutor) Execute(ctx context.Context, req ExecuteRequest
 
 				var content string
 				var toolCalls []llm.ToolCall
+				sawThinking := false
 
 				streamDone := false
 				for !streamDone {
@@ -168,6 +169,9 @@ func (e *PlanAndExecuteExecutor) Execute(ctx context.Context, req ExecuteRequest
 							content += evt.Content
 							stepContent.WriteString(evt.Content)
 							emit(Event{Type: EventTypeContentDelta, Text: evt.Content})
+						case "thinking_delta":
+							sawThinking = true
+							emit(Event{Type: EventTypeThinkingDelta, Text: evt.Content})
 						case "tool_call":
 							if evt.ToolCall != nil {
 								toolCalls = append(toolCalls, *evt.ToolCall)
@@ -195,9 +199,16 @@ func (e *PlanAndExecuteExecutor) Execute(ctx context.Context, req ExecuteRequest
 					}
 				}
 				turnCancel()
+				if sawThinking {
+					emit(Event{Type: EventTypeThinkingDone})
+				}
 				slog.Info("plan executor: completed step LLM turn", "step", step.Index, "turn", turn+1, "toolCalls", len(toolCalls))
 
 				if len(toolCalls) == 0 {
+					if strings.TrimSpace(content) == "" {
+						emit(Event{Type: EventTypeError, Message: emptyDisplayOutputMessage})
+						return
+					}
 					stepCompleted = true
 					break // Step complete
 				}

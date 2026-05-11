@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -52,12 +53,12 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 			maxTurns = 10
 		}
 
-			tools := buildLLMTools(req.Tools)
-			var totalInput, totalOutput int
-			var currentITSMServiceEngine string
-			silentRetryCount := 0
+		tools := buildLLMTools(req.Tools)
+		var totalInput, totalOutput int
+		var currentITSMServiceEngine string
+		silentRetryCount := 0
 
-	for turn := 1; turn <= maxTurns; turn++ {
+		for turn := 1; turn <= maxTurns; turn++ {
 			select {
 			case <-ctx.Done():
 				emit(stoppedEvent(ctx.Err(), "LLM stream"))
@@ -88,15 +89,16 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 			}
 			slog.Info("react executor: LLM stream established", "turn", turn, "model", req.AgentConfig.ModelName)
 
-				var assistantContent string
-				var toolCalls []llm.ToolCall
-				var usage llm.Usage
-				sawAnyEvent := false
+			var assistantContent string
+			var toolCalls []llm.ToolCall
+			var usage llm.Usage
+			sawAnyEvent := false
+			sawThinking := false
 
-				streamDone := false
-				for !streamDone {
-					select {
-					case evt, ok := <-streamCh:
+			streamDone := false
+			for !streamDone {
+				select {
+				case evt, ok := <-streamCh:
 					if !ok {
 						if ctx.Err() != nil {
 							turnCancel()
@@ -111,12 +113,15 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 						}
 						streamDone = true
 						break
-						}
-						sawAnyEvent = true
-						switch evt.Type {
+					}
+					sawAnyEvent = true
+					switch evt.Type {
 					case "content_delta":
 						assistantContent += evt.Content
 						emit(Event{Type: EventTypeContentDelta, Text: evt.Content})
+					case "thinking_delta":
+						sawThinking = true
+						emit(Event{Type: EventTypeThinkingDelta, Text: evt.Content})
 					case "tool_call":
 						if evt.ToolCall != nil {
 							toolCalls = append(toolCalls, *evt.ToolCall)
@@ -149,6 +154,9 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 				}
 			}
 			turnCancel()
+			if sawThinking {
+				emit(Event{Type: EventTypeThinkingDone})
+			}
 			if ctx.Err() != nil {
 				emit(stoppedEvent(ctx.Err(), "LLM stream"))
 				return
@@ -174,14 +182,41 @@ func (e *ReactExecutor) Execute(ctx context.Context, req ExecuteRequest) (<-chan
 			totalOutput += usage.OutputTokens
 
 			if sawAnyEvent && len(toolCalls) == 0 && strings.TrimSpace(assistantContent) == "" {
+				resp, err := chatWithTimeout(ctx, e.llmClient, chatReq)
+				if err == nil && resp != nil {
+					if strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) > 0 {
+						assistantContent = resp.Content
+						toolCalls = append(toolCalls, resp.ToolCalls...)
+						totalInput += resp.Usage.InputTokens
+						totalOutput += resp.Usage.OutputTokens
+						if assistantContent != "" {
+							emit(Event{Type: EventTypeContentDelta, Text: assistantContent})
+						}
+						for _, tc := range resp.ToolCalls {
+							emit(Event{
+								Type:       EventTypeToolCall,
+								ToolCallID: tc.ID,
+								ToolName:   tc.Name,
+								ToolArgs:   json.RawMessage(tc.Arguments),
+							})
+						}
+					}
+				} else if err != nil && !errors.Is(err, llm.ErrNotSupported) {
+					slog.Warn("react executor: non-streaming fallback failed", "turn", turn, "error", err)
+				}
+			}
+
+			if sawAnyEvent && len(toolCalls) == 0 && strings.TrimSpace(assistantContent) == "" {
 				if silentRetryCount == 0 && turn < maxTurns {
 					silentRetryCount++
 					messages = append(messages, llm.Message{
-						Role: llm.RoleUser,
+						Role:    llm.RoleUser,
 						Content: "请继续处理，并在这一轮给出一条简短的中文答复；如果需要，也可以调用合适的工具。",
 					})
 					continue
 				}
+				emit(Event{Type: EventTypeError, Message: emptyDisplayOutputMessage})
+				return
 			}
 
 			// If no tool calls, we're done

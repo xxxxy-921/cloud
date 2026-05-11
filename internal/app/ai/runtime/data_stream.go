@@ -220,6 +220,9 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		})
 
 	case EventTypeError:
+		if err := enc.closeOpenBlocks(); err != nil {
+			return err
+		}
 		return enc.writeLine(map[string]any{
 			"type":      "error",
 			"errorText": evt.Message,
@@ -254,23 +257,34 @@ func (enc *UIMessageStreamEncoder) Close() error {
 	enc.mu.Lock()
 	defer enc.mu.Unlock()
 
-	if enc.textBlock.started {
-		enc.textBlock.started = false
-		_ = enc.writeLine(map[string]any{
-			"type": "text-end",
-			"id":   enc.textBlock.id,
-		})
-	}
-	if enc.reasonBlock.started {
-		enc.reasonBlock.started = false
-		_ = enc.writeLine(map[string]any{
-			"type": "reasoning-end",
-			"id":   enc.reasonBlock.id,
-		})
+	if err := enc.closeOpenBlocks(); err != nil {
+		return err
 	}
 
 	_, err := fmt.Fprintf(enc.w, "data: [DONE]\n\n")
 	return err
+}
+
+func (enc *UIMessageStreamEncoder) closeOpenBlocks() error {
+	if enc.textBlock.started {
+		enc.textBlock.started = false
+		if err := enc.writeLine(map[string]any{
+			"type": "text-end",
+			"id":   enc.textBlock.id,
+		}); err != nil {
+			return err
+		}
+	}
+	if enc.reasonBlock.started {
+		enc.reasonBlock.started = false
+		if err := enc.writeLine(map[string]any{
+			"type": "reasoning-end",
+			"id":   enc.reasonBlock.id,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Heartbeat writes an SSE comment frame. UI Message Stream clients ignore it,

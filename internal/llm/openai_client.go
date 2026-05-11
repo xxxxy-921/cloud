@@ -103,6 +103,9 @@ func (c *openaiClient) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 			delta := resp.Choices[0].Delta
 
 			// Content delta
+			if delta.ReasoningContent != "" {
+				ch <- StreamEvent{Type: "thinking_delta", Content: delta.ReasoningContent}
+			}
 			if delta.Content != "" {
 				ch <- StreamEvent{Type: "content_delta", Content: delta.Content}
 			}

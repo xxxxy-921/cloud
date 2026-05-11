@@ -56,6 +56,39 @@ func (c *blockingStreamStartLLMClient) Embedding(context.Context, llm.EmbeddingR
 	return nil, llm.ErrNotSupported
 }
 
+type streamEmptyChatResponseLLMClient struct {
+	streams      []chan llm.StreamEvent
+	chatResponse *llm.ChatResponse
+	next         int
+}
+
+func newStreamEmptyChatResponseLLMClient(resp *llm.ChatResponse) *streamEmptyChatResponseLLMClient {
+	return &streamEmptyChatResponseLLMClient{
+		streams:      []chan llm.StreamEvent{make(chan llm.StreamEvent, 2)},
+		chatResponse: resp,
+	}
+}
+
+func (c *streamEmptyChatResponseLLMClient) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	if c.chatResponse == nil {
+		return &llm.ChatResponse{}, nil
+	}
+	return c.chatResponse, nil
+}
+
+func (c *streamEmptyChatResponseLLMClient) ChatStream(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	if c.next >= len(c.streams) {
+		return nil, errors.New("unexpected chat stream request")
+	}
+	stream := c.streams[c.next]
+	c.next++
+	return stream, nil
+}
+
+func (c *streamEmptyChatResponseLLMClient) Embedding(context.Context, llm.EmbeddingRequest) (*llm.EmbeddingResponse, error) {
+	return nil, llm.ErrNotSupported
+}
+
 func collectEvents(ch <-chan Event) []Event {
 	var events []Event
 	for evt := range ch {
@@ -76,6 +109,67 @@ func waitEvent(t *testing.T, ch <-chan Event) Event {
 		t.Fatal("timed out waiting for executor event")
 	}
 	return Event{}
+}
+
+func TestReactExecutor_EmptyStreamFallsBackToNonStreamingContent(t *testing.T) {
+	mockLLM := newStreamEmptyChatResponseLLMClient(&llm.ChatResponse{
+		Content: "请补充 VPN 账号。",
+		Usage:   llm.Usage{InputTokens: 5, OutputTokens: 6},
+	})
+
+	exec := NewReactExecutor(mockLLM, newMockToolExecutor())
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "我要申请 VPN"}},
+		MaxTurns: 2,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected LLM start, got %+v", evt)
+	}
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 3, OutputTokens: 46}}
+	close(mockLLM.streams[0])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeContentDelta || evt.Text != "请补充 VPN 账号。" {
+		t.Fatalf("expected non-streaming fallback content, got %+v", evt)
+	}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeDone {
+		t.Fatalf("expected done after fallback content, got %+v", evt)
+	}
+}
+
+func TestReactExecutor_EmptyStreamFallsBackToNonStreamingToolCall(t *testing.T) {
+	mockLLM := newStreamEmptyChatResponseLLMClient(&llm.ChatResponse{
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "search", Arguments: `{"q":"VPN"}`}},
+		Usage:     llm.Usage{InputTokens: 5, OutputTokens: 6},
+	})
+	mockExec := newMockToolExecutor()
+	mockExec.SetResult("search", ToolResult{Output: "found"})
+
+	exec := NewReactExecutor(mockLLM, mockExec)
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "我要申请 VPN"}},
+		Tools:    []ToolDefinition{{Name: "search", Parameters: []byte(`{"type":"object"}`)}},
+		MaxTurns: 1,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected LLM start, got %+v", evt)
+	}
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 3, OutputTokens: 46}}
+	close(mockLLM.streams[0])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeToolCall || evt.ToolName != "search" {
+		t.Fatalf("expected non-streaming fallback tool call, got %+v", evt)
+	}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeToolResult || evt.ToolOutput != "found" {
+		t.Fatalf("expected tool result after fallback tool call, got %+v", evt)
+	}
 }
 
 func TestReactExecutor_DirectContent(t *testing.T) {
@@ -139,6 +233,89 @@ func TestReactExecutor_RetriesSilentTurnUntilContentArrives(t *testing.T) {
 
 	if evt := waitEvent(t, ch); evt.Type != EventTypeDone {
 		t.Fatalf("expected done event after retry turn, got %+v", evt)
+	}
+}
+
+func TestReactExecutor_UsageOnlyRetryStillEmptyEmitsError(t *testing.T) {
+	mockLLM := newControlledStreamLLMClient(2)
+
+	exec := NewReactExecutor(mockLLM, newMockToolExecutor())
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "hi"}},
+		MaxTurns: 2,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected first LLM start, got %+v", evt)
+	}
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 3, OutputTokens: 46}}
+	close(mockLLM.streams[0])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected retry LLM start, got %+v", evt)
+	}
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 4, OutputTokens: 12}}
+	close(mockLLM.streams[1])
+
+	evt := waitEvent(t, ch)
+	if evt.Type != EventTypeError {
+		t.Fatalf("expected empty model output to emit error, got %+v", evt)
+	}
+	if !strings.Contains(evt.Message, "模型没有返回可展示内容") {
+		t.Fatalf("expected clear empty-output message, got %q", evt.Message)
+	}
+	if evt := <-ch; evt.Type == EventTypeDone {
+		t.Fatalf("did not expect done after empty-output error")
+	}
+}
+
+func TestReactExecutor_ReasoningOnlyRetryStillEmptyEmitsError(t *testing.T) {
+	mockLLM := newControlledStreamLLMClient(2)
+
+	exec := NewReactExecutor(mockLLM, newMockToolExecutor())
+	ch, err := exec.Execute(context.Background(), ExecuteRequest{
+		Messages: []ExecuteMessage{{Role: MessageRoleUser, Content: "hi"}},
+		MaxTurns: 2,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected first LLM start, got %+v", evt)
+	}
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "thinking_delta", Content: "thinking"}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeThinkingDelta || evt.Text != "thinking" {
+		t.Fatalf("expected reasoning delta to be emitted, got %+v", evt)
+	}
+	mockLLM.streams[0] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 3, OutputTokens: 6}}
+	close(mockLLM.streams[0])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeThinkingDone {
+		t.Fatalf("expected first reasoning block to end, got %+v", evt)
+	}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeLLMStart {
+		t.Fatalf("expected retry LLM start, got %+v", evt)
+	}
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "thinking_delta", Content: "still thinking"}
+	if evt := waitEvent(t, ch); evt.Type != EventTypeThinkingDelta || evt.Text != "still thinking" {
+		t.Fatalf("expected retry reasoning delta, got %+v", evt)
+	}
+	mockLLM.streams[1] <- llm.StreamEvent{Type: "done", Usage: &llm.Usage{InputTokens: 4, OutputTokens: 7}}
+	close(mockLLM.streams[1])
+
+	if evt := waitEvent(t, ch); evt.Type != EventTypeThinkingDone {
+		t.Fatalf("expected retry reasoning block to end, got %+v", evt)
+	}
+	evt := waitEvent(t, ch)
+	if evt.Type != EventTypeError {
+		t.Fatalf("expected reasoning-only output to emit error, got %+v", evt)
+	}
+	if !strings.Contains(evt.Message, "模型没有返回可展示内容") {
+		t.Fatalf("expected clear empty-output message, got %q", evt.Message)
 	}
 }
 
