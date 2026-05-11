@@ -298,19 +298,10 @@ func TestEnforceParallelApprovalWorkflowContract(t *testing.T) {
 }
 
 // publishParallelApprovalSmartService creates the full service for parallel approval BDD lifecycle tests.
-// Uses LLM to generate workflow JSON from the collaboration spec.
+// It uses a static authoritative workflow because these scenarios validate SmartEngine
+// parallel execution semantics, not live workflow generation stability.
 func publishParallelApprovalSmartService(bc *bddContext) error {
-	// 1. Generate workflow via LLM (tests: spec→参考路径, 健康校验可发布)
-	workflowJSON, err := generateParallelApprovalWorkflow(bc.llmCfg)
-	if err != nil {
-		return fmt.Errorf("generate parallel approval workflow: %w", err)
-	}
-	workflowJSON, err = enforceParallelApprovalWorkflowContract(workflowJSON)
-	if err != nil {
-		return fmt.Errorf("normalize parallel approval workflow: %w", err)
-	}
-
-	// 2. ServiceCatalog
+	// 1. ServiceCatalog
 	catalog := &ServiceCatalog{
 		Name:     "安全与合规服务",
 		Code:     "security-compliance-pa",
@@ -320,7 +311,7 @@ func publishParallelApprovalSmartService(bc *bddContext) error {
 		return fmt.Errorf("create catalog: %w", err)
 	}
 
-	// 3. Priority
+	// 2. Priority
 	priority := &Priority{
 		Name:     "普通",
 		Code:     "normal-pa",
@@ -333,7 +324,7 @@ func publishParallelApprovalSmartService(bc *bddContext) error {
 	}
 	bc.priority = priority
 
-	// 4. Decision agent
+	// 3. Decision agent
 	agent := &ai.Agent{
 		Name:         "流程决策智能体",
 		Type:         "assistant",
@@ -350,13 +341,14 @@ func publishParallelApprovalSmartService(bc *bddContext) error {
 	}
 	bc.db.Model(agent).Update("temperature", 0)
 
-	// 5. ServiceDefinition (smart engine)
+	// 4. ServiceDefinition (smart engine)
 	svc := &ServiceDefinition{
 		Name:              "多角色并签申请",
 		Code:              "multi-role-parallel-approval-bdd",
 		CatalogID:         catalog.ID,
 		EngineType:        "smart",
-		WorkflowJSON:      JSONField(workflowJSON),
+		IntakeFormSchema:  JSONField(parallelApprovalDialogFormSchema),
+		WorkflowJSON:      JSONField([]byte(parallelApprovalStaticWorkflowJSON)),
 		CollaborationSpec: parallelApprovalCollaborationSpec,
 		AgentID:           &agent.ID,
 		IsActive:          true,

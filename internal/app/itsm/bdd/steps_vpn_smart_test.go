@@ -388,7 +388,21 @@ func corruptVPNWorkflowRejectedTarget(raw json.RawMessage) (json.RawMessage, err
 		}
 	}
 	if !changed {
-		return nil, fmt.Errorf("workflow_json has no rejected edges to corrupt")
+		for _, node := range wf.Nodes {
+			if node.Type != engine.NodeProcess && node.Type != engine.NodeApprove {
+				continue
+			}
+			wf.Edges = append(wf.Edges, vpnWorkflowEdge{
+				ID:     fmt.Sprintf("edge_%s_rejected_vpn_supplement", node.ID),
+				Source: node.ID,
+				Target: formID,
+				Data:   map[string]any{"outcome": engine.ActivityRejected},
+			})
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, fmt.Errorf("workflow_json has no human nodes to corrupt rejected target")
 	}
 
 	if endID := firstEndNodeID(wf.Nodes); endID != "" {

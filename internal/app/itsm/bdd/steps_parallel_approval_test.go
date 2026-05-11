@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	. "metis/internal/app/itsm/domain"
+	"metis/internal/app/itsm/tools"
 	"time"
 
 	"github.com/cucumber/godog"
@@ -54,17 +55,23 @@ func (bc *bddContext) givenParallelApprovalTicketCreated(username, caseKey strin
 	}
 
 	formJSON, _ := json.Marshal(payload.FormData)
+	op := tools.NewOperator(bc.db, nil, nil, nil, nil, nil)
+	detail, err := op.LoadService(bc.service.ID)
+	if err != nil {
+		return fmt.Errorf("load service snapshot: %w", err)
+	}
 
 	ticket := &Ticket{
-		Code:         fmt.Sprintf("PA-%s-%d", caseKey, time.Now().UnixNano()),
-		Title:        payload.Summary,
-		ServiceID:    bc.service.ID,
-		EngineType:   "smart",
-		Status:       "pending",
-		PriorityID:   bc.priority.ID,
-		RequesterID:  user.ID,
-		FormData:     JSONField(formJSON),
-		WorkflowJSON: bc.service.WorkflowJSON,
+		Code:             fmt.Sprintf("PA-%s-%d", caseKey, time.Now().UnixNano()),
+		Title:            payload.Summary,
+		ServiceID:        bc.service.ID,
+		ServiceVersionID: uintPtr(detail.ServiceVersionID),
+		EngineType:       "smart",
+		Status:           "pending",
+		PriorityID:       bc.priority.ID,
+		RequesterID:      user.ID,
+		FormData:         JSONField(formJSON),
+		WorkflowJSON:     bc.service.WorkflowJSON,
 	}
 	if err := bc.db.Create(ticket).Error; err != nil {
 		return fmt.Errorf("create ticket: %w", err)

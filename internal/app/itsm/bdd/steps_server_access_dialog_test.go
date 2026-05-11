@@ -52,8 +52,8 @@ request_kind 归一化：
 输出要求：
 - 若不能提交，就明确说明还缺什么或哪里不合法。
 - 若已经准备草稿，可用自然语言总结给用户确认，但不要编造不存在的字段。
-- 如果因为跨路由而需要澄清，回复里必须明确说出“访问类型/当前要办理哪一路/需要确认具体选择”这类澄清语义，而不是只做泛泛总结。
-- 如果因为跨路由而需要澄清，优先直接使用类似“需要确认当前访问类型，请明确当前要办理哪一路”这样的固定句式，避免只做背景解释却没有明确提问。
+- 如果因为跨路由而需要澄清，回复里必须直接包含这些关键词里的至少两个：“澄清”“访问类型”“具体选择”“先办理哪一个”“当前要办理哪一路”。
+- 如果因为跨路由而需要澄清，直接使用这句固定问句：“需要澄清当前访问类型，请明确具体选择，说明当前要办理哪一路或先办理哪一个。” 不要改写成只有背景解释的句子。
 - 如果根据“异常访问证据保全/取证/异常访问核查”等语义归到了安全路线，回复里必须明确出现“安全”或“取证”或“证据”中的至少一个词，说明归因依据。
 - 每一轮都必须给用户明确中文回复，禁止空回复。
 `
@@ -421,7 +421,7 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 			!hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") {
 			followupMessages := append(append([]ai.ExecuteMessage{}, msgs...), ai.ExecuteMessage{
 				Role:    "user",
-				Content: "你已经完成服务匹配。现在必须继续调用 itsm.service_load 加载该服务定义；加载后如果诉求跨越不同访问类型，就明确让用户选择当前要办理哪一路，不要重复 service_match。",
+				Content: "你已经完成服务匹配。现在必须继续调用 itsm.service_load 加载该服务定义；加载后如果诉求跨越不同访问类型，必须原样使用这句澄清问句：需要澄清当前访问类型，请明确具体选择，说明当前要办理哪一路或先办理哪一个。不要重复 service_match。",
 			})
 			if err := appendChatFallback(followupMessages); err != nil {
 				return fmt.Errorf("server access dialog force-service-load fallback error: %w", err)

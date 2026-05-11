@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -88,8 +89,58 @@ func TestDecisionToolDefsAndSmartPoliciesExposeBuiltins(t *testing.T) {
 	}
 
 	policies := builtInSmartDecisionPolicies()
-	if len(policies) != 3 {
-		t.Fatalf("expected 3 built-in smart policies, got %d", len(policies))
+	if len(policies) != 4 {
+		t.Fatalf("expected 4 built-in smart policies, got %d", len(policies))
+	}
+}
+
+func TestRejectedBranchTerminalPolicyForcesCompletion(t *testing.T) {
+	db := newSmartGuardDB(t)
+	ticket := ticketModel{
+		ID:       71,
+		Status:   TicketStatusDecisioning,
+		FormData: `{"request_kind":"security_compliance"}`,
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	now := time.Now()
+	completed := activityModel{
+		ID:                171,
+		TicketID:          ticket.ID,
+		Name:              "信息安全管理员处理",
+		ActivityType:      NodeProcess,
+		NodeID:            "security_process",
+		Status:            ActivityRejected,
+		TransitionOutcome: ActivityRejected,
+		FinishedAt:        &now,
+	}
+	if err := db.Create(&completed).Error; err != nil {
+		t.Fatalf("create rejected activity: %v", err)
+	}
+
+	plan := &DecisionPlan{
+		NextStepType:  NodeProcess,
+		ExecutionMode: "single",
+		Activities: []DecisionActivity{{
+			Type:            NodeProcess,
+			ParticipantType: "position_department",
+			DepartmentCode:  "it",
+			PositionCode:    "security_admin",
+		}},
+	}
+	applied, err := rejectedBranchTerminalPolicy(context.Background(), &SmartEngine{}, db, ticket.ID, plan, &serviceModel{
+		CollaborationSpec: "处理完成后直接结束流程。",
+		WorkflowJSON:      branchContractWorkflowFixture,
+	})
+	if err != nil {
+		t.Fatalf("apply rejected branch terminal policy: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected rejected branch terminal policy to apply")
+	}
+	if plan.NextStepType != "complete" || len(plan.Activities) != 0 {
+		t.Fatalf("expected forced completion after branch rejection, got %+v", plan)
 	}
 }
 
