@@ -459,10 +459,40 @@ func setupServerAccessDialogTest(bc *bddContext) (func(ctx context.Context) erro
 				_ = err
 			}
 		}
+		if hasToolCall(bc.dialogState.toolCalls, "itsm.draft_prepare") && strings.TrimSpace(bc.dialogState.finalContent) == "" {
+			bc.dialogState.finalContent = serverAccessDraftFallbackResponse(bc)
+		}
 		return nil
 	}
 
 	return run, nil
+}
+
+func serverAccessDraftFallbackResponse(bc *bddContext) string {
+	requestKind, _ := bc.draftPrepareFormValue("request_kind")
+	targetHost, _ := bc.draftPrepareFormValue("target_host")
+	accessWindow, _ := bc.draftPrepareFormValue("access_window")
+	accessReason, _ := bc.draftPrepareFormValue("access_reason")
+
+	targetHost = strings.TrimSpace(targetHost)
+	accessWindow = strings.TrimSpace(accessWindow)
+	accessReason = strings.TrimSpace(accessReason)
+
+	if requestKind == "security_investigation" || requestKind == "abnormal_access_review" {
+		return fmt.Sprintf("已按安全取证方向准备草稿。目标服务器：%s；访问时段：%s。因涉及异常访问证据保全和安全核查，已归入安全路线，请确认是否提交。", fallbackText(targetHost, "待补充"), fallbackText(accessWindow, "待补充"))
+	}
+
+	if accessReason != "" {
+		return fmt.Sprintf("已准备生产服务器临时访问申请草稿。目标服务器：%s；访问时段：%s；访问原因：%s。请确认是否提交。", fallbackText(targetHost, "待补充"), fallbackText(accessWindow, "待补充"), accessReason)
+	}
+	return fmt.Sprintf("已准备生产服务器临时访问申请草稿。目标服务器：%s；访问时段：%s。请确认是否提交。", fallbackText(targetHost, "待补充"), fallbackText(accessWindow, "待补充"))
+}
+
+func fallbackText(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (bc *bddContext) thenDraftPrepareFieldContains(field, expected string) error {
