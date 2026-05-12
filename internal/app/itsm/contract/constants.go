@@ -15,6 +15,7 @@ const (
 	TicketStatusRejectedDecisioning TicketStatus = "rejected_decisioning"
 	TicketStatusDecisioning         TicketStatus = "decisioning"
 	TicketStatusExecutingAction     TicketStatus = "executing_action"
+	TicketStatusSuspended           TicketStatus = "suspended"
 	TicketStatusCompleted           TicketStatus = "completed"
 	TicketStatusRejected            TicketStatus = "rejected"
 	TicketStatusWithdrawn           TicketStatus = "withdrawn"

@@ -386,6 +386,7 @@
     "statusPending": "已提交",
     "statusInProgress": "等待人工",
     "statusWaitingHuman": "等待人工",
+    "statusSuspended": "已暂停",
     "statusWaitingProcess": "待受理",
     "statusWaitingAction": "执行中",
     "statusApprovedDecisioning": "通过后决策中",

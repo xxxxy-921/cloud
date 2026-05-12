@@ -1020,7 +1020,11 @@ func (e *SmartEngine) executeSinglePlan(tx *gorm.DB, ticketID uint, plan *Decisi
 	} else if da.ParticipantType == "requester" {
 		e.createRequesterAssignment(tx, ticketID, act.ID)
 	} else if da.ParticipantType == "position_department" && da.PositionCode != "" && da.DepartmentCode != "" {
-		e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode)
+		if hasUsers := e.createPositionAssignment(tx, ticketID, act.ID, da.PositionCode, da.DepartmentCode); !hasUsers {
+			if hasFallback := e.tryFallbackAssignment(tx, ticketID, act.ID); !hasFallback {
+				e.suspendTicketForMissingParticipant(tx, ticketID, &act.ID, da.PositionCode, da.DepartmentCode)
+			}
+		}
 	} else if da.Type == NodeApprove || da.Type == NodeProcess || da.Type == NodeForm {
 		e.tryFallbackAssignment(tx, ticketID, act.ID)
 	}
@@ -1053,13 +1057,16 @@ func (e *SmartEngine) executeSinglePlan(tx *gorm.DB, ticketID uint, plan *Decisi
 
 // tryFallbackAssignment checks engine config for a fallback assignee and creates
 // an assignment if the fallback user is valid. Records timeline events.
-func (e *SmartEngine) tryFallbackAssignment(tx *gorm.DB, ticketID uint, activityID uint) {
+// tryFallbackAssignment checks engine config for a fallback assignee and creates
+// an assignment if the fallback user is valid. Returns true if a fallback assignment
+// was successfully created.
+func (e *SmartEngine) tryFallbackAssignment(tx *gorm.DB, ticketID uint, activityID uint) bool {
 	if e.configProvider == nil {
-		return
+		return false
 	}
 	fallbackID := e.configProvider.FallbackAssigneeID()
 	if fallbackID == 0 {
-		return
+		return false
 	}
 
 	// Verify the fallback user exists and is active
@@ -1071,7 +1078,7 @@ func (e *SmartEngine) tryFallbackAssignment(tx *gorm.DB, ticketID uint, activity
 		Select("username, is_active").First(&user).Error; err != nil || !user.IsActive {
 		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_fallback_warning",
 			fmt.Sprintf("兜底处理人无效（ID=%d），请检查引擎设置", fallbackID), "")
-		return
+		return false
 	}
 
 	assignment := &assignmentModel{
@@ -1085,16 +1092,33 @@ func (e *SmartEngine) tryFallbackAssignment(tx *gorm.DB, ticketID uint, activity
 	}
 	if err := tx.Create(assignment).Error; err != nil {
 		slog.Error("failed to create fallback assignment", "error", err, "ticketID", ticketID)
-		return
+		return false
 	}
 	tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("assignee_id", fallbackID)
 	e.recordTimeline(tx, ticketID, &activityID, 0, "participant_fallback",
 		fmt.Sprintf("参与者缺失，已转派兜底处理人（%s）", user.Username), "")
+	return true
+}
+
+// suspendTicketForMissingParticipant sets the ticket status to suspended and records
+// a timeline event explaining why. The ticket will be auto-recovered by HandleSmartRecovery
+// once the org configuration is fixed.
+func (e *SmartEngine) suspendTicketForMissingParticipant(tx *gorm.DB, ticketID uint, activityID *uint, positionCode, departmentCode string) {
+	if err := tx.Model(&ticketModel{}).Where("id = ?", ticketID).
+		Update("status", TicketStatusSuspended).Error; err != nil {
+		slog.Error("failed to suspend ticket for missing participant", "error", err, "ticketID", ticketID)
+		return
+	}
+	e.recordTimeline(tx, ticketID, activityID, 0, "approver_missing_suspended",
+		fmt.Sprintf("审批人岗位 %s@%s 无可用人员，工单已暂停；管理员修复组织配置后将自动恢复", positionCode, departmentCode), "")
+	slog.Info("ticket suspended: no approver for position",
+		"ticketID", ticketID, "positionCode", positionCode, "departmentCode", departmentCode)
 }
 
 // createPositionAssignment resolves position_department participant type to actual
-// users and creates the assignment with position/department IDs.
-func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID uint, positionCode, departmentCode string) {
+// users and creates the assignment with position/department IDs. Returns true if
+// at least one active user was found and assigned.
+func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID uint, positionCode, departmentCode string) bool {
 	// Look up position and department IDs (best-effort, tables may not exist in tests)
 	var positionID, departmentID uint
 	tx.Table("positions").Where("code = ?", positionCode).Select("id").Scan(&positionID)
@@ -1103,13 +1127,6 @@ func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID
 	if err != nil {
 		slog.Warn("position assignment: failed to resolve users in workflow transaction",
 			"positionCode", positionCode, "departmentCode", departmentCode, "error", err)
-	}
-	if len(userIDs) == 0 {
-		slog.Warn("position assignment: no users found", "positionCode", positionCode, "departmentCode", departmentCode)
-		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_resolution_pending",
-			fmt.Sprintf("岗位参与人 %s@%s 当前没有可用处理人，等待 IT 管理员补充人员配置", positionCode, departmentCode), "")
-		e.recordTimeline(tx, ticketID, &activityID, 0, "participant_fallback_warning",
-			fmt.Sprintf("岗位参与人 %s@%s 当前没有可用处理人，工单未 fallback 到其他岗位，等待 IT 管理员补充人员配置", positionCode, departmentCode), "")
 	}
 
 	assignment := &assignmentModel{
@@ -1131,12 +1148,14 @@ func (e *SmartEngine) createPositionAssignment(tx *gorm.DB, ticketID, activityID
 
 	if err := tx.Create(assignment).Error; err != nil {
 		slog.Error("failed to create position assignment", "error", err, "ticketID", ticketID)
-		return
+		return false
 	}
 
 	if len(userIDs) > 0 {
 		tx.Model(&ticketModel{}).Where("id = ?", ticketID).Update("assignee_id", userIDs[0])
+		return true
 	}
+	return false
 }
 
 func resolveUsersByPositionDepartmentInTx(tx *gorm.DB, positionID, departmentID uint) ([]uint, error) {

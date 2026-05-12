@@ -386,6 +386,7 @@
     "statusPending": "Submitted",
     "statusInProgress": "Waiting Human",
     "statusWaitingHuman": "Waiting Human",
+    "statusSuspended": "Suspended",
     "statusWaitingProcess": "Awaiting Intake",
     "statusWaitingAction": "Executing",
     "statusApprovedDecisioning": "Approved, Decisioning",

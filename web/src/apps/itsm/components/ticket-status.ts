@@ -10,6 +10,7 @@ export const TICKET_STATUS_OPTIONS: Record<TicketStatus, { variant: BadgeVariant
   rejected_decisioning: { variant: "outline", key: "statusRejectedDecisioning" },
   decisioning: { variant: "outline", key: "statusDecisioning" },
   executing_action: { variant: "outline", key: "statusExecutingAction" },
+  suspended: { variant: "destructive", key: "statusSuspended" },
   completed: { variant: "default", key: "statusCompleted" },
   rejected: { variant: "destructive", key: "statusRejected" },
   withdrawn: { variant: "secondary", key: "statusWithdrawn" },
