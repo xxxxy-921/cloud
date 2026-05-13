@@ -64,6 +64,11 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		})
 
 	case EventTypeContentDelta:
+		if enc.reasonBlock.started {
+			if err := enc.closeReasoningBlock(); err != nil {
+				return err
+			}
+		}
 		if !enc.textBlock.started {
 			enc.textBlock.id = fmt.Sprintf("text-%d", evt.Sequence)
 			enc.textBlock.started = true
@@ -152,6 +157,11 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		})
 
 	case EventTypeToolCall:
+		if enc.reasonBlock.started {
+			if err := enc.closeReasoningBlock(); err != nil {
+				return err
+			}
+		}
 		if enc.textBlock.started {
 			enc.textBlock.started = false
 			if err := enc.writeLine(map[string]any{
@@ -220,6 +230,9 @@ func (enc *UIMessageStreamEncoder) Encode(evt Event) error {
 		})
 
 	case EventTypeError:
+		if err := enc.closeOpenBlocks(); err != nil {
+			return err
+		}
 		return enc.writeLine(map[string]any{
 			"type":      "error",
 			"errorText": evt.Message,
@@ -254,23 +267,38 @@ func (enc *UIMessageStreamEncoder) Close() error {
 	enc.mu.Lock()
 	defer enc.mu.Unlock()
 
-	if enc.textBlock.started {
-		enc.textBlock.started = false
-		_ = enc.writeLine(map[string]any{
-			"type": "text-end",
-			"id":   enc.textBlock.id,
-		})
-	}
-	if enc.reasonBlock.started {
-		enc.reasonBlock.started = false
-		_ = enc.writeLine(map[string]any{
-			"type": "reasoning-end",
-			"id":   enc.reasonBlock.id,
-		})
+	if err := enc.closeOpenBlocks(); err != nil {
+		return err
 	}
 
 	_, err := fmt.Fprintf(enc.w, "data: [DONE]\n\n")
 	return err
+}
+
+func (enc *UIMessageStreamEncoder) closeOpenBlocks() error {
+	if enc.textBlock.started {
+		enc.textBlock.started = false
+		if err := enc.writeLine(map[string]any{
+			"type": "text-end",
+			"id":   enc.textBlock.id,
+		}); err != nil {
+			return err
+		}
+	}
+	if enc.reasonBlock.started {
+		if err := enc.closeReasoningBlock(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (enc *UIMessageStreamEncoder) closeReasoningBlock() error {
+	enc.reasonBlock.started = false
+	return enc.writeLine(map[string]any{
+		"type": "reasoning-end",
+		"id":   enc.reasonBlock.id,
+	})
 }
 
 // Heartbeat writes an SSE comment frame. UI Message Stream clients ignore it,

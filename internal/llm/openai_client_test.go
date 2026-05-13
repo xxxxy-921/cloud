@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -75,6 +78,46 @@ func TestOpenAIClientBuildRequestSerializesAssistantToolCallsWithStringContent(t
 	}
 	if !jsonContainsString(payload, `"tool_calls"`) {
 		t.Fatalf("expected tool_calls to be preserved, got %s", payload)
+	}
+}
+
+func TestOpenAIClientChatStreamEmitsReasoningDelta(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"先分析"},"finish_reason":null}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"结论"},"finish_reason":null}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"3","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := newOpenAIClient(server.URL+"/v1", "test-key")
+	stream, err := client.ChatStream(context.Background(), ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("chat stream: %v", err)
+	}
+
+	var events []StreamEvent
+	for evt := range stream {
+		events = append(events, evt)
+	}
+	if len(events) < 3 {
+		t.Fatalf("expected reasoning, content, and done events, got %#v", events)
+	}
+	if events[0].Type != "thinking_delta" || events[0].Content != "先分析" {
+		t.Fatalf("expected first event to be reasoning delta, got %#v", events[0])
+	}
+	if events[1].Type != "content_delta" || events[1].Content != "结论" {
+		t.Fatalf("expected second event to be content delta, got %#v", events[1])
+	}
+	if events[2].Type != "done" || events[2].Usage == nil || events[2].Usage.OutputTokens != 2 {
+		t.Fatalf("expected final usage event, got %#v", events[2])
 	}
 }
 

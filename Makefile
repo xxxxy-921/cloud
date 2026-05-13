@@ -168,11 +168,7 @@ seed-dev-sqlite:
 	METIS_DEV_DB=sqlite go run -tags dev -ldflags '$(LDFLAGS)' ./cmd/server seed-dev
 
 reset-pg:
-	@echo "Dropping and recreating PostgreSQL database..."
-	PGPASSWORD=password psql -h localhost -U postgres -d template1 -c "DROP DATABASE IF EXISTS postgres WITH (FORCE);"
-	PGPASSWORD=password psql -h localhost -U postgres -d template1 -c "CREATE DATABASE postgres;"
-	rm -f config.yml
-	$(MAKE) seed-dev
+	go run -tags dev -ldflags '$(LDFLAGS)' ./cmd/server reset-pg -config config.yml -env .env.dev
 
 clean:
 	rm -f config.yml metis.db metis.db-wal metis.db-shm

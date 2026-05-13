@@ -43,11 +43,14 @@ func main() {
 		case "seed-dev":
 			runSeedDevCommand(os.Args[2:])
 			return
+		case "reset-pg":
+			runResetPGCommand(os.Args[2:])
+			return
 		case "-config", "-host", "-port", "--help", "-h", "-test.v":
 			// Known flags — fall through to normal startup
 		default:
 			if os.Args[1][0] != '-' {
-				fmt.Fprintf(os.Stderr, "unknown command: %s\nUsage: server [seed|seed-dev] [-config path] [-dev-env path] [-host addr] [-port num] [-access-log=true|false]\n", os.Args[1])
+				fmt.Fprintf(os.Stderr, "unknown command: %s\nUsage: server [seed|seed-dev|reset-pg] [-config path] [-dev-env path] [-host addr] [-port num] [-access-log=true|false]\n", os.Args[1])
 				os.Exit(1)
 			}
 		}

@@ -33,7 +33,7 @@ type MessageContentPart struct {
 // Message represents a chat message.
 type Message struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content"` // For simple text messages
+	Content    string     `json:"content"`          // For simple text messages
 	Images     []string   `json:"images,omitempty"` // base64 data URLs or http URLs for multimodal
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
@@ -71,9 +71,9 @@ type ChatRequest struct {
 
 // ChatResponse represents a non-streaming chat completion response.
 type ChatResponse struct {
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	Usage      Usage      `json:"usage"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Usage     Usage      `json:"usage"`
 }
 
 // Usage tracks token consumption.
@@ -84,12 +84,12 @@ type Usage struct {
 
 // StreamEvent is emitted during streaming chat completion.
 type StreamEvent struct {
-	// Type: "content_delta", "tool_call", "done", "error"
-	Type      string    `json:"type"`
-	Content   string    `json:"content,omitempty"`
-	ToolCall  *ToolCall `json:"tool_call,omitempty"`
-	Usage     *Usage    `json:"usage,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	// Type: "content_delta", "thinking_delta", "tool_call", "done", "error"
+	Type     string    `json:"type"`
+	Content  string    `json:"content,omitempty"`
+	ToolCall *ToolCall `json:"tool_call,omitempty"`
+	Usage    *Usage    `json:"usage,omitempty"`
+	Error    string    `json:"error,omitempty"`
 }
 
 // EmbeddingRequest represents an embedding request.

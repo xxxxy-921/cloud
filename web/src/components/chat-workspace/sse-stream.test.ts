@@ -121,4 +121,33 @@ describe("createStreamFromSSE", () => {
     expect([textEnd.value?.type, finish.value?.type]).toEqual(["text-end", "finish"])
     expect(usage).toEqual([{ promptTokens: 2, completionTokens: 2 }])
   })
+
+  test("reads usage from AI SDK message-metadata chunks", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(encodeSSE(JSON.stringify({
+          messageMetadata: {
+            usage: { promptTokens: 7, completionTokens: 3 },
+          },
+          type: "message-metadata",
+        })))
+        controller.enqueue(encodeSSE(JSON.stringify({
+          finishReason: "stop",
+          type: "finish",
+        })))
+        controller.enqueue(encodeSSE("[DONE]"))
+        controller.close()
+      },
+    })
+    const usage: Array<{ promptTokens: number; completionTokens: number }> = []
+    const reader = createStreamFromSSE(new Response(body), (value) => usage.push(value)).getReader()
+
+    const metadata = await reader.read()
+    const finish = await reader.read()
+    await reader.cancel()
+
+    expect(metadata.value?.type).toBe("message-metadata")
+    expect(finish.value?.type).toBe("finish")
+    expect(usage).toEqual([{ promptTokens: 7, completionTokens: 3 }])
+  })
 })
